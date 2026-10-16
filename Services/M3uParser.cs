@@ -10,6 +10,7 @@ public static class M3uParser
     private static readonly Regex GroupRx = new("group-title\\s*=\\s*\"(?<g>[^\"]*)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex LogoRx = new("tvg-logo\\s*=\\s*\"(?<l>[^\"]*)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex TvgNameRx = new("tvg-name\\s*=\\s*\"(?<n>[^\"]*)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex TvgIdRx = new("tvg-id\\s*=\\s*\"(?<i>[^\"]*)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public static List<ChannelItem> Parse(string text)
     {
@@ -22,6 +23,7 @@ public static class M3uParser
         string pendingName = "";
         string pendingGroup = "未分组";
         string? pendingLogo = null;
+        string? pendingTvgId = null;
 
         foreach (var raw in text.Split('\n'))
         {
@@ -34,6 +36,7 @@ public static class M3uParser
                 pendingName = commaIdx >= 0 ? line[(commaIdx + 1)..].Trim() : "";
                 pendingGroup = "未分组";
                 pendingLogo = null;
+                pendingTvgId = null;
                 if (commaIdx > 0)
                 {
                     var attrs = line[..commaIdx];
@@ -42,6 +45,8 @@ public static class M3uParser
                     if (string.IsNullOrEmpty(pendingGroup)) pendingGroup = "未分组";
                     m = LogoRx.Match(attrs);
                     if (m.Success) pendingLogo = m.Groups["l"].Value;
+                    m = TvgIdRx.Match(attrs);
+                    if (m.Success) pendingTvgId = m.Groups["i"].Value.Trim();
                     if (string.IsNullOrEmpty(pendingName))
                     {
                         m = TvgNameRx.Match(attrs);
@@ -65,11 +70,13 @@ public static class M3uParser
                         Name = name,
                         Url = url,
                         Group = pendingGroup,
-                        Logo = pendingLogo
+                        Logo = pendingLogo,
+                        TvgId = pendingTvgId
                     });
                     pendingName = "";
                     pendingGroup = "未分组";
                     pendingLogo = null;
+                    pendingTvgId = null;
                 }
             }
         }

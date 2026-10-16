@@ -107,6 +107,7 @@
                     <Button Style="{StaticResource ToolBtn}" Content="收藏" Click="BtnFav_Click"/>
                     <Button Style="{StaticResource ToolBtn}" Content="小窗" Click="BtnPip_Click"/>
                     <Button Style="{StaticResource ToolBtn}" Content="全屏" Click="BtnFull_Click"/>
+                    <Button Style="{StaticResource ToolBtn}" Content="设置" Click="BtnSettings_Click"/>
                 </StackPanel>
 
                 <Grid DockPanel.Dock="Top" Margin="12,0,12,8">
@@ -161,9 +162,13 @@
                             Click="BtnAdd_Click"/>
                 </StackPanel>
 
-                <ComboBox x:Name="GroupCombo" DockPanel.Dock="Top" Margin="12,0,12,8" Height="30"
-                          Background="#FF20262E" Foreground="#FFDDE4EB"
-                          SelectionChanged="GroupCombo_SelectionChanged"/>
+                <DockPanel DockPanel.Dock="Top" Margin="12,0,12,8">
+                    <Button DockPanel.Dock="Right" Content="管理" Width="44" Height="30" Margin="6,0,0,0"
+                            Background="#FF232B34" Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand"
+                            FontSize="11" Click="BtnManageGroups_Click" ToolTip="分组管理"/>
+                    <ComboBox x:Name="GroupCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB"
+                              SelectionChanged="GroupCombo_SelectionChanged"/>
+                </DockPanel>
 
                 <TextBlock x:Name="CountText" DockPanel.Dock="Top" Text="0 个频道"
                            Foreground="#FF66727F" FontSize="12" Margin="14,2,12,6"/>
@@ -178,7 +183,15 @@
                             <MenuItem Header="小窗播放" Click="MiPip_Click"/>
                             <MenuItem Header="新窗口播放" Click="MiNewWin_Click"/>
                             <MenuItem Header="收藏 / 取消收藏" Click="MiFavorite_Click"/>
+                            <MenuItem Header="隐藏频道" Click="MiHide_Click"/>
                             <MenuItem Header="复制频道地址" Click="MiCopy_Click"/>
+                            <Separator/>
+                            <MenuItem Header="排序">
+                                <MenuItem x:Name="SortByNumber" Header="按号码" IsCheckable="True" IsChecked="True"
+                                          Click="SortByNumber_Click"/>
+                                <MenuItem x:Name="SortByName" Header="按名称" IsCheckable="True"
+                                          Click="SortByName_Click"/>
+                            </MenuItem>
                         </ContextMenu>
                     </ListBox.ContextMenu>
                     <ListBox.ItemTemplate>
@@ -206,10 +219,36 @@
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
 
-            <lvc:VideoView x:Name="VideoView" Grid.Row="0" Background="Black" Focusable="False"/>
+            <lvc:VideoView x:Name="VideoView" Grid.Row="0" Grid.Column="0" Background="Black" Focusable="False"/>
 
-            <StackPanel x:Name="EmptyState" Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Center"
+            <!-- EPG 节目单面板 -->
+            <Border x:Name="EpgPanel" Grid.Row="0" Grid.Column="1" Width="260" Background="#FF14181D"
+                    BorderBrush="#FF272E37" BorderThickness="1,0,0,0" Visibility="Collapsed">
+                <DockPanel>
+                    <TextBlock Text="节目单" DockPanel.Dock="Top" FontWeight="Bold" Foreground="#FF4FA3E3"
+                               FontSize="13" Margin="12,10,12,6"/>
+                    <TextBlock x:Name="EpgNow" DockPanel.Dock="Top" Foreground="#FFB9C4CE" FontSize="11"
+                               Margin="12,0,12,8" TextWrapping="Wrap"/>
+                    <ListBox x:Name="EpgList" Background="Transparent" BorderThickness="0" Margin="0,0,0,6">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="10,4">
+                                    <TextBlock Text="{Binding TimeRange}" Foreground="#FF4FA3E3" FontSize="11"/>
+                                    <TextBlock Text="{Binding Title}" Foreground="#FFE2E8EF" FontSize="12"
+                                               TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+
+            <StackPanel x:Name="EmptyState" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Center" VerticalAlignment="Center"
                         Visibility="Collapsed">
                 <TextBlock Text="暂无频道" FontSize="18" Foreground="#FF8A97A5" HorizontalAlignment="Center"/>
                 <TextBlock Text="添加 M3U / M3U8 播放列表后即可观看" FontSize="12" Foreground="#FF5E6B79"
@@ -218,14 +257,39 @@
                          Margin="0,16,0,0" HorizontalAlignment="Center" Click="BtnAdd_Click"/>
             </StackPanel>
 
-            <Border x:Name="StatusBar" Grid.Row="1" Background="#FF191F26" BorderBrush="#FF272E37"
+            <Border x:Name="StatusBar" Grid.Row="1" Grid.ColumnSpan="2" Background="#FF191F26" BorderBrush="#FF272E37"
                     BorderThickness="0,1,0,0" Padding="14,7">
                 <DockPanel>
-                    <TextBlock x:Name="VolumeText" Text="音量 80%" DockPanel.Dock="Right" Foreground="#FF7A8896"
-                               FontSize="12" Margin="14,0,0,0"/>
-                    <TextBlock x:Name="PlayState" Text="就绪" DockPanel.Dock="Right" Foreground="#FF7A8896" FontSize="12"/>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="BtnPlayPause" Content="⏸" Width="26" Height="24" Margin="4,0,0,0"
+                                Background="#FF232B34" Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand"
+                                Click="BtnPlayPause_Click" ToolTip="播放/暂停（Space）"/>
+                        <Button x:Name="BtnStop" Content="⏹" Width="26" Height="24" Margin="4,0,0,0"
+                                Background="#FF232B34" Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand"
+                                Click="BtnStop_Click" ToolTip="停止（S）"/>
+                        <TextBlock x:Name="VolumeText" Text="音量 80%" Foreground="#FF7A8896" FontSize="12"
+                                   Margin="14,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PlayState" Text="就绪" Foreground="#FF7A8896" FontSize="12"
+                                   Margin="14,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Grid VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="TimeText" Text="00:00" Foreground="#FF7A8896" FontSize="11"
+                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <Slider x:Name="SeekBar" Grid.Column="1" Minimum="0" Maximum="100" Value="0"
+                                VerticalAlignment="Center" IsMoveToPointEnabled="True"
+                                ValueChanged="SeekBar_ValueChanged"
+                                PreviewMouseDown="SeekBar_PreviewMouseDown"
+                                PreviewMouseUp="SeekBar_PreviewMouseUp"/>
+                        <TextBlock x:Name="DurationText" Text="--:--" Grid.Column="2" Foreground="#FF7A8896"
+                                   FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                    </Grid>
                     <TextBlock x:Name="NowPlaying" Text="未播放" Foreground="#FFB9C4CE" FontSize="13"
-                               TextTrimming="CharacterEllipsis"/>
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                 </DockPanel>
             </Border>
         </Grid>

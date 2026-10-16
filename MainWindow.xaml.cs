@@ -83,6 +83,19 @@ public partial class MainWindow : Window
     // 播放串行化：libVLC MediaPlayer 非线程安全，快速换台时多个 Play 需串行执行，避免并发崩溃
     private readonly SemaphoreSlim _playGate = new(1, 1);
 
+    // 播放控制状态：暂停标志 + 进度条拖动标志 + 进度刷新定时器
+    private bool _isPaused;
+    private bool _seekDragging;
+    private bool _seekPending;   // 拖动结束后待跳转
+    private readonly DispatcherTimer _progressTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    private string _aspectRatio = "";   // 画面比例（空=原始，16:9/4:3/拉伸）
+    private float _playbackRate = 1.0f; // 倍速
+    private string _sortMode = "号码";  // 频道排序：号码/名称
+
+    // EPG 电子节目指南：频道id → 节目列表
+    private Dictionary<string, List<EpgProgram>> _epg = new();
+    private string? _epgUrl;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -98,6 +111,7 @@ public partial class MainWindow : Window
         };
         _osdTimer.Tick += (_, _) => { _osdTimer.Stop(); if (_fullscreen) StatusBar.Visibility = Visibility.Collapsed; };
         _stallWatch.Tick += OnStallWatchTick;
+        _progressTimer.Tick += (_, _) => UpdateProgress();
 
         // 焦点守护：窗口激活/VLC原生窗口拖走焦点时，把键盘焦点还给频道列表，保证↑↓换台始终可用
         Activated += OnWindowActivated;
@@ -135,8 +149,11 @@ public partial class MainWindow : Window
         AppLog.Info($"start v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
         _config = AppConfig.Load();
         VolumeText.Text = $"音量 {_config.Volume}%";
+        _aspectRatio = _config.AspectRatio ?? "";
+        _playbackRate = (float)(_config.PlaybackRate > 0 ? _config.PlaybackRate : 1.0);
         RefreshPlaylistCombo();
         _ = EnsureEngineAsync();          // 后台初始化，不阻塞界面
+        _progressTimer.Start();           // 进度条/时间刷新
         await LoadPlaylistAsync(false);   // 缓存优先秒开，再后台刷新
         ChannelList.Focus();              // 启动焦点给频道列表（否则默认落在搜索框，方向键失效）
     }
@@ -152,8 +169,10 @@ public partial class MainWindow : Window
             _libvlc = await Task.Run(() =>
             {
                 Core.Initialize();
-                // no-osd 不显示标题水印；avcodec-hw=any 启用 Intel 核显硬解
-                return new LibVLC("--no-osd", "--avcodec-hw=any");
+                // no-osd 不显示标题水印；avcodec-hw 按用户设置启用/禁用硬件解码
+                var args = new List<string> { "--no-osd" };
+                args.Add(_config.HardwareDecode ? "--avcodec-hw=any" : "--avcodec-hw=disabled");
+                return new LibVLC(args.ToArray());
             });
             _player = new MediaPlayer(_libvlc) { Volume = _config.Volume };
             _player.Playing += (_, _) => Dispatcher.BeginInvoke(() =>
@@ -248,6 +267,13 @@ public partial class MainWindow : Window
                 _ = Task.Run(() => ChannelCache.Save(src.Url, list));   // 后台写盘，大清单不卡 UI
                 PlayState.Text = $"已载入 {list.Count} 个频道";
                 await ResumeLastAsync();
+                // 尝试从 M3U 头部解析 EPG 源并加载节目单
+                var epgUrl = ExtractEpgUrl(text);
+                if (epgUrl != null && epgUrl != _epgUrl)
+                {
+                    _epgUrl = epgUrl;
+                    _ = LoadEpgAsync(epgUrl);
+                }
             }
             else if (_all.Count == 0)
             {
@@ -337,12 +363,19 @@ public partial class MainWindow : Window
     {
         var q = SearchBox.Text.Trim();
         var group = GroupCombo.SelectedItem as string;
-        IEnumerable<ChannelItem> seq = _all;
+        var hidden = _config.HiddenChannels.ToHashSet();
+        IEnumerable<ChannelItem> seq = _all.Where(c => !hidden.Contains(c.Url));
         if (_favOnly) seq = seq.Where(c => c.IsFavorite);
         if (group is string g && g != "全部") seq = seq.Where(c => c.Group == g);
         if (q.Length > 0)
             seq = seq.Where(c => c.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
                               || c.Group.Contains(q, StringComparison.OrdinalIgnoreCase));
+
+        // 排序：号码（默认）或名称
+        seq = _sortMode == "名称"
+            ? seq.OrderBy(c => c.Name, StringComparer.CurrentCulture)
+            : seq.OrderBy(c => c.Number);
+
         _view = seq.ToList();
         ChannelList.ItemsSource = _view;
         CountText.Text = $"{_view.Count} 个频道";
@@ -385,6 +418,12 @@ public partial class MainWindow : Window
         PlayState.Text = "连接中…";
         EmptyState.Visibility = Visibility.Collapsed;
         ShowOsd();
+        _isPaused = false;
+        BtnPlayPause.Content = "⏸";
+        SeekBar.Value = 0;
+        TimeText.Text = "00:00";
+        DurationText.Text = "--:--";
+        ShowEpgForChannel(ch);
 
         var url = ch.Url;
         try
@@ -399,7 +438,7 @@ public partial class MainWindow : Window
                     var media = url.Contains("://")
                         ? new Media(_libvlc!, new Uri(url))
                         : new Media(_libvlc!, url, FromType.FromPath);
-                    media.AddOption(":network-caching=800");
+                    media.AddOption($":network-caching={_config.NetworkCache}");
                     _player!.Play(media);
                     lock (_mediaLock)
                     {
@@ -419,6 +458,14 @@ public partial class MainWindow : Window
         }
         AppLog.Info($"play [{ch.Name}] {url}");
 
+        // 应用用户设置的倍速与画面比例（MediaPlayer 级别，播放后生效）
+        try
+        {
+            if (Math.Abs(_playbackRate - 1.0f) > 0.01f) _player.SetRate(_playbackRate);
+            if (!string.IsNullOrEmpty(_aspectRatio)) ApplyAspectRatio(_aspectRatio);
+        }
+        catch { }
+
         // 播放启动后焦点归还频道列表：VideoView 的原生 HWND 会抢走键盘焦点，
         // 不归还会导致后续 ↑↓ 换台失效（真实用户高频场景）
         ChannelList.Focus();
@@ -434,6 +481,127 @@ public partial class MainWindow : Window
         VolumeText.Text = $"音量 {_config.Volume}%";
         ShowOsd();
         QueueSave();
+    }
+
+    // ---------- 播放控制（暂停/停止/进度/倍速/画面比例） ----------
+
+    private void BtnPlayPause_Click(object sender, RoutedEventArgs e) => TogglePlayPause();
+
+    /// <summary>播放/暂停切换</summary>
+    private void TogglePlayPause()
+    {
+        if (_player is null || _current is null) return;
+        if (_isPaused)
+        {
+            _player.Play();
+            _isPaused = false;
+            BtnPlayPause.Content = "⏸";
+            PlayState.Text = "播放中";
+        }
+        else
+        {
+            _player.Pause();
+            _isPaused = true;
+            BtnPlayPause.Content = "▶";
+            PlayState.Text = "已暂停";
+        }
+        ShowOsd();
+    }
+
+    private void BtnStop_Click(object sender, RoutedEventArgs e) => StopPlayback();
+
+    /// <summary>停止播放：停止当前流并清空进度</summary>
+    private void StopPlayback()
+    {
+        if (_player is null) return;
+        try
+        {
+            _player.Stop();
+            _current = null;
+            _isPaused = false;
+            BtnPlayPause.Content = "⏸";
+            SeekBar.Value = 0;
+            TimeText.Text = "00:00";
+            DurationText.Text = "--:--";
+            PlayState.Text = "已停止";
+            NowPlaying.Text = "未播放";
+        }
+        catch { }
+    }
+
+    /// <summary>进度条/时间刷新（500ms 定时器驱动）</summary>
+    private void UpdateProgress()
+    {
+        if (_player is null || _seekDragging) return;
+        try
+        {
+            var len = _player.Length;
+            var t = _player.Time;
+            if (len > 0)
+            {
+                SeekBar.Maximum = len;
+                if (!_seekDragging) SeekBar.Value = Math.Clamp(t, 0, len);
+                DurationText.Text = FormatTime(len);
+            }
+            TimeText.Text = FormatTime(t);
+        }
+        catch { }
+    }
+
+    private static string FormatTime(long ms)
+    {
+        if (ms < 0) return "00:00";
+        var ts = TimeSpan.FromMilliseconds(ms);
+        return ts.Hours > 0 ? $"{ts.Hours}:{ts.Minutes:00}:{ts.Seconds:00}" : $"{ts.Minutes:00}:{ts.Seconds:00}";
+    }
+
+    private void SeekBar_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _seekDragging = true;
+        _seekPending = true;
+    }
+
+    private void SeekBar_PreviewMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        _seekDragging = false;
+        if (_seekPending && _player != null)
+        {
+            _seekPending = false;
+            try { _player.Time = (long)SeekBar.Value; } catch { }
+        }
+    }
+
+    private void SeekBar_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_seekDragging) TimeText.Text = FormatTime((long)e.NewValue);
+    }
+
+    /// <summary>设置倍速（0.5x-2x）</summary>
+    private void SetPlaybackRate(float rate)
+    {
+        _playbackRate = Math.Clamp(rate, 0.5f, 2.0f);
+        if (_player != null) { try { _player.SetRate(_playbackRate); } catch { } }
+        ShowOsd();
+    }
+
+    /// <summary>设置画面比例：空=原始，16:9/4:3/拉伸</summary>
+    private void SetAspectRatio(string ratio)
+    {
+        _aspectRatio = ratio;
+        ApplyAspectRatio(ratio);
+        ShowOsd();
+    }
+
+    private void ApplyAspectRatio(string ratio)
+    {
+        if (_player is null) return;
+        try
+        {
+            if (ratio == "拉伸") { _player.Scale = 0; _player.AspectRatio = ""; }
+            else if (string.IsNullOrEmpty(ratio)) { _player.Scale = 1; _player.AspectRatio = ""; }
+            else { _player.Scale = 0; _player.AspectRatio = ratio; }
+        }
+        catch { }
     }
 
     private void ToggleFavorite(ChannelItem ch)
@@ -755,6 +923,170 @@ public partial class MainWindow : Window
 
     private void BtnFull_Click(object sender, RoutedEventArgs e) => ToggleFullscreen();
 
+    private void BtnSettings_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Dialogs.SettingsWindow(_config);
+        if (dlg.ShowDialog() == true)
+        {
+            // 应用设置：画面比例、倍速、主题
+            _aspectRatio = _config.AspectRatio ?? "";
+            _playbackRate = (float)(_config.PlaybackRate > 0 ? _config.PlaybackRate : 1.0);
+            ApplyAspectRatio(_aspectRatio);
+            if (_player != null) { try { _player.SetRate(_playbackRate); } catch { } }
+            ApplyTheme(_config.Theme);
+            // 若配置了 Xtream，加载其频道列表
+            if (!string.IsNullOrEmpty(_config.XtreamServer) && _config.Playlists.Count == 0)
+                _ = LoadXtreamAsync();
+        }
+    }
+
+    /// <summary>从 M3U 头部解析 EPG 源地址（#EXTM3U url-tvg="..."）</summary>
+    private static string? ExtractEpgUrl(string m3uText)
+    {
+        try
+        {
+            var firstLine = m3uText.Split('\n')[0];
+            var idx = firstLine.IndexOf("url-tvg=", StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) return null;
+            var rest = firstLine[(idx + 8)..].Trim();
+            if (rest.StartsWith('"')) rest = rest.TrimStart('"');
+            var end = rest.IndexOf('"');
+            if (end >= 0) rest = rest[..end];
+            return rest.Trim().Length > 0 ? rest.Trim() : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>加载 EPG 节目单（XMLTV）</summary>
+    private async Task LoadEpgAsync(string url)
+    {
+        try
+        {
+            var xml = await FetchTextAsync(url);
+            var epg = await Task.Run(() => EpgParser.Parse(xml));
+            _epg = epg;
+            AppLog.Info($"epg loaded {epg.Count} channels from {url}");
+            // 刷新当前频道节目显示
+            if (_current != null) ShowEpgForChannel(_current);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"epg load failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>获取频道当前/即将播出的节目</summary>
+    private List<EpgProgram> GetPrograms(ChannelItem ch)
+    {
+        var id = ch.TvgId;
+        if (string.IsNullOrEmpty(id)) return new List<EpgProgram>();
+        if (_epg.TryGetValue(id, out var list)) return list;
+        // 尝试用频道名匹配
+        foreach (var kv in _epg)
+        {
+            if (kv.Key.Equals(ch.Name, StringComparison.OrdinalIgnoreCase)) return kv.Value;
+        }
+        return new List<EpgProgram>();
+    }
+
+    private void ShowEpgForChannel(ChannelItem ch)
+    {
+        var progs = GetPrograms(ch);
+        if (progs.Count == 0) { EpgPanel.Visibility = Visibility.Collapsed; return; }
+        EpgPanel.Visibility = Visibility.Visible;
+        var now = DateTime.Now;
+        var current = progs.FirstOrDefault(p => p.Start <= now && now < p.Stop);
+        var upcoming = progs.Where(p => p.Start > now).Take(4).ToList();
+        EpgList.ItemsSource = upcoming;
+        if (current != null)
+        {
+            EpgNow.Text = $"正在播放：{current.Title}  {current.TimeRange}";
+            EpgNow.Visibility = Visibility.Visible;
+        }
+        else EpgNow.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>加载 Xtream Codes 频道列表：通过 M3U 输出接口获取</summary>
+    private async Task LoadXtreamAsync()
+    {
+        if (string.IsNullOrEmpty(_config.XtreamServer) ||
+            string.IsNullOrEmpty(_config.XtreamUsername) ||
+            string.IsNullOrEmpty(_config.XtreamPassword)) return;
+
+        var server = _config.XtreamServer.TrimEnd('/');
+        var url = $"{server}/get.php?username={Uri.EscapeDataString(_config.XtreamUsername)}" +
+                  $"&password={Uri.EscapeDataString(_config.XtreamPassword)}&type=live&output=m3u8";
+        try
+        {
+            PlayState.Text = "加载 Xtream…";
+            var text = await FetchTextAsync(url);
+            var list = await Task.Run(() => M3uParser.Parse(text));
+            if (list.Count > 0)
+            {
+                AdoptChannels(list);
+                _config.ActivePlaylist = "Xtream";
+                _config.Playlists.Add(new PlaylistSource { Name = "Xtream", Url = url });
+                _config.Save();
+                PlayState.Text = $"已载入 {list.Count} 个频道（Xtream）";
+                AppLog.Info($"xtream loaded {list.Count} channels");
+            }
+            else PlayState.Text = "Xtream 无频道";
+        }
+        catch (Exception ex)
+        {
+            PlayState.Text = "Xtream 加载失败";
+            AppLog.Error($"xtream load failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>应用主题（深色/浅色）：遍历主窗口关键控件调整配色</summary>
+    private void ApplyTheme(string theme)
+    {
+        var isDark = theme != "浅色";
+        var bg = isDark ? "#FF191F26" : "#FFF5F7FA";
+        var fg = isDark ? "#FFE8EDF2" : "#FF1F2933";
+        var sub = isDark ? "#FF7A8896" : "#FF5E6B79";
+        var border = isDark ? "#FF272E37" : "#FFD1D9E0";
+        var inputBg = isDark ? "#FF20262E" : "#FFFFFFFF";
+        var inputBorder = isDark ? "#FF2D3540" : "#FFC0C8D0";
+
+        // 主窗口背景
+        Background = new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(bg));
+        // 侧栏
+        if (FindName("SideCol") is System.Windows.Controls.ColumnDefinition) { }
+        ApplyThemeToTree(this, bg, fg, sub, border, inputBg, inputBorder);
+    }
+
+    private void ApplyThemeToTree(DependencyObject parent, string bg, string fg, string sub,
+        string border, string inputBg, string inputBorder)
+    {
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+            switch (child)
+            {
+                case System.Windows.Controls.Border b:
+                    b.Background = new System.Windows.Media.SolidColorBrush(
+                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(bg));
+                    b.BorderBrush = new System.Windows.Media.SolidColorBrush(
+                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(border));
+                    break;
+                case System.Windows.Controls.TextBlock tb:
+                    if (tb.Foreground is System.Windows.Media.SolidColorBrush)
+                        tb.Foreground = new System.Windows.Media.SolidColorBrush(
+                            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(fg));
+                    break;
+                case System.Windows.Controls.TextBox tx:
+                    tx.Background = new System.Windows.Media.SolidColorBrush(
+                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(inputBg));
+                    tx.BorderBrush = new System.Windows.Media.SolidColorBrush(
+                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(inputBorder));
+                    break;
+            }
+            ApplyThemeToTree(child, bg, fg, sub, border, inputBg, inputBorder);
+        }
+    }
+
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         _searchDebounce.Stop();
@@ -801,6 +1133,60 @@ public partial class MainWindow : Window
         if (ChannelList.SelectedItem is ChannelItem ch)
         {
             try { Clipboard.SetText(ch.Url); } catch { }
+        }
+    }
+
+    /// <summary>隐藏当前频道（从列表移除，可恢复）</summary>
+    private void MiHide_Click(object sender, RoutedEventArgs e)
+    {
+        if (ChannelList.SelectedItem is not ChannelItem ch) return;
+        if (!_config.HiddenChannels.Contains(ch.Url)) _config.HiddenChannels.Add(ch.Url);
+        QueueSave();
+        ApplyFilter();
+        AppLog.Info($"hide channel [{ch.Name}]");
+    }
+
+    private void SortByNumber_Click(object sender, RoutedEventArgs e)
+    {
+        _sortMode = "号码";
+        SortByNumber.IsChecked = true;
+        SortByName.IsChecked = false;
+        ApplyFilter();
+    }
+
+    private void SortByName_Click(object sender, RoutedEventArgs e)
+    {
+        _sortMode = "名称";
+        SortByNumber.IsChecked = false;
+        SortByName.IsChecked = true;
+        ApplyFilter();
+    }
+
+    /// <summary>分组管理：重命名 / 新建 / 删除分组</summary>
+    private void BtnManageGroups_Click(object sender, RoutedEventArgs e)
+    {
+        var groups = _all.Select(c => c.Group).Distinct().OrderBy(g => g, StringComparer.CurrentCulture).ToList();
+        var dlg = new Dialogs.GroupManagerWindow(groups);
+        if (dlg.ShowDialog() != true) return;
+
+        switch (dlg.Action)
+        {
+            case "rename" when dlg.SelectedGroup != null && !string.IsNullOrWhiteSpace(dlg.NewName):
+                var oldName = dlg.SelectedGroup;
+                var newName = dlg.NewName.Trim();
+                if (oldName == newName) return;
+                foreach (var c in _all.Where(c => c.Group == oldName)) c.Group = newName;
+                RebuildGroups();
+                ApplyFilter();
+                QueueSave();
+                break;
+            case "delete" when dlg.SelectedGroup != null:
+                var delName = dlg.SelectedGroup;
+                foreach (var c in _all.Where(c => c.Group == delName)) c.Group = "未分组";
+                RebuildGroups();
+                ApplyFilter();
+                QueueSave();
+                break;
         }
     }
 
@@ -857,7 +1243,19 @@ public partial class MainWindow : Window
                 _ = PlayAsync(ch);
                 return true;
             case Key.Space when _player != null:
-                if (_player.IsPlaying) _player.Pause(); else _player.Play();
+                TogglePlayPause();
+                return true;
+            case Key.S when Keyboard.Modifiers == ModifierKeys.None && _player != null:
+                StopPlayback();
+                return true;
+            case Key.OemOpenBrackets when Keyboard.Modifiers == ModifierKeys.Control:
+                SetPlaybackRate(_playbackRate - 0.25f);
+                return true;
+            case Key.OemCloseBrackets when Keyboard.Modifiers == ModifierKeys.Control:
+                SetPlaybackRate(_playbackRate + 0.25f);
+                return true;
+            case Key.D0 when Keyboard.Modifiers == ModifierKeys.Control:
+                SetPlaybackRate(1.0f);
                 return true;
         }
         return false;

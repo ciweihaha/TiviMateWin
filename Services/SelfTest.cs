@@ -55,6 +55,31 @@ public static class SelfTest
             var cr = M3uParser.Parse("#EXTM3U\r#EXTINF:-1,频道B\rhttp://b.m3u8\r");
             lines.Add(cr.Count == 1 && cr[0].Name == "频道B" ? "PASS 孤立CR兼容" : "FAIL 孤立CR");
 
+            // --- M3U tvg-id 解析 ---
+            var tvg = M3uParser.Parse("#EXTM3U\n#EXTINF:-1 tvg-id=\"cctv1\" group-title=\"央视\",CCTV-1\nhttp://c.m3u8");
+            lines.Add(tvg.Count == 1 && tvg[0].TvgId == "cctv1" ? "PASS tvg-id解析" : $"FAIL tvg-id 实际={tvg.FirstOrDefault()?.TvgId}");
+
+            // --- EPG XMLTV 解析 ---
+            var epgXml = """
+                <?xml version="1.0"?>
+                <tv>
+                  <programme start="20260101120000 +0800" stop="20260101130000 +0800" channel="cctv1">
+                    <title>新闻联播</title>
+                    <desc>今日新闻</desc>
+                    <category>新闻</category>
+                  </programme>
+                  <programme start="20260101130000 +0800" stop="20260101140000 +0800" channel="cctv1">
+                    <title>天气预报</title>
+                  </programme>
+                </tv>
+                """;
+            var epg = EpgParser.Parse(epgXml);
+            lines.Add(epg.Count == 1 && epg["cctv1"].Count == 2 && epg["cctv1"][0].Title == "新闻联播"
+                ? "PASS EPG解析 2节目" : $"FAIL EPG 频道数={epg.Count}");
+
+            // --- EPG 空输入 ---
+            lines.Add(EpgParser.Parse("").Count == 0 ? "PASS EPG空输入" : "FAIL EPG空输入");
+
             // --- 缓存读写（隔离目录，不污染真实缓存） ---
             var testCacheDir = Path.Combine(Path.GetTempPath(), "tivimate_cache_selftest");
             ChannelCache.OverrideDir = testCacheDir;

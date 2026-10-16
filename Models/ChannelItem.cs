@@ -11,6 +11,7 @@ public class ChannelItem : INotifyPropertyChanged
     public string Url { get; set; } = "";
     public string Group { get; set; } = "未分组";
     public string? Logo { get; set; }
+    public string? TvgId { get; set; }   // EPG 频道标识
 
     private bool _isFavorite;
     public bool IsFavorite
