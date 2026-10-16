@@ -29,6 +29,7 @@ public static class SelfTest
             using var libvlc = new LibVLC();
             lines.Add($"PASS 引擎初始化 libVLC {libvlc.Version}");
 
+            // --- M3U 解析 ---
             var channels = M3uParser.Parse(SampleM3u);
             lines.Add(channels.Count == 4
                 ? "PASS M3U解析 4/4 频道"
@@ -42,6 +43,45 @@ public static class SelfTest
             var groups = channels.Select(c => c.Group).Distinct().Count();
             lines.Add(groups == 3 ? "PASS 分组解析 3 组" : $"FAIL 分组 期望3 实际{groups}");
 
+            // --- M3U 边界情况 ---
+            lines.Add(M3uParser.Parse("").Count == 0 ? "PASS 空输入解析" : "FAIL 空输入");
+            lines.Add(M3uParser.Parse("   \n\n  ").Count == 0 ? "PASS 空白输入解析" : "FAIL 空白输入");
+            var single = M3uParser.Parse("#EXTM3U\n#EXTINF:-1 group-title=\"直播\",测试流\nhttp://x.com/live.m3u8");
+            lines.Add(single.Count == 1 && single[0].Group == "直播" && single[0].Name == "测试流"
+                ? "PASS 单流解析" : "FAIL 单流解析");
+            // CRLF 与孤立 CR 兼容
+            var crlf = M3uParser.Parse("#EXTM3U\r\n#EXTINF:-1,频道A\r\nhttp://a.m3u8\r\n");
+            lines.Add(crlf.Count == 1 && crlf[0].Name == "频道A" ? "PASS CRLF兼容" : "FAIL CRLF");
+            var cr = M3uParser.Parse("#EXTM3U\r#EXTINF:-1,频道B\rhttp://b.m3u8\r");
+            lines.Add(cr.Count == 1 && cr[0].Name == "频道B" ? "PASS 孤立CR兼容" : "FAIL 孤立CR");
+
+            // --- 缓存读写 ---
+            var cacheUrl = "https://selftest.example.com/list.m3u8";
+            var cacheChannels = new List<ChannelItem> {
+                new() { Number = 1, Name = "缓存频道1", Url = "http://c1.m3u8", Group = "测试" }
+            };
+            ChannelCache.Save(cacheUrl, cacheChannels);
+            var cacheLoad = ChannelCache.Load(cacheUrl);
+            lines.Add(cacheLoad.Count == 1 && cacheLoad[0].Name == "缓存频道1"
+                ? "PASS 缓存读写" : "FAIL 缓存读写");
+            // 清理自测缓存
+            try { File.Delete(Path.Combine(Path.GetTempPath(), "tivimate_cache_selftest")); } catch { }
+
+            // --- 配置序列化 ---
+            var cfg = new AppConfig { ActivePlaylist = "测试源", Volume = 55 };
+            cfg.Playlists.Add(new PlaylistSource { Name = "测试源", Url = "http://test.m3u8" });
+            var cfgPath = Path.Combine(Path.GetTempPath(), "tivimate_cfg_selftest.json");
+            try
+            {
+                File.WriteAllText(cfgPath, System.Text.Json.JsonSerializer.Serialize(cfg));
+                var cfgLoad = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(cfgPath));
+                lines.Add(cfgLoad != null && cfgLoad.ActivePlaylist == "测试源" && cfgLoad.Volume == 55 && cfgLoad.Playlists.Count == 1
+                    ? "PASS 配置序列化" : "FAIL 配置序列化");
+            }
+            catch (Exception ex) { lines.Add("FAIL 配置序列化: " + ex.Message); }
+            finally { try { File.Delete(cfgPath); } catch { } }
+
+            // --- 播放测试 ---
             if (playTest)
             {
                 if (string.IsNullOrEmpty(url))

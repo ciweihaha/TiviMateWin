@@ -12,6 +12,7 @@ public partial class ChannelWindow : Window
 {
     private readonly LibVLC _libvlc;
     private readonly MediaPlayer _player;
+    private Media? _media;   // 当前 Media：Play 后需保持存活直到换台/关闭
     private ChannelItem? _channel;
     private int _volume;
     private bool _closing;
@@ -25,6 +26,11 @@ public partial class ChannelWindow : Window
         VideoView.MediaPlayer = _player;
     }
 
+    /// <summary>标记为已由主窗口统一释放引擎（主窗口关闭时调用，避免重复释放）</summary>
+    public void DetachEngine() => _engineReleased = true;
+
+    private bool _engineReleased;
+
     /// <summary>播放指定频道</summary>
     public void Play(ChannelItem ch)
     {
@@ -33,10 +39,13 @@ public partial class ChannelWindow : Window
         TitleText.Text = ch.Name;
         try
         {
-            using var media = ch.Url.Contains("://")
+            var old = _media;
+            var media = ch.Url.Contains("://")
                 ? new Media(_libvlc, new Uri(ch.Url))
                 : new Media(_libvlc, ch.Url, FromType.FromPath);
             media.AddOption(":network-caching=800");
+            _media = media;
+            old?.Dispose();
             _player.Play(media);
         }
         catch (Exception ex)
@@ -66,7 +75,12 @@ public partial class ChannelWindow : Window
 
     private void Window_Closed(object sender, EventArgs e)
     {
-        try { _player.Dispose(); } catch { }
+        // 若引擎已被主窗口统一释放，则不再 dispose 播放器/Media（避免二次释放崩溃）
+        if (!_engineReleased)
+        {
+            try { _media?.Dispose(); } catch { }
+            try { _player.Dispose(); } catch { }
+        }
         AppLog.Info($"channel window closed [{_channel?.Name}]");
     }
 }

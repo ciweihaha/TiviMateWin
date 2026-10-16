@@ -28,11 +28,14 @@ public partial class MainWindow : Window
     private MediaPlayer? _player;
     private readonly SemaphoreSlim _engineGate = new(1, 1);
     private volatile bool _engineReady;
+    private Media? _currentMedia;   // 主播放器当前 Media：Play 后需保持存活直到换台/关闭
 
     // gzip/deflate 自动解压：大清单（如 697KB 全球源）压缩后降 ~70%，下载时间从 35s 级降到 10s 级
     private readonly HttpClient _http = new(new HttpClientHandler
     {
-        AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+        AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+        MaxConnectionsPerServer = 8,   // 连接复用：多源/多窗口并发拉取不互相拖慢
+        UseCookies = false
     })
     { Timeout = TimeSpan.FromSeconds(60) };
     private readonly DispatcherTimer _searchDebounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
@@ -64,9 +67,17 @@ public partial class MainWindow : Window
     // 小窗播放（画中画）：独立 MediaPlayer，播放另一个频道
     private MediaPlayer? _pipPlayer;
     private ChannelItem? _pipChannel;
+    private Media? _pipMedia;   // 小窗当前 Media：Play 后需保持存活
     private bool _pipDragging;
     private Point _pipDragStart;
     private Point _pipOrigin;
+
+    // 多窗口播放：跟踪所有打开的独立频道窗口，主窗口关闭时统一关闭，避免引擎释放后子窗口崩溃
+    private readonly List<ChannelWindow> _channelWindows = new();
+
+    // 播放列表加载并发保护：快速切换源/刷新时避免并发覆盖 _all 与 UI 竞态
+    private readonly SemaphoreSlim _loadGate = new(1, 1);
+    private int _loadSeq;   // 加载序号：只采纳最后一次请求的结果，防止旧结果覆盖新结果
 
     public MainWindow()
     {
@@ -176,6 +187,19 @@ public partial class MainWindow : Window
 
     private async Task LoadPlaylistAsync(bool forceRefresh)
     {
+        var seq = ++_loadSeq;   // 本次请求序号
+        await _loadGate.WaitAsync();
+        try
+        {
+            // 若等待期间又有更新的加载请求，本次结果作废
+            if (seq != _loadSeq) return;
+            await LoadCoreAsync(forceRefresh);
+        }
+        finally { _loadGate.Release(); }
+    }
+
+    private async Task LoadCoreAsync(bool forceRefresh)
+    {
         var src = _config.Playlists.FirstOrDefault(p => p.Name == _config.ActivePlaylist)
                   ?? _config.Playlists.FirstOrDefault();
         if (src is null)
@@ -264,7 +288,18 @@ public partial class MainWindow : Window
     {
         if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            return await _http.GetStringAsync(url);
+        {
+            // 网络抖动容错：最多重试 2 次（间隔 1s），仅对瞬时失败重试
+            for (var attempt = 0; ; attempt++)
+            {
+                try { return await _http.GetStringAsync(url); }
+                catch (Exception ex) when (attempt < 2)
+                {
+                    AppLog.Error($"fetch retry {attempt + 1} [{url}]: {ex.Message}");
+                    await Task.Delay(1000);
+                }
+            }
+        }
         return await File.ReadAllTextAsync(url);
     }
 
@@ -348,10 +383,14 @@ public partial class MainWindow : Window
         {
             await Task.Run(() =>
             {
-                using var media = url.Contains("://")
+                // 释放上一个 Media（换台时），再创建新的
+                var old = _currentMedia;
+                var media = url.Contains("://")
                     ? new Media(_libvlc!, new Uri(url))
                     : new Media(_libvlc!, url, FromType.FromPath);
                 media.AddOption(":network-caching=800");
+                _currentMedia = media;
+                old?.Dispose();   // 旧 Media 释放（新 Media 已接管播放）
                 _player!.Play(media);
             });
         }
@@ -409,6 +448,7 @@ public partial class MainWindow : Window
             WindowState = WindowState.Maximized;
             _fullscreen = true;
             StatusBar.Visibility = Visibility.Collapsed;  // 全屏沉浸：隐藏状态栏
+            if (PipHost.Visibility == Visibility.Visible) PipHost.Visibility = Visibility.Hidden; // 全屏隐藏小窗
         }
         else
         {
@@ -419,6 +459,7 @@ public partial class MainWindow : Window
             _fullscreen = false;
             _osdTimer.Stop();
             StatusBar.Visibility = Visibility.Visible;    // 退出全屏恢复状态栏
+            if (_pipChannel != null) PipHost.Visibility = Visibility.Visible; // 恢复小窗
         }
     }
 
@@ -444,6 +485,8 @@ public partial class MainWindow : Window
         await EnsureEngineAsync();
         if (_libvlc is null) return;
         var win = new ChannelWindow(_libvlc, _config.Volume) { Owner = this };
+        _channelWindows.Add(win);
+        win.Closed += (_, _) => _channelWindows.Remove(win);
         win.Show();
         win.Play(ch);
     }
@@ -469,16 +512,22 @@ public partial class MainWindow : Window
 
         _pipChannel = ch;
         PipTitle.Text = ch.Name;
+        // 初始定位到视频区右上角（距右 8px、距顶 8px）
+        var videoWidth = VideoView.ActualWidth > 0 ? VideoView.ActualWidth : ActualWidth;
+        PipHost.Margin = new Thickness(Math.Max(0, videoWidth - PipHost.Width - 8), 8, 0, 0);
         PipHost.Visibility = Visibility.Visible;
 
         try
         {
             await Task.Run(() =>
             {
-                using var media = ch.Url.Contains("://")
+                var old = _pipMedia;
+                var media = ch.Url.Contains("://")
                     ? new Media(_libvlc!, new Uri(ch.Url))
                     : new Media(_libvlc!, ch.Url, FromType.FromPath);
                 media.AddOption(":network-caching=800");
+                _pipMedia = media;
+                old?.Dispose();
                 _pipPlayer!.Play(media);
             });
         }
@@ -492,6 +541,8 @@ public partial class MainWindow : Window
     private void ClosePip()
     {
         try { _pipPlayer?.Stop(); } catch { }
+        try { _pipMedia?.Dispose(); } catch { }
+        _pipMedia = null;
         PipHost.Visibility = Visibility.Collapsed;
         _pipChannel = null;
         // 恢复侧栏
@@ -728,8 +779,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Window_PreviewMouseMove(object sender, MouseEventArgs e) { }
-
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         e.Handled = HandleGlobalKey(e.Key);
@@ -909,12 +958,23 @@ public partial class MainWindow : Window
         _stallWatch.Stop();
         _switchDebounce.Stop();
         _osdTimer.Stop();
+
+        // 先关闭所有独立频道窗口：它们共享主窗口的 LibVLC 引擎，
+        // 若主窗口先释放引擎再关闭子窗口，子窗口 Dispose 会崩溃
+        foreach (var win in _channelWindows.ToList())
+        {
+            try { win.DetachEngine(); win.Close(); } catch { }
+        }
+        _channelWindows.Clear();
+
         _config.Save();
         AppLog.Info("exit");
     }
 
     private void Window_Closed(object sender, EventArgs e)
     {
+        try { _currentMedia?.Dispose(); } catch { }
+        try { _pipMedia?.Dispose(); } catch { }
         try { _pipPlayer?.Dispose(); } catch { }
         try { _player?.Dispose(); } catch { }
         try { _libvlc?.Dispose(); } catch { }

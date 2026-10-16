@@ -7,7 +7,7 @@
         Background="#FF12161B" Foreground="#FFE8EDF2"
         FontFamily="Microsoft YaHei UI" UseLayoutRounding="True"
         Loaded="Window_Loaded" Closing="Window_Closing" Closed="Window_Closed"
-        PreviewKeyDown="Window_PreviewKeyDown" PreviewMouseMove="Window_PreviewMouseMove">
+        PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
         <Style x:Key="ToolBtn" TargetType="Button">
             <Setter Property="Background" Value="#FF232B34"/>
@@ -191,7 +191,7 @@
 
             <!-- 小窗播放（画中画）：右上角叠加，播放另一个频道 -->
             <Grid x:Name="PipHost" Grid.Row="0" Width="320" Height="180"
-                  HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,8,8,0"
+                  HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,8,0,0"
                   Visibility="Collapsed" Background="Black"
                   MouseLeftButtonDown="PipHost_MouseDown" MouseMove="PipHost_MouseMove" MouseLeftButtonUp="PipHost_MouseUp">
                 <lvc:VideoView x:Name="PipVideo" Background="Black" Focusable="False"/>

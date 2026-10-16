@@ -9,6 +9,8 @@ namespace TiviMateWin.Services;
 /// <summary>频道列表磁盘缓存：秒开上次结果，后台再刷新</summary>
 public static class ChannelCache
 {
+    private static readonly object Gate = new();   // 写锁：多源并发保存时避免文件写冲突
+
     private static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TiviMateWin", "cache");
 
@@ -38,8 +40,16 @@ public static class ChannelCache
     {
         try
         {
-            Directory.CreateDirectory(Dir);
-            File.WriteAllText(PathFor(sourceUrl), JsonSerializer.Serialize(channels));
+            lock (Gate)   // 串行化写盘，避免并发写同一/不同缓存文件时冲突
+            {
+                Directory.CreateDirectory(Dir);
+                // 原子写：先写临时文件再替换，避免写一半崩溃留下损坏缓存
+                var path = PathFor(sourceUrl);
+                var tmp = path + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(channels));
+                if (File.Exists(path)) File.Delete(path);
+                File.Move(tmp, path);
+            }
         }
         catch { }
     }
