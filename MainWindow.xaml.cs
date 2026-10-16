@@ -28,7 +28,11 @@ public partial class MainWindow : Window
     private MediaPlayer? _player;
     private readonly SemaphoreSlim _engineGate = new(1, 1);
     private volatile bool _engineReady;
-    private Media? _currentMedia;   // 主播放器当前 Media：Play 后需保持存活直到换台/关闭
+    private volatile bool _engineFailed;   // 引擎初始化失败标志：避免反复弹窗
+    // 主播放器当前 Media：Play 后需保持存活直到换台/关闭。
+    // 用锁保护：快速换台时多个 Task.Run 并发访问，避免竞态释放正在播放的 Media
+    private Media? _currentMedia;
+    private readonly object _mediaLock = new();
 
     // gzip/deflate 自动解压：大清单（如 697KB 全球源）压缩后降 ~70%，下载时间从 35s 级降到 10s 级
     private readonly HttpClient _http = new(new HttpClientHandler
@@ -78,6 +82,9 @@ public partial class MainWindow : Window
     // 播放列表加载并发保护：快速切换源/刷新时避免并发覆盖 _all 与 UI 竞态
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private int _loadSeq;   // 加载序号：只采纳最后一次请求的结果，防止旧结果覆盖新结果
+
+    // 播放串行化：libVLC MediaPlayer 非线程安全，快速换台时多个 Play 需串行执行，避免并发崩溃
+    private readonly SemaphoreSlim _playGate = new(1, 1);
 
     public MainWindow()
     {
@@ -139,11 +146,11 @@ public partial class MainWindow : Window
 
     private async Task EnsureEngineAsync()
     {
-        if (_engineReady) return;
+        if (_engineReady || _engineFailed) return;   // 已就绪或已确认失败，不再重试
         await _engineGate.WaitAsync();
         try
         {
-            if (_engineReady) return;
+            if (_engineReady || _engineFailed) return;
             PlayState.Text = "引擎初始化…";
             _libvlc = await Task.Run(() =>
             {
@@ -175,6 +182,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            _engineFailed = true;            // 标记失败，后续不再反复初始化/弹窗
             PlayState.Text = "引擎初始化失败";
             AppLog.Error("engine init failed: " + ex.Message);
             MessageBox.Show(this, "VLC 引擎初始化失败：" + ex.Message, "错误",
@@ -359,15 +367,18 @@ public partial class MainWindow : Window
 
     private async Task PlayAsync(ChannelItem ch, bool watchdogReconnect)
     {
+        if (_closing) return;                 // 窗口关闭中，不再启动播放
         await EnsureEngineAsync();
         if (_player is null || _libvlc is null) return;
 
         _switchDebounce.Stop();               // 新播放请求使挂起的防抖播放失效
         _pendingPlay = null;
-        if (!watchdogReconnect)              // 用户主动播放：看门狗计数重新开始
+        if (!watchdogReconnect)              // 用户主动播放：看门狗计数与失败计数重新开始
         {
             _stallRetryCount = 0;
             _lastStallAt = DateTime.MinValue;
+            _failCount = 0;                  // 用户手动换台：重置坏源失败链，避免永久停止自动跳台
+            _recentFailedUrls.Clear();
         }
         _lastMediaTime = -1;                  // 停滞看门狗重新计位
         _stallTicks = 0;
@@ -381,18 +392,27 @@ public partial class MainWindow : Window
         var url = ch.Url;
         try
         {
-            await Task.Run(() =>
+            // 播放串行化：快速换台时避免并发调用 _player.Play（libVLC 非线程安全）
+            await _playGate.WaitAsync();
+            try
             {
-                // 释放上一个 Media（换台时），再创建新的
-                var old = _currentMedia;
-                var media = url.Contains("://")
-                    ? new Media(_libvlc!, new Uri(url))
-                    : new Media(_libvlc!, url, FromType.FromPath);
-                media.AddOption(":network-caching=800");
-                _currentMedia = media;
-                old?.Dispose();   // 旧 Media 释放（新 Media 已接管播放）
-                _player!.Play(media);
-            });
+                await Task.Run(() =>
+                {
+                    // 创建新 Media 并播放，然后释放旧的（顺序：先播新的，再释放旧的，避免黑屏）
+                    var media = url.Contains("://")
+                        ? new Media(_libvlc!, new Uri(url))
+                        : new Media(_libvlc!, url, FromType.FromPath);
+                    media.AddOption(":network-caching=800");
+                    _player!.Play(media);
+                    lock (_mediaLock)
+                    {
+                        var old = _currentMedia;
+                        _currentMedia = media;   // 新 Media 接管播放
+                        old?.Dispose();          // 旧 Media 已停止，安全释放
+                    }
+                });
+            }
+            finally { _playGate.Release(); }
         }
         catch (Exception ex)
         {
@@ -481,6 +501,7 @@ public partial class MainWindow : Window
     /// <summary>新窗口播放：打开独立频道窗口（多窗口同时播放）</summary>
     private async void MiNewWin_Click(object sender, RoutedEventArgs e)
     {
+        if (_closing) return;
         if (ChannelList.SelectedItem is not ChannelItem ch) return;
         await EnsureEngineAsync();
         if (_libvlc is null) return;
@@ -494,6 +515,7 @@ public partial class MainWindow : Window
     /// <summary>打开小窗播放指定频道；小窗模式下自动收起节目列表（侧栏）</summary>
     private async void OpenPip(ChannelItem ch)
     {
+        if (_closing) return;
         await EnsureEngineAsync();
         if (_libvlc is null) return;
 
@@ -521,14 +543,17 @@ public partial class MainWindow : Window
         {
             await Task.Run(() =>
             {
-                var old = _pipMedia;
                 var media = ch.Url.Contains("://")
                     ? new Media(_libvlc!, new Uri(ch.Url))
                     : new Media(_libvlc!, ch.Url, FromType.FromPath);
                 media.AddOption(":network-caching=800");
-                _pipMedia = media;
-                old?.Dispose();
                 _pipPlayer!.Play(media);
+                lock (_mediaLock)
+                {
+                    var old = _pipMedia;
+                    _pipMedia = media;   // 新 Media 接管
+                    old?.Dispose();
+                }
             });
         }
         catch (Exception ex)
@@ -567,9 +592,12 @@ public partial class MainWindow : Window
         var cur = e.GetPosition(this);
         var dx = cur.X - _pipDragStart.X;
         var dy = cur.Y - _pipDragStart.Y;
+        // 限制小窗在窗口可视范围内，避免拖出后无法找回
+        var maxX = Math.Max(0, ActualWidth - PipHost.Width - 8);
+        var maxY = Math.Max(0, ActualHeight - PipHost.Height - 8);
         PipHost.Margin = new Thickness(
-            Math.Max(0, _pipOrigin.X + dx),
-            Math.Max(0, _pipOrigin.Y + dy), 0, 0);
+            Math.Clamp(_pipOrigin.X + dx, 0, maxX),
+            Math.Clamp(_pipOrigin.Y + dy, 0, maxY), 0, 0);
     }
 
     private void PipHost_MouseUp(object sender, MouseButtonEventArgs e)
@@ -958,6 +986,8 @@ public partial class MainWindow : Window
         _stallWatch.Stop();
         _switchDebounce.Stop();
         _osdTimer.Stop();
+        _searchDebounce.Stop();
+        _saveDebounce.Stop();
 
         // 先关闭所有独立频道窗口：它们共享主窗口的 LibVLC 引擎，
         // 若主窗口先释放引擎再关闭子窗口，子窗口 Dispose 会崩溃

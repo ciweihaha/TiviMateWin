@@ -141,14 +141,26 @@ public partial class AddPlaylistWindow : Window
         }
     }
 
+    private bool _okClicked;   // 防重复：Enter 触发 IsDefault 按钮 + 点击可能重复调用
+
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
+        if (_okClicked) return;   // 防重复调用（Enter 键 + 点击）
         if (string.IsNullOrWhiteSpace(UrlBox.Text))
         {
             MessageBox.Show(this, "请填写播放列表地址或选择本地文件", "提示",
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        DialogResult = true;
+        // 仅在对话框已通过 ShowDialog 显示时设置 DialogResult，否则直接关闭
+        if (IsLoaded && IsVisible)
+        {
+            _okClicked = true;
+            DialogResult = true;
+        }
+        else
+        {
+            Close();
+        }
     }
 }

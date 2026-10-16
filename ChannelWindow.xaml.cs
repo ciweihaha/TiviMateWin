@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Windows;
-using System.Windows.Threading;
 using LibVLCSharp.Shared;
 using TiviMateWin.Models;
 using TiviMateWin.Services;
@@ -15,7 +14,6 @@ public partial class ChannelWindow : Window
     private Media? _media;   // 当前 Media：Play 后需保持存活直到换台/关闭
     private ChannelItem? _channel;
     private int _volume;
-    private bool _closing;
 
     public ChannelWindow(LibVLC libvlc, int volume)
     {
@@ -39,14 +37,14 @@ public partial class ChannelWindow : Window
         TitleText.Text = ch.Name;
         try
         {
-            var old = _media;
             var media = ch.Url.Contains("://")
                 ? new Media(_libvlc, new Uri(ch.Url))
                 : new Media(_libvlc, ch.Url, FromType.FromPath);
             media.AddOption(":network-caching=800");
-            _media = media;
-            old?.Dispose();
             _player.Play(media);
+            var old = _media;
+            _media = media;   // 新 Media 接管
+            old?.Dispose();
         }
         catch (Exception ex)
         {
@@ -69,7 +67,6 @@ public partial class ChannelWindow : Window
 
     private void Window_Closing(object sender, CancelEventArgs e)
     {
-        _closing = true;
         try { _player.Stop(); } catch { }
     }
 

@@ -14,11 +14,16 @@ public static class ChannelCache
     private static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TiviMateWin", "cache");
 
+    /// <summary>测试隔离：SelfTest 可注入临时目录，避免污染真实缓存</summary>
+    public static string? OverrideDir { get; set; }
+
+    private static string CacheDir => OverrideDir ?? Dir;
+
     private static string PathFor(string sourceUrl)
     {
         using var sha = SHA1.Create();
         var hash = Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(sourceUrl)));
-        return Path.Combine(Dir, hash + ".json");
+        return Path.Combine(CacheDir, hash + ".json");
     }
 
     public static List<ChannelItem> Load(string sourceUrl)
@@ -42,7 +47,7 @@ public static class ChannelCache
         {
             lock (Gate)   // 串行化写盘，避免并发写同一/不同缓存文件时冲突
             {
-                Directory.CreateDirectory(Dir);
+                Directory.CreateDirectory(CacheDir);
                 // 原子写：先写临时文件再替换，避免写一半崩溃留下损坏缓存
                 var path = PathFor(sourceUrl);
                 var tmp = path + ".tmp";

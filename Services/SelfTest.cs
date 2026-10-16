@@ -55,7 +55,9 @@ public static class SelfTest
             var cr = M3uParser.Parse("#EXTM3U\r#EXTINF:-1,频道B\rhttp://b.m3u8\r");
             lines.Add(cr.Count == 1 && cr[0].Name == "频道B" ? "PASS 孤立CR兼容" : "FAIL 孤立CR");
 
-            // --- 缓存读写 ---
+            // --- 缓存读写（隔离目录，不污染真实缓存） ---
+            var testCacheDir = Path.Combine(Path.GetTempPath(), "tivimate_cache_selftest");
+            ChannelCache.OverrideDir = testCacheDir;
             var cacheUrl = "https://selftest.example.com/list.m3u8";
             var cacheChannels = new List<ChannelItem> {
                 new() { Number = 1, Name = "缓存频道1", Url = "http://c1.m3u8", Group = "测试" }
@@ -64,8 +66,9 @@ public static class SelfTest
             var cacheLoad = ChannelCache.Load(cacheUrl);
             lines.Add(cacheLoad.Count == 1 && cacheLoad[0].Name == "缓存频道1"
                 ? "PASS 缓存读写" : "FAIL 缓存读写");
-            // 清理自测缓存
-            try { File.Delete(Path.Combine(Path.GetTempPath(), "tivimate_cache_selftest")); } catch { }
+            // 清理隔离目录
+            try { if (Directory.Exists(testCacheDir)) Directory.Delete(testCacheDir, true); } catch { }
+            ChannelCache.OverrideDir = null;
 
             // --- 配置序列化 ---
             var cfg = new AppConfig { ActivePlaylist = "测试源", Volume = 55 };
