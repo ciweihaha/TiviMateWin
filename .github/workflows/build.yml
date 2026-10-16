@@ -1,0 +1,45 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish (win-x64 self-contained)
+        run: |
+          dotnet publish TiviMateWin.csproj -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Verify output
+        run: |
+          Get-ChildItem publish -Recurse | Select-Object FullName, Length | Select-Object -First 20
+          if (-not (Test-Path "publish\TiviMateWin.exe")) { throw "TiviMateWin.exe not found" }
+
+      - name: Package zip
+        run: |
+          Compress-Archive -Path publish\* -DestinationPath TiviMateWin-win-x64.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TiviMateWin-win-x64
+          path: TiviMateWin-win-x64.zip
+
+      - name: Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TiviMateWin-win-x64.zip
+          generate_release_notes: true

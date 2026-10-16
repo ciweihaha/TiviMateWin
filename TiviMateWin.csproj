@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+    <Version>1.2.0</Version>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibVLCSharp.WPF" Version="3.10.1" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
+  </ItemGroup>
+
+  <!-- 性能优化：删除非本机架构的 VLC 原生库与无用的 Web 远程接口 -->
+  <Target Name="TrimVlcArchitectures" AfterTargets="Build">
+    <ItemGroup>
+      <VlcRemoveFiles Include="$(OutDir)libvlc\win-x86\**\*;$(OutDir)libvlc\win-arm64\**\*;$(OutDir)libvlc\win-x64\lua\http\**\*;$(OutDir)libvlc\win-x64\hrtfs\**\*" />
+    </ItemGroup>
+    <Delete Files="@(VlcRemoveFiles)" ContinueOnError="true" />
+    <RemoveDir Directories="$(OutDir)libvlc\win-x86;$(OutDir)libvlc\win-arm64;$(OutDir)libvlc\win-x64\lua\http;$(OutDir)libvlc\win-x64\hrtfs" ContinueOnError="true" />
+  </Target>
+
+  <!-- publish 流程中 NuGet 原生文件直接从包复制到发布目录，需单独裁剪 -->
+  <Target Name="TrimVlcArchitecturesPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <VlcPubRemove Include="$(PublishDir)libvlc\win-x86\**\*;$(PublishDir)libvlc\win-arm64\**\*;$(PublishDir)libvlc\win-x64\lua\http\**\*;$(PublishDir)libvlc\win-x64\hrtfs\**\*" />
+    </ItemGroup>
+    <Delete Files="@(VlcPubRemove)" ContinueOnError="true" />
+    <RemoveDir Directories="$(PublishDir)libvlc\win-x86;$(PublishDir)libvlc\win-arm64;$(PublishDir)libvlc\win-x64\lua\http;$(PublishDir)libvlc\win-x64\hrtfs" ContinueOnError="true" />
+  </Target>
+
+</Project>

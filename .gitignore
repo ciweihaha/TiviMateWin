@@ -1,0 +1,25 @@
+# 构建产物
+bin/
+obj/
+*.user
+*.suo
+
+# VS / IDE
+.vs/
+.vscode/
+.idea/
+
+# 发布输出
+publish/
+Release/
+Debug/
+
+# 日志
+*.log
+logs/
+AppLog/
+
+# 本地配置（含播放列表地址，不入库）
+config.json
+*.m3u
+playlists/
