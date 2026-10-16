@@ -39,7 +39,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _saveDebounce = new() { Interval = TimeSpan.FromSeconds(2) };
 
     private bool _suppressEvents;
-    private bool _suppressCombo;   // 源切换下拉防回写标志
+    private bool _suppressSrcList; // 源列表防回写标志
     private bool _favOnly;
     private ChannelItem? _current;
     private bool _fullscreen;
@@ -60,6 +60,13 @@ public partial class MainWindow : Window
     private int _stallRetryCount;
     private DateTime _lastStallAt = DateTime.MinValue;
     private bool _closing;
+
+    // 小窗播放（画中画）：独立 MediaPlayer，播放另一个频道
+    private MediaPlayer? _pipPlayer;
+    private ChannelItem? _pipChannel;
+    private bool _pipDragging;
+    private Point _pipDragStart;
+    private Point _pipOrigin;
 
     public MainWindow()
     {
@@ -415,37 +422,153 @@ public partial class MainWindow : Window
         }
     }
 
+    // ---------- 小窗播放（画中画） ----------
+
+    private void BtnPip_Click(object sender, RoutedEventArgs e)
+    {
+        // 工具栏小窗按钮：若小窗开着则关闭，否则小窗播放当前选中/正在播放的频道
+        if (PipHost.Visibility == Visibility.Visible) { ClosePip(); return; }
+        var ch = ChannelList.SelectedItem as ChannelItem ?? _current;
+        if (ch != null) OpenPip(ch);
+    }
+
+    private void MiPip_Click(object sender, RoutedEventArgs e)
+    {
+        if (ChannelList.SelectedItem is ChannelItem ch) OpenPip(ch);
+    }
+
+    /// <summary>新窗口播放：打开独立频道窗口（多窗口同时播放）</summary>
+    private async void MiNewWin_Click(object sender, RoutedEventArgs e)
+    {
+        if (ChannelList.SelectedItem is not ChannelItem ch) return;
+        await EnsureEngineAsync();
+        if (_libvlc is null) return;
+        var win = new ChannelWindow(_libvlc, _config.Volume) { Owner = this };
+        win.Show();
+        win.Play(ch);
+    }
+
+    /// <summary>打开小窗播放指定频道；小窗模式下自动收起节目列表（侧栏）</summary>
+    private async void OpenPip(ChannelItem ch)
+    {
+        await EnsureEngineAsync();
+        if (_libvlc is null) return;
+
+        // 小窗播放时自动隐藏节目列表（侧栏收起），腾出视频区
+        if (SideCol.Width.Value > 0)
+        {
+            _sideWidth = SideCol.Width;
+            SideCol.Width = new GridLength(0);
+        }
+
+        if (_pipPlayer is null)
+        {
+            _pipPlayer = new MediaPlayer(_libvlc) { Volume = _config.Volume };
+            PipVideo.MediaPlayer = _pipPlayer;
+        }
+
+        _pipChannel = ch;
+        PipTitle.Text = ch.Name;
+        PipHost.Visibility = Visibility.Visible;
+
+        try
+        {
+            await Task.Run(() =>
+            {
+                using var media = ch.Url.Contains("://")
+                    ? new Media(_libvlc!, new Uri(ch.Url))
+                    : new Media(_libvlc!, ch.Url, FromType.FromPath);
+                media.AddOption(":network-caching=800");
+                _pipPlayer!.Play(media);
+            });
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"pip play failed [{ch.Name}]: {ex.Message}");
+        }
+        AppLog.Info($"pip play [{ch.Name}]");
+    }
+
+    private void ClosePip()
+    {
+        try { _pipPlayer?.Stop(); } catch { }
+        PipHost.Visibility = Visibility.Collapsed;
+        _pipChannel = null;
+        // 恢复侧栏
+        if (!_fullscreen) SideCol.Width = _sideWidth;
+    }
+
+    private void PipClose_Click(object sender, MouseButtonEventArgs e) => ClosePip();
+
+    /// <summary>拖动小窗到任意位置</summary>
+    private void PipHost_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed) return;
+        _pipDragging = true;
+        _pipDragStart = e.GetPosition(this);
+        _pipOrigin = new Point(PipHost.Margin.Left, PipHost.Margin.Top);
+        PipHost.CaptureMouse();
+    }
+
+    private void PipHost_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_pipDragging) return;
+        var cur = e.GetPosition(this);
+        var dx = cur.X - _pipDragStart.X;
+        var dy = cur.Y - _pipDragStart.Y;
+        PipHost.Margin = new Thickness(
+            Math.Max(0, _pipOrigin.X + dx),
+            Math.Max(0, _pipOrigin.Y + dy), 0, 0);
+    }
+
+    private void PipHost_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_pipDragging) return;
+        _pipDragging = false;
+        PipHost.ReleaseMouseCapture();
+    }
+
     // ---------- 播放列表管理（供管理对话框调用） ----------
 
     internal List<PlaylistSource> Playlists => _config.Playlists;
     internal string? ActivePlaylistName => _config.ActivePlaylist;
 
-    /// <summary>刷新主界面源切换下拉框</summary>
+    /// <summary>刷新主界面源列表面板</summary>
     private void RefreshPlaylistCombo()
     {
-        _suppressCombo = true;
+        _suppressSrcList = true;
         var lists = _config.Playlists;
-        PlaylistCombo.DisplayMemberPath = nameof(PlaylistSource.Name);
-        PlaylistCombo.ItemsSource = lists;
-        PlaylistCombo.SelectedItem = lists.FirstOrDefault(p => p.Name == _config.ActivePlaylist);
-        PlaylistCombo.IsEnabled = lists.Count > 1;   // 只有一个源时不需切换
-        _suppressCombo = false;
+        SrcList.ItemsSource = null;
+        SrcList.ItemsSource = lists;
+        // 当前激活源高亮
+        var active = lists.FirstOrDefault(p => p.Name == _config.ActivePlaylist);
+        if (active != null) SrcList.SelectedItem = active;
+        _suppressSrcList = false;
     }
 
-    /// <summary>主界面下拉切换源</summary>
-    private void PlaylistCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    /// <summary>展开/收起源列表面板</summary>
+    private void SrcToggle_Click(object sender, RoutedEventArgs e)
     {
-        if (_suppressCombo) return;
-        if (PlaylistCombo.SelectedItem is PlaylistSource sel && sel.Name != _config.ActivePlaylist)
+        var show = SrcPanel.Visibility != Visibility.Visible;
+        SrcPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        SrcToggleBtn.Content = show ? "▴" : "▾";
+        RefreshPlaylistCombo();
+    }
+
+    /// <summary>点击源列表切换源</summary>
+    private void SrcList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSrcList) return;
+        if (SrcList.SelectedItem is PlaylistSource sel && sel.Name != _config.ActivePlaylist)
         {
             ActivatePlaylist(sel.Name);
         }
         else
         {
             // 无效选择：回弹到当前激活
-            _suppressCombo = true;
-            PlaylistCombo.SelectedItem = _config.Playlists.FirstOrDefault(p => p.Name == _config.ActivePlaylist);
-            _suppressCombo = false;
+            _suppressSrcList = true;
+            SrcList.SelectedItem = _config.Playlists.FirstOrDefault(p => p.Name == _config.ActivePlaylist);
+            _suppressSrcList = false;
         }
     }
 
@@ -792,6 +915,7 @@ public partial class MainWindow : Window
 
     private void Window_Closed(object sender, EventArgs e)
     {
+        try { _pipPlayer?.Dispose(); } catch { }
         try { _player?.Dispose(); } catch { }
         try { _libvlc?.Dispose(); } catch { }
         _http.Dispose();
