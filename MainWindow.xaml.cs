@@ -50,6 +50,7 @@ public partial class MainWindow : Window
     private bool _favOnly;
     private ChannelItem? _current;
     private bool _fullscreen;
+    private bool _sideCollapsed;   // 侧栏是否收起（缩进最左）
     private GridLength _sideWidth = new(300);
 
     // 换台防抖：连按↑↓只播最后一个频道（150ms 窗口内）
@@ -68,13 +69,9 @@ public partial class MainWindow : Window
     private DateTime _lastStallAt = DateTime.MinValue;
     private bool _closing;
 
-    // 小窗播放（画中画）：独立 MediaPlayer，播放另一个频道
-    private MediaPlayer? _pipPlayer;
+    // 独立悬浮小窗（画中画）：无边框窗口，可拖到屏幕任意位置
+    private PipWindow? _pipWindow;
     private ChannelItem? _pipChannel;
-    private Media? _pipMedia;   // 小窗当前 Media：Play 后需保持存活
-    private bool _pipDragging;
-    private Point _pipDragStart;
-    private Point _pipOrigin;
 
     // 多窗口播放：跟踪所有打开的独立频道窗口，主窗口关闭时统一关闭，避免引擎释放后子窗口崩溃
     private readonly List<ChannelWindow> _channelWindows = new();
@@ -468,7 +465,8 @@ public partial class MainWindow : Window
             WindowState = WindowState.Maximized;
             _fullscreen = true;
             StatusBar.Visibility = Visibility.Collapsed;  // 全屏沉浸：隐藏状态栏
-            if (PipHost.Visibility == Visibility.Visible) PipHost.Visibility = Visibility.Hidden; // 全屏隐藏小窗
+            SideToggleBtn.Visibility = Visibility.Collapsed; // 全屏隐藏侧栏按钮
+            if (_pipWindow != null) _pipWindow.Visibility = Visibility.Hidden; // 全屏隐藏小窗
         }
         else
         {
@@ -479,8 +477,53 @@ public partial class MainWindow : Window
             _fullscreen = false;
             _osdTimer.Stop();
             StatusBar.Visibility = Visibility.Visible;    // 退出全屏恢复状态栏
-            if (_pipChannel != null) PipHost.Visibility = Visibility.Visible; // 恢复小窗
+            SideToggleBtn.Visibility = Visibility.Visible; // 恢复侧栏按钮
+            if (_pipWindow != null && _pipChannel != null) _pipWindow.Visibility = Visibility.Visible; // 恢复小窗
         }
+    }
+
+    // ---------- 侧栏收起/展开 ----------
+
+    /// <summary>侧栏边缘按钮：收起/展开侧栏</summary>
+    private void SideToggle_Click(object sender, RoutedEventArgs e) => ToggleSidebar();
+
+    /// <summary>收起/展开侧栏：收起时缩进最左，视频区占满</summary>
+    private void ToggleSidebar()
+    {
+        if (_sideCollapsed)
+        {
+            // 展开：恢复之前宽度
+            SideCol.Width = _sideWidth;
+            _sideCollapsed = false;
+            SideToggleBtn.SetValue(TextBlock.TextProperty, "◀");
+        }
+        else
+        {
+            // 收起：记录当前宽度，缩进最左
+            _sideWidth = SideCol.Width;
+            SideCol.Width = new GridLength(0);
+            _sideCollapsed = true;
+            SideToggleBtn.SetValue(TextBlock.TextProperty, "▶");
+        }
+    }
+
+    /// <summary>一键恢复初始布局：侧栏展开、小窗关闭、退出全屏</summary>
+    private void ResetLayout()
+    {
+        // 退出全屏
+        if (_fullscreen) ToggleFullscreen();
+        // 关闭小窗
+        if (_pipWindow != null && _pipWindow.IsVisible) ClosePip();
+        // 展开侧栏
+        if (_sideCollapsed)
+        {
+            SideCol.Width = _sideWidth;
+            _sideCollapsed = false;
+            SideToggleBtn.SetValue(TextBlock.TextProperty, "◀");
+        }
+        // 恢复状态栏
+        StatusBar.Visibility = Visibility.Visible;
+        AppLog.Info("layout reset");
     }
 
     // ---------- 小窗播放（画中画） ----------
@@ -488,7 +531,7 @@ public partial class MainWindow : Window
     private void BtnPip_Click(object sender, RoutedEventArgs e)
     {
         // 工具栏小窗按钮：若小窗开着则关闭，否则小窗播放当前选中/正在播放的频道
-        if (PipHost.Visibility == Visibility.Visible) { ClosePip(); return; }
+        if (_pipWindow != null && _pipWindow.IsVisible) { ClosePip(); return; }
         var ch = ChannelList.SelectedItem as ChannelItem ?? _current;
         if (ch != null) OpenPip(ch);
     }
@@ -526,85 +569,39 @@ public partial class MainWindow : Window
             SideCol.Width = new GridLength(0);
         }
 
-        if (_pipPlayer is null)
-        {
-            _pipPlayer = new MediaPlayer(_libvlc) { Volume = _config.Volume };
-            PipVideo.MediaPlayer = _pipPlayer;
-        }
-
         _pipChannel = ch;
-        PipTitle.Text = ch.Name;
-        // 初始定位到视频区右上角（距右 8px、距顶 8px）
-        var videoWidth = VideoView.ActualWidth > 0 ? VideoView.ActualWidth : ActualWidth;
-        PipHost.Margin = new Thickness(Math.Max(0, videoWidth - PipHost.Width - 8), 8, 0, 0);
-        PipHost.Visibility = Visibility.Visible;
 
-        try
+        if (_pipWindow == null)
         {
-            await Task.Run(() =>
+            _pipWindow = new PipWindow(_libvlc, _config.Volume) { Owner = this };
+            _pipWindow.Closed += (_, _) =>
             {
-                var media = ch.Url.Contains("://")
-                    ? new Media(_libvlc!, new Uri(ch.Url))
-                    : new Media(_libvlc!, ch.Url, FromType.FromPath);
-                media.AddOption(":network-caching=800");
-                _pipPlayer!.Play(media);
-                lock (_mediaLock)
-                {
-                    var old = _pipMedia;
-                    _pipMedia = media;   // 新 Media 接管
-                    old?.Dispose();
-                }
-            });
+                _pipWindow = null;
+                _pipChannel = null;
+                // 小窗关闭后恢复侧栏
+                if (!_fullscreen) SideCol.Width = _sideWidth;
+            };
+            _pipWindow.Show();
         }
-        catch (Exception ex)
+        else if (!_pipWindow.IsVisible)
         {
-            AppLog.Error($"pip play failed [{ch.Name}]: {ex.Message}");
+            _pipWindow.Show();
         }
+
+        _pipWindow.Play(ch);
         AppLog.Info($"pip play [{ch.Name}]");
     }
 
     private void ClosePip()
     {
-        try { _pipPlayer?.Stop(); } catch { }
-        try { _pipMedia?.Dispose(); } catch { }
-        _pipMedia = null;
-        PipHost.Visibility = Visibility.Collapsed;
+        if (_pipWindow != null)
+        {
+            try { _pipWindow.DetachEngine(); _pipWindow.Close(); } catch { }
+            _pipWindow = null;
+        }
         _pipChannel = null;
         // 恢复侧栏
         if (!_fullscreen) SideCol.Width = _sideWidth;
-    }
-
-    private void PipClose_Click(object sender, MouseButtonEventArgs e) => ClosePip();
-
-    /// <summary>拖动小窗到任意位置</summary>
-    private void PipHost_MouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (e.LeftButton != MouseButtonState.Pressed) return;
-        _pipDragging = true;
-        _pipDragStart = e.GetPosition(this);
-        _pipOrigin = new Point(PipHost.Margin.Left, PipHost.Margin.Top);
-        PipHost.CaptureMouse();
-    }
-
-    private void PipHost_MouseMove(object sender, MouseEventArgs e)
-    {
-        if (!_pipDragging) return;
-        var cur = e.GetPosition(this);
-        var dx = cur.X - _pipDragStart.X;
-        var dy = cur.Y - _pipDragStart.Y;
-        // 限制小窗在窗口可视范围内，避免拖出后无法找回
-        var maxX = Math.Max(0, ActualWidth - PipHost.Width - 8);
-        var maxY = Math.Max(0, ActualHeight - PipHost.Height - 8);
-        PipHost.Margin = new Thickness(
-            Math.Clamp(_pipOrigin.X + dx, 0, maxX),
-            Math.Clamp(_pipOrigin.Y + dy, 0, maxY), 0, 0);
-    }
-
-    private void PipHost_MouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (!_pipDragging) return;
-        _pipDragging = false;
-        PipHost.ReleaseMouseCapture();
     }
 
     // ---------- 播放列表管理（供管理对话框调用） ----------
@@ -819,6 +816,12 @@ public partial class MainWindow : Window
 
         switch (key)
         {
+            case Key.Tab when Keyboard.Modifiers == ModifierKeys.None:
+                ToggleSidebar();
+                return true;
+            case Key.R when Keyboard.Modifiers == ModifierKeys.Control:
+                ResetLayout();
+                return true;
             case Key.Up when Keyboard.Modifiers == ModifierKeys.None && _view.Count > 0:
                 MoveChannel(-1);
                 return true;
@@ -997,6 +1000,13 @@ public partial class MainWindow : Window
         }
         _channelWindows.Clear();
 
+        // 关闭独立悬浮小窗（同样共享引擎，需先 DetachEngine 避免重复释放）
+        if (_pipWindow != null)
+        {
+            try { _pipWindow.DetachEngine(); _pipWindow.Close(); } catch { }
+            _pipWindow = null;
+        }
+
         _config.Save();
         AppLog.Info("exit");
     }
@@ -1004,8 +1014,6 @@ public partial class MainWindow : Window
     private void Window_Closed(object sender, EventArgs e)
     {
         try { _currentMedia?.Dispose(); } catch { }
-        try { _pipMedia?.Dispose(); } catch { }
-        try { _pipPlayer?.Dispose(); } catch { }
         try { _player?.Dispose(); } catch { }
         try { _libvlc?.Dispose(); } catch { }
         _http.Dispose();

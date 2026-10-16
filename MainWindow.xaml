@@ -72,8 +72,28 @@
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition x:Name="SideCol" Width="300"/>
+            <ColumnDefinition Width="Auto"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
+
+        <!-- 侧栏边缘收起/展开按钮：点击缩进到最左（视频区占满），再点展开 -->
+        <Button x:Name="SideToggleBtn" Grid.Column="1" Width="12" Background="#FF191F26"
+                BorderThickness="0" Cursor="Hand" Click="SideToggle_Click"
+                ToolTip="收起/展开侧栏（Tab）" Focusable="False">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="#FF272E37" BorderThickness="0,0,1,0">
+                        <TextBlock x:Name="Txt" Text="◀" Foreground="#FF66727F" FontSize="9"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="#FF232B34"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
 
         <!-- 左侧栏 -->
         <Border Grid.Column="0" Background="#FF191F26" BorderBrush="#FF272E37" BorderThickness="0,0,1,0">
@@ -188,23 +208,6 @@
             </Grid.RowDefinitions>
 
             <lvc:VideoView x:Name="VideoView" Grid.Row="0" Background="Black" Focusable="False"/>
-
-            <!-- 小窗播放（画中画）：右上角叠加，播放另一个频道 -->
-            <Grid x:Name="PipHost" Grid.Row="0" Width="320" Height="180"
-                  HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,8,0,0"
-                  Visibility="Collapsed" Background="Black"
-                  MouseLeftButtonDown="PipHost_MouseDown" MouseMove="PipHost_MouseMove" MouseLeftButtonUp="PipHost_MouseUp">
-                <lvc:VideoView x:Name="PipVideo" Background="Black" Focusable="False"/>
-                <Border HorizontalAlignment="Right" VerticalAlignment="Top" Background="#CC000000"
-                        CornerRadius="0,0,0,4" Padding="4,2" Cursor="Hand" MouseLeftButtonDown="PipClose_Click">
-                    <TextBlock Text="✕" Foreground="#FFE2E8EF" FontSize="12"/>
-                </Border>
-                <Border HorizontalAlignment="Left" VerticalAlignment="Top" Background="#CC000000"
-                        CornerRadius="0,0,4,0" Padding="6,2">
-                    <TextBlock x:Name="PipTitle" Text="" Foreground="#FFE2E8EF" FontSize="11"
-                               TextTrimming="CharacterEllipsis" MaxWidth="200"/>
-                </Border>
-            </Grid>
 
             <StackPanel x:Name="EmptyState" Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Center"
                         Visibility="Collapsed">
