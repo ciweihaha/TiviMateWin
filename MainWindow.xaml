@@ -231,8 +231,11 @@
                             <DockPanel Margin="8,2">
                                 <TextBlock Text="{Binding Number}" Width="34" Foreground="#FF5E6B79" FontSize="12"
                                            VerticalAlignment="Center" DockPanel.Dock="Left"/>
-                                <TextBlock Text="{Binding FavoriteMark}" Foreground="#FFD9A521" FontSize="12"
-                                           Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Right"/>
+                                <Button Content="{Binding FavoriteMark}" Tag="{Binding}" Click="FavStar_Click"
+                                        Width="22" Height="22" Background="Transparent" BorderThickness="0"
+                                        Foreground="#FFD9A521" FontSize="14" Cursor="Hand" Focusable="False"
+                                        ToolTip="点击收藏 / 取消收藏" DockPanel.Dock="Right" Margin="0,0,4,0"
+                                        VerticalAlignment="Center"/>
                                 <TextBlock Text="{Binding Group}" Foreground="#FF4E5967" FontSize="11"
                                            VerticalAlignment="Center" MaxWidth="80" Margin="6,0,0,0"
                                            TextTrimming="CharacterEllipsis" DockPanel.Dock="Right" ToolTip="{Binding Group}"/>
@@ -288,6 +291,25 @@
                 <Button Content="添加播放列表" Style="{StaticResource ToolBtn}" FontSize="13" Padding="18,8"
                          Margin="0,16,0,0" HorizontalAlignment="Center" Click="BtnAdd_Click"/>
             </StackPanel>
+
+            <!-- 全屏控制浮层：鼠标移动显示，静止自动隐藏 -->
+            <Border x:Name="FullscreenOverlay" Grid.Row="0" Grid.ColumnSpan="2" Background="#66000000"
+                    Visibility="Collapsed" VerticalAlignment="Bottom" Padding="0,10,0,10">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <TextBlock x:Name="FsNowPlaying" Text="" Foreground="#FFE8EDF2" FontSize="14"
+                               VerticalAlignment="Center" Margin="0,0,20,0" MaxWidth="360"
+                               TextTrimming="CharacterEllipsis"/>
+                    <Button x:Name="FsPlayPause" Content="⏸" Width="40" Height="36" Margin="4,0"
+                            Background="#CC232B34" Foreground="#FFE8EDF2" BorderThickness="0" Cursor="Hand"
+                            Click="BtnPlayPause_Click" ToolTip="播放/暂停（Space）"/>
+                    <Button x:Name="FsStop" Content="⏹" Width="40" Height="36" Margin="4,0"
+                            Background="#CC232B34" Foreground="#FFE8EDF2" BorderThickness="0" Cursor="Hand"
+                            Click="BtnStop_Click" ToolTip="停止（S）"/>
+                    <Button x:Name="FsExitFull" Content="退出全屏" Width="88" Height="36" Margin="4,0"
+                            Background="#CC232B34" Foreground="#FFE8EDF2" BorderThickness="0" Cursor="Hand"
+                            Click="BtnFull_Click" ToolTip="退出全屏（Esc / F11）"/>
+                </StackPanel>
+            </Border>
 
             <Border x:Name="StatusBar" Grid.Row="1" Grid.ColumnSpan="2" Background="#FF191F26" BorderBrush="#FF272E37"
                     BorderThickness="0,1,0,0" Padding="14,7">

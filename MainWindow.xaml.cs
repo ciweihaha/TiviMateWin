@@ -58,6 +58,8 @@ public partial class MainWindow : Window
     private ChannelItem? _pendingPlay;
     // 全屏 OSD：换台/状态变化时状态栏临时显示 3 秒
     private readonly DispatcherTimer _osdTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    // 全屏控制浮层：鼠标移动显示，静止 3 秒自动隐藏
+    private readonly DispatcherTimer _fsHideTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     // 坏源容错：连续失败计数 + 本轮已失败线路（防主备来回死循环）
     private int _failCount;
     private readonly HashSet<string> _recentFailedUrls = new();
@@ -110,6 +112,7 @@ public partial class MainWindow : Window
             _ = PlayAsync(ch);
         };
         _osdTimer.Tick += (_, _) => { _osdTimer.Stop(); if (_fullscreen) StatusBar.Visibility = Visibility.Collapsed; };
+        _fsHideTimer.Tick += (_, _) => { _fsHideTimer.Stop(); FullscreenOverlay.Visibility = Visibility.Collapsed; };
         _stallWatch.Tick += OnStallWatchTick;
         _progressTimer.Tick += (_, _) => UpdateProgress();
 
@@ -420,6 +423,7 @@ public partial class MainWindow : Window
         ShowOsd();
         _isPaused = false;
         BtnPlayPause.Content = "⏸";
+        FsPlayPause.Content = "⏸";
         SeekBar.Value = 0;
         TimeText.Text = "00:00";
         DurationText.Text = "--:--";
@@ -496,6 +500,7 @@ public partial class MainWindow : Window
             _player.Play();
             _isPaused = false;
             BtnPlayPause.Content = "⏸";
+            FsPlayPause.Content = "⏸";
             PlayState.Text = "播放中";
         }
         else
@@ -503,6 +508,7 @@ public partial class MainWindow : Window
             _player.Pause();
             _isPaused = true;
             BtnPlayPause.Content = "▶";
+            FsPlayPause.Content = "▶";
             PlayState.Text = "已暂停";
         }
         ShowOsd();
@@ -520,6 +526,7 @@ public partial class MainWindow : Window
             _current = null;
             _isPaused = false;
             BtnPlayPause.Content = "⏸";
+            FsPlayPause.Content = "⏸";
             SeekBar.Value = 0;
             TimeText.Text = "00:00";
             DurationText.Text = "--:--";
@@ -635,6 +642,9 @@ public partial class MainWindow : Window
             StatusBar.Visibility = Visibility.Collapsed;  // 全屏沉浸：隐藏状态栏
             SideToggleBtn.Visibility = Visibility.Collapsed; // 全屏隐藏侧栏按钮
             if (_pipWindow != null) _pipWindow.Visibility = Visibility.Hidden; // 全屏隐藏小窗
+            // 全屏控制浮层：鼠标移动显示，静止自动隐藏
+            MouseMove += Fullscreen_MouseMove;
+            ShowFullscreenOverlay();
         }
         else
         {
@@ -644,10 +654,31 @@ public partial class MainWindow : Window
             WindowState = WindowState.Normal;
             _fullscreen = false;
             _osdTimer.Stop();
+            _fsHideTimer.Stop();
+            MouseMove -= Fullscreen_MouseMove;
+            FullscreenOverlay.Visibility = Visibility.Collapsed; // 退出全屏隐藏浮层
             StatusBar.Visibility = Visibility.Visible;    // 退出全屏恢复状态栏
             SideToggleBtn.Visibility = Visibility.Visible; // 恢复侧栏按钮
             if (_pipWindow != null && _pipChannel != null) _pipWindow.Visibility = Visibility.Visible; // 恢复小窗
         }
+    }
+
+    /// <summary>全屏鼠标移动：显示控制浮层并重置隐藏计时</summary>
+    private void Fullscreen_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_fullscreen) return;
+        ShowFullscreenOverlay();
+    }
+
+    /// <summary>显示全屏控制浮层并更新当前频道名，3 秒后自动隐藏</summary>
+    private void ShowFullscreenOverlay()
+    {
+        if (!_fullscreen) return;
+        FsNowPlaying.Text = _current?.Name ?? "未播放";
+        FsPlayPause.Content = _isPaused ? "▶" : "⏸";
+        FullscreenOverlay.Visibility = Visibility.Visible;
+        _fsHideTimer.Stop();
+        _fsHideTimer.Start();
     }
 
     // ---------- 侧栏收起/展开 ----------
@@ -1128,6 +1159,13 @@ public partial class MainWindow : Window
         if (ChannelList.SelectedItem is ChannelItem ch) ToggleFavorite(ch);
     }
 
+    /// <summary>频道列表项星标点击：直接收藏/取消收藏（更直观的交互）</summary>
+    private void FavStar_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: ChannelItem ch }) ToggleFavorite(ch);
+        e.Handled = true;   // 阻止冒泡触发列表项选中/双击
+    }
+
     private void MiCopy_Click(object sender, RoutedEventArgs e)
     {
         if (ChannelList.SelectedItem is ChannelItem ch)
@@ -1330,11 +1368,12 @@ public partial class MainWindow : Window
         .Replace("-备用", "", StringComparison.OrdinalIgnoreCase)
         .Trim();
 
-    /// <summary>全屏时临时显示状态栏（3 秒后自动隐藏）</summary>
+    /// <summary>全屏时临时显示状态栏/控制浮层（3 秒后自动隐藏）</summary>
     private void ShowOsd()
     {
         if (!_fullscreen) return;
         StatusBar.Visibility = Visibility.Visible;
+        ShowFullscreenOverlay();
         _osdTimer.Stop();
         _osdTimer.Start();
     }
@@ -1387,8 +1426,12 @@ public partial class MainWindow : Window
         _stallWatch.Stop();
         _switchDebounce.Stop();
         _osdTimer.Stop();
+        _fsHideTimer.Stop();
         _searchDebounce.Stop();
         _saveDebounce.Stop();
+        // 取消订阅静态事件，避免窗口对象被静态引用导致无法回收（内存泄漏）
+        ComponentDispatcher.ThreadFilterMessage -= OnThreadFilterMessage;
+        Activated -= OnWindowActivated;
 
         // 先关闭所有独立频道窗口：它们共享主窗口的 LibVLC 引擎，
         // 若主窗口先释放引擎再关闭子窗口，子窗口 Dispose 会崩溃

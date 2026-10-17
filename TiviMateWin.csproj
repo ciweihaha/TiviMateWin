@@ -8,13 +8,14 @@
     <UseWPF>true</UseWPF>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
-    <Version>1.2.0</Version>
+    <Version>1.3.2</Version>
     <Optimize>true</Optimize>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="LibVLCSharp.WPF" Version="3.10.1" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 
   <!-- 性能优化：删除非本机架构的 VLC 原生库与无用的 Web 远程接口 -->

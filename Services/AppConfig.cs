@@ -1,4 +1,6 @@
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace TiviMateWin.Services;
@@ -27,8 +29,35 @@ public class AppConfig
     public List<string> HiddenChannels { get; set; } = new();  // 隐藏的频道 URL
     public string? XtreamServer { get; set; }          // Xtream 服务器地址
     public string? XtreamUsername { get; set; }        // Xtream 用户名
-    public string? XtreamPassword { get; set; }        // Xtream 密码
+    public string? XtreamPassword { get; set; }        // Xtream 密码（DPAPI 加密存储，读取时解密）
 
+    // DPAPI 加密/解密 Xtream 密码：避免明文存盘
+    // 存储格式：Base64(DPAPI(UTF8(明文)))，带 "DPAPI:" 前缀便于识别
+    // 兼容旧配置：无前缀的旧明文密码直接返回（首次保存时自动加密）
+    private static string? EncryptSecret(string? plain)
+    {
+        if (string.IsNullOrEmpty(plain)) return null;
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(plain);
+            var enc = ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser);
+            return "DPAPI:" + Convert.ToBase64String(enc);
+        }
+        catch { return plain; }   // 加密失败则回退明文（不影响功能）
+    }
+
+    private static string? DecryptSecret(string? stored)
+    {
+        if (string.IsNullOrEmpty(stored)) return null;
+        if (!stored.StartsWith("DPAPI:", StringComparison.Ordinal)) return stored; // 旧明文
+        try
+        {
+            var bytes = Convert.FromBase64String(stored[6..]);
+            var dec = ProtectedData.Unprotect(bytes, null, DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(dec);
+        }
+        catch { return stored; }  // 解密失败（如换了用户）则回退原值
+    }
     private static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TiviMateWin");
     private static string ConfigPath => Path.Combine(Dir, "config.json");
@@ -40,7 +69,11 @@ public class AppConfig
             if (File.Exists(ConfigPath))
             {
                 var cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath));
-                if (cfg != null) return cfg;
+                if (cfg != null)
+                {
+                    cfg.XtreamPassword = DecryptSecret(cfg.XtreamPassword); // 解密密码
+                    return cfg;
+                }
             }
         }
         catch { }
@@ -52,8 +85,13 @@ public class AppConfig
         try
         {
             Directory.CreateDirectory(Dir);
+            // 保存前加密密码（若已是加密值则不重复加密）
+            var plain = XtreamPassword;
+            if (!string.IsNullOrEmpty(plain) && !plain.StartsWith("DPAPI:", StringComparison.Ordinal))
+                XtreamPassword = EncryptSecret(plain);
             File.WriteAllText(ConfigPath,
                 JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            XtreamPassword = plain; // 恢复明文，供本次会话继续使用
         }
         catch { }
     }

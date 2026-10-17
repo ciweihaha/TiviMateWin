@@ -5,18 +5,29 @@
         Title="小窗" Width="320" Height="180" WindowStyle="None" ResizeMode="CanResize"
         ShowInTaskbar="False" Topmost="True" Background="#FF000000"
         WindowStartupLocation="Manual" Closed="Window_Closed">
-    <Grid>
-        <lvc:VideoView x:Name="VideoView" Background="Black" Focusable="False"/>
-        <!-- 标题栏：可拖动 -->
-        <Border x:Name="TitleBar" Height="24" VerticalAlignment="Top" Background="#CC000000"
-                MouseLeftButtonDown="TitleBar_MouseDown" MouseMove="TitleBar_MouseMove" MouseLeftButtonUp="TitleBar_MouseUp">
+    <Grid Background="Transparent" MouseLeftButtonDown="Root_MouseDown"
+          MouseMove="Root_MouseMove" MouseLeftButtonUp="Root_MouseUp">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="30"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <!-- 标题栏：独立一行，不被 VideoView 覆盖，可拖动 + 播放控制 -->
+        <Border x:Name="TitleBar" Grid.Row="0" Background="#CC000000" Cursor="SizeAll"
+                ToolTip="按住拖动小窗" MouseLeftButtonDown="Root_MouseDown">
             <DockPanel>
-                <Button x:Name="CloseBtn" DockPanel.Dock="Right" Width="24" Height="24" Background="Transparent"
+                <Button x:Name="CloseBtn" DockPanel.Dock="Right" Width="28" Background="Transparent"
+                        BorderThickness="0" Foreground="#FFE2E8EF" FontSize="13" Cursor="Hand"
+                        Click="Close_Click" Content="✕" Focusable="False" ToolTip="关闭小窗"/>
+                <Button x:Name="BtnStop" DockPanel.Dock="Right" Width="28" Background="Transparent"
                         BorderThickness="0" Foreground="#FFE2E8EF" FontSize="12" Cursor="Hand"
-                        Click="Close_Click" Content="✕" Focusable="False"/>
+                        Click="Stop_Click" Content="⏹" Focusable="False" ToolTip="停止"/>
+                <Button x:Name="BtnPlayPause" DockPanel.Dock="Right" Width="28" Background="Transparent"
+                        BorderThickness="0" Foreground="#FFE2E8EF" FontSize="12" Cursor="Hand"
+                        Click="PlayPause_Click" Content="⏸" Focusable="False" ToolTip="播放/暂停"/>
                 <TextBlock x:Name="TitleText" Text="小窗" Foreground="#FFE2E8EF" FontSize="11"
                            VerticalAlignment="Center" Margin="8,0,0,0" TextTrimming="CharacterEllipsis"/>
             </DockPanel>
         </Border>
+        <lvc:VideoView x:Name="VideoView" Grid.Row="1" Background="Black" Focusable="False"/>
     </Grid>
 </Window>
