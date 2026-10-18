@@ -1,0 +1,44 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 浅色主题 -->
+    <!-- 背景 -->
+    <SolidColorBrush x:Key="WindowBgBrush" Color="#FFF5F7FA"/>
+    <SolidColorBrush x:Key="SideBgBrush" Color="#FFF5F7FA"/>
+    <SolidColorBrush x:Key="PanelBgBrush" Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="EpgBgBrush" Color="#FFEEF1F5"/>
+    <SolidColorBrush x:Key="OverlayBgBrush" Color="#66FFFFFF"/>
+
+    <!-- 前景文字 -->
+    <SolidColorBrush x:Key="FgBrush" Color="#FF1F2933"/>
+    <SolidColorBrush x:Key="SubFgBrush" Color="#FF5E6B79"/>
+    <SolidColorBrush x:Key="MutedFgBrush" Color="#FF8A97A5"/>
+    <SolidColorBrush x:Key="ItemFgBrush" Color="#FF1F2933"/>
+    <SolidColorBrush x:Key="ItemSubFgBrush" Color="#FF5E6B79"/>
+    <SolidColorBrush x:Key="NumberFgBrush" Color="#FF5E6B79"/>
+    <SolidColorBrush x:Key="EpgSubFgBrush" Color="#FF5E6B79"/>
+    <SolidColorBrush x:Key="EmptyFgBrush" Color="#FF8A97A5"/>
+    <SolidColorBrush x:Key="AccentBrush" Color="#FF1F6FB5"/>
+    <SolidColorBrush x:Key="StarBrush" Color="#FFD9A521"/>
+
+    <!-- 边框 -->
+    <SolidColorBrush x:Key="BorderBrush" Color="#FFD1D9E0"/>
+
+    <!-- 输入框 -->
+    <SolidColorBrush x:Key="InputBgBrush" Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="InputBorderBrush" Color="#FFC0C8D0"/>
+    <SolidColorBrush x:Key="InputFgBrush" Color="#FF1F2933"/>
+
+    <!-- 按钮 -->
+    <SolidColorBrush x:Key="BtnBgBrush" Color="#FFE2E8EF"/>
+    <SolidColorBrush x:Key="BtnFgBrush" Color="#FF1F2933"/>
+    <SolidColorBrush x:Key="BtnHoverBrush" Color="#FFD1D9E0"/>
+    <SolidColorBrush x:Key="BtnSelectedBrush" Color="#FFB8C9E0"/>
+    <SolidColorBrush x:Key="FsBtnBgBrush" Color="#CCE2E8EF"/>
+
+    <!-- 进度条 -->
+    <SolidColorBrush x:Key="SliderFillBrush" Color="#FF1F6FB5"/>
+    <SolidColorBrush x:Key="SliderTrackBrush" Color="#FFC0C8D0"/>
+    <SolidColorBrush x:Key="SliderThumbStrokeBrush" Color="#FF1F2933"/>
+
+</ResourceDictionary>

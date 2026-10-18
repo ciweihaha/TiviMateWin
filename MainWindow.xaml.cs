@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
@@ -22,7 +23,8 @@ public partial class MainWindow : Window
 {
     private AppConfig _config = new();
     private List<ChannelItem> _all = new();
-    private List<ChannelItem> _view = new();
+    // 频道列表视图：用 ICollectionView.Filter 过滤/排序，避免每次搜索/切分组全量重建列表
+    private ICollectionView _view = CollectionViewSource.GetDefaultView(new List<ChannelItem>());
 
     private LibVLC? _libvlc;
     private MediaPlayer? _player;
@@ -81,6 +83,9 @@ public partial class MainWindow : Window
     // 播放列表加载并发保护：快速切换源/刷新时避免并发覆盖 _all 与 UI 竞态
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private int _loadSeq;   // 加载序号：只采纳最后一次请求的结果，防止旧结果覆盖新结果
+
+    // 网络请求取消：窗口关闭时取消挂起的播放列表/EPG/Xtream 拉取，避免后台线程继续占用
+    private readonly CancellationTokenSource _netCts = new();
 
     // 播放串行化：libVLC MediaPlayer 非线程安全，快速换台时多个 Play 需串行执行，避免并发崩溃
     private readonly SemaphoreSlim _playGate = new(1, 1);
@@ -157,7 +162,7 @@ public partial class MainWindow : Window
         RefreshPlaylistCombo();
         _ = EnsureEngineAsync();          // 后台初始化，不阻塞界面
         _progressTimer.Start();           // 进度条/时间刷新
-        await LoadPlaylistAsync(false);   // 缓存优先秒开，再后台刷新
+        await LoadPlaylistAsync(false, CancellationToken.None);   // 缓存优先秒开，再后台刷新
         ChannelList.Focus();              // 启动焦点给频道列表（否则默认落在搜索框，方向键失效）
     }
 
@@ -212,20 +217,20 @@ public partial class MainWindow : Window
 
     // ---------- 频道数据 ----------
 
-    private async Task LoadPlaylistAsync(bool forceRefresh)
+    private async Task LoadPlaylistAsync(bool forceRefresh, CancellationToken ct)
     {
         var seq = ++_loadSeq;   // 本次请求序号
-        await _loadGate.WaitAsync();
+        await _loadGate.WaitAsync(ct);
         try
         {
             // 若等待期间又有更新的加载请求，本次结果作废
             if (seq != _loadSeq) return;
-            await LoadCoreAsync(forceRefresh);
+            await LoadCoreAsync(forceRefresh, ct);
         }
         finally { _loadGate.Release(); }
     }
 
-    private async Task LoadCoreAsync(bool forceRefresh)
+    private async Task LoadCoreAsync(bool forceRefresh, CancellationToken ct)
     {
         var src = _config.Playlists.FirstOrDefault(p => p.Name == _config.ActivePlaylist)
                   ?? _config.Playlists.FirstOrDefault();
@@ -252,8 +257,8 @@ public partial class MainWindow : Window
         // 2) 网络刷新
         try
         {
-            var text = await FetchTextAsync(src.Url);
-            var list = await Task.Run(() => M3uParser.Parse(text));
+            var text = await FetchTextAsync(src.Url, ct);
+            var list = await Task.Run(() => M3uParser.Parse(text), ct);
             if (list.Count == 0 && text.Contains("#EXT-X-"))
             {
                 // 单流地址（HLS 直播流）：自动包装为单频道，直接贴流地址也能看
@@ -275,7 +280,7 @@ public partial class MainWindow : Window
                 if (epgUrl != null && epgUrl != _epgUrl)
                 {
                     _epgUrl = epgUrl;
-                    _ = LoadEpgAsync(epgUrl);
+                    _ = LoadEpgAsync(epgUrl, ct);
                 }
             }
             else if (_all.Count == 0)
@@ -297,6 +302,8 @@ public partial class MainWindow : Window
 
         var keepUrl = _current?.Url;
         _all = list;
+        _view = CollectionViewSource.GetDefaultView(_all);   // 重新绑定视图（_all 被整体替换）
+        ChannelList.ItemsSource = _view;
         RebuildGroups();
         ApplyFilter();
         EmptyState.Visibility = _all.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -318,7 +325,7 @@ public partial class MainWindow : Window
         await PlayAsync(ch);
     }
 
-    private async Task<string> FetchTextAsync(string url)
+    private async Task<string> FetchTextAsync(string url, CancellationToken ct)
     {
         if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
@@ -326,15 +333,15 @@ public partial class MainWindow : Window
             // 网络抖动容错：最多重试 2 次（间隔 1s），仅对瞬时失败重试
             for (var attempt = 0; ; attempt++)
             {
-                try { return await _http.GetStringAsync(url); }
+                try { return await _http.GetStringAsync(url, ct); }
                 catch (Exception ex) when (attempt < 2)
                 {
                     AppLog.Error($"fetch retry {attempt + 1} [{url}]: {ex.Message}");
-                    await Task.Delay(1000);
+                    await Task.Delay(1000, ct);
                 }
             }
         }
-        return await File.ReadAllTextAsync(url);
+        return await File.ReadAllTextAsync(url, ct);
     }
 
     /// <summary>从地址推断频道名：取 URL/路径的最后一段文件名（如 cctv1.m3u8 → cctv1）</summary>
@@ -367,28 +374,36 @@ public partial class MainWindow : Window
         var q = SearchBox.Text.Trim();
         var group = GroupCombo.SelectedItem as string;
         var hidden = _config.HiddenChannels.ToHashSet();
-        IEnumerable<ChannelItem> seq = _all.Where(c => !hidden.Contains(c.Url));
-        if (_favOnly) seq = seq.Where(c => c.IsFavorite);
-        if (group is string g && g != "全部") seq = seq.Where(c => c.Group == g);
-        if (q.Length > 0)
-            seq = seq.Where(c => c.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
-                              || c.Group.Contains(q, StringComparison.OrdinalIgnoreCase));
+        var favOnly = _favOnly;
+
+        // 过滤：隐藏频道 / 收藏 / 分组 / 搜索关键词
+        _view.Filter = c =>
+        {
+            var ch = (ChannelItem)c;
+            if (hidden.Contains(ch.Url)) return false;
+            if (favOnly && !ch.IsFavorite) return false;
+            if (group is string g && g != "全部" && ch.Group != g) return false;
+            if (q.Length > 0 && !ch.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                            && !ch.Group.Contains(q, StringComparison.OrdinalIgnoreCase)) return false;
+            return true;
+        };
 
         // 排序：号码（默认）或名称
-        seq = _sortMode == "名称"
-            ? seq.OrderBy(c => c.Name, StringComparer.CurrentCulture)
-            : seq.OrderBy(c => c.Number);
+        using (var defer = _view.DeferRefresh())
+        {
+            _view.SortDescriptions.Clear();
+            _view.SortDescriptions.Add(new SortDescription(
+                _sortMode == "名称" ? "Name" : "Number", ListSortDirection.Ascending));
+        }
 
-        _view = seq.ToList();
-        ChannelList.ItemsSource = _view;
-        CountText.Text = $"{_view.Count} 个频道";
+        CountText.Text = $"{_view.Cast<ChannelItem>().Count()} 个频道";
     }
 
     private void SelectInList(ChannelItem ch)
     {
         if (!_view.Contains(ch))
         {
-            ch = _view.FirstOrDefault(c => c.Url == ch.Url) ?? ch;
+            ch = _view.Cast<ChannelItem>().FirstOrDefault(c => c.Url == ch.Url) ?? ch;
         }
         ChannelList.SelectedItem = ch;
         ChannelList.ScrollIntoView(ch);
@@ -468,7 +483,7 @@ public partial class MainWindow : Window
             if (Math.Abs(_playbackRate - 1.0f) > 0.01f) _player.SetRate(_playbackRate);
             if (!string.IsNullOrEmpty(_aspectRatio)) ApplyAspectRatio(_aspectRatio);
         }
-        catch { }
+        catch (Exception ex) { AppLog.Error($"apply playback settings failed: {ex.Message}"); }
 
         // 播放启动后焦点归还频道列表：VideoView 的原生 HWND 会抢走键盘焦点，
         // 不归还会导致后续 ↑↓ 换台失效（真实用户高频场景）
@@ -533,7 +548,7 @@ public partial class MainWindow : Window
             PlayState.Text = "已停止";
             NowPlaying.Text = "未播放";
         }
-        catch { }
+        catch (Exception ex) { AppLog.Error($"stop playback failed: {ex.Message}"); }
     }
 
     /// <summary>进度条/时间刷新（500ms 定时器驱动）</summary>
@@ -552,7 +567,7 @@ public partial class MainWindow : Window
             }
             TimeText.Text = FormatTime(t);
         }
-        catch { }
+        catch (Exception ex) { AppLog.Error($"update progress failed: {ex.Message}"); }
     }
 
     private static string FormatTime(long ms)
@@ -574,7 +589,7 @@ public partial class MainWindow : Window
         if (_seekPending && _player != null)
         {
             _seekPending = false;
-            try { _player.Time = (long)SeekBar.Value; } catch { }
+            try { _player.Time = (long)SeekBar.Value; } catch (Exception ex) { AppLog.Error($"seek failed: {ex.Message}"); }
         }
     }
 
@@ -587,7 +602,7 @@ public partial class MainWindow : Window
     private void SetPlaybackRate(float rate)
     {
         _playbackRate = Math.Clamp(rate, 0.5f, 2.0f);
-        if (_player != null) { try { _player.SetRate(_playbackRate); } catch { } }
+        if (_player != null) { try { _player.SetRate(_playbackRate); } catch (Exception ex) { AppLog.Error($"set rate failed: {ex.Message}"); } }
         ShowOsd();
     }
 
@@ -608,7 +623,7 @@ public partial class MainWindow : Window
             else if (string.IsNullOrEmpty(ratio)) { _player.Scale = 1; _player.AspectRatio = ""; }
             else { _player.Scale = 0; _player.AspectRatio = ratio; }
         }
-        catch { }
+        catch (Exception ex) { AppLog.Error($"apply aspect ratio failed: {ex.Message}"); }
     }
 
     private void ToggleFavorite(ChannelItem ch)
@@ -859,7 +874,7 @@ public partial class MainWindow : Window
         _current = null;
         NowPlaying.Text = "未播放";
         PlayState.Text = "未播放";
-        _ = LoadPlaylistAsync(true);
+        _ = LoadPlaylistAsync(true, _netCts.Token);
         RefreshPlaylistCombo();
     }
 
@@ -877,7 +892,7 @@ public partial class MainWindow : Window
             _current = null;
             NowPlaying.Text = "未播放";
             PlayState.Text = "未播放";
-            _ = LoadPlaylistAsync(false);
+            _ = LoadPlaylistAsync(false, _netCts.Token);
         }
         else _config.Save();
         RefreshPlaylistCombo();
@@ -943,7 +958,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void BtnRefresh_Click(object sender, RoutedEventArgs e) => _ = LoadPlaylistAsync(true);
+    private void BtnRefresh_Click(object sender, RoutedEventArgs e) => _ = LoadPlaylistAsync(true, _netCts.Token);
 
     private void BtnFav_Click(object sender, RoutedEventArgs e)
     {
@@ -963,11 +978,11 @@ public partial class MainWindow : Window
             _aspectRatio = _config.AspectRatio ?? "";
             _playbackRate = (float)(_config.PlaybackRate > 0 ? _config.PlaybackRate : 1.0);
             ApplyAspectRatio(_aspectRatio);
-            if (_player != null) { try { _player.SetRate(_playbackRate); } catch { } }
+            if (_player != null) { try { _player.SetRate(_playbackRate); } catch (Exception ex) { AppLog.Error($"apply rate from settings failed: {ex.Message}"); } }
             ApplyTheme(_config.Theme);
             // 若配置了 Xtream，加载其频道列表
             if (!string.IsNullOrEmpty(_config.XtreamServer) && _config.Playlists.Count == 0)
-                _ = LoadXtreamAsync();
+                _ = LoadXtreamAsync(_netCts.Token);
         }
     }
 
@@ -989,12 +1004,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>加载 EPG 节目单（XMLTV）</summary>
-    private async Task LoadEpgAsync(string url)
+    private async Task LoadEpgAsync(string url, CancellationToken ct)
     {
         try
         {
-            var xml = await FetchTextAsync(url);
-            var epg = await Task.Run(() => EpgParser.Parse(xml));
+            var xml = await FetchTextAsync(url, ct);
+            var epg = await Task.Run(() => EpgParser.Parse(xml), ct);
             _epg = epg;
             AppLog.Info($"epg loaded {epg.Count} channels from {url}");
             // 刷新当前频道节目显示
@@ -1038,7 +1053,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>加载 Xtream Codes 频道列表：通过 M3U 输出接口获取</summary>
-    private async Task LoadXtreamAsync()
+    private async Task LoadXtreamAsync(CancellationToken ct)
     {
         if (string.IsNullOrEmpty(_config.XtreamServer) ||
             string.IsNullOrEmpty(_config.XtreamUsername) ||
@@ -1050,8 +1065,8 @@ public partial class MainWindow : Window
         try
         {
             PlayState.Text = "加载 Xtream…";
-            var text = await FetchTextAsync(url);
-            var list = await Task.Run(() => M3uParser.Parse(text));
+            var text = await FetchTextAsync(url, ct);
+            var list = await Task.Run(() => M3uParser.Parse(text), ct);
             if (list.Count > 0)
             {
                 AdoptChannels(list);
@@ -1074,48 +1089,14 @@ public partial class MainWindow : Window
     private void ApplyTheme(string theme)
     {
         var isDark = theme != "浅色";
-        var bg = isDark ? "#FF191F26" : "#FFF5F7FA";
-        var fg = isDark ? "#FFE8EDF2" : "#FF1F2933";
-        var sub = isDark ? "#FF7A8896" : "#FF5E6B79";
-        var border = isDark ? "#FF272E37" : "#FFD1D9E0";
-        var inputBg = isDark ? "#FF20262E" : "#FFFFFFFF";
-        var inputBorder = isDark ? "#FF2D3540" : "#FFC0C8D0";
-
-        // 主窗口背景
-        Background = new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(bg));
-        // 侧栏
-        if (FindName("SideCol") is System.Windows.Controls.ColumnDefinition) { }
-        ApplyThemeToTree(this, bg, fg, sub, border, inputBg, inputBorder);
-    }
-
-    private void ApplyThemeToTree(DependencyObject parent, string bg, string fg, string sub,
-        string border, string inputBg, string inputBorder)
-    {
-        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+        var merged = Application.Current.Resources.MergedDictionaries;
+        // 移除旧的主题字典（App.xaml 默认合并的 Dark.xaml 也在其中），再加载目标主题
+        var old = merged.Where(d => d.Source != null && d.Source.OriginalString.Contains("Themes/")).ToList();
+        foreach (var d in old) merged.Remove(d);
+        merged.Add(new ResourceDictionary
         {
-            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
-            switch (child)
-            {
-                case System.Windows.Controls.Border b:
-                    b.Background = new System.Windows.Media.SolidColorBrush(
-                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(bg));
-                    b.BorderBrush = new System.Windows.Media.SolidColorBrush(
-                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(border));
-                    break;
-                case System.Windows.Controls.TextBlock tb:
-                    if (tb.Foreground is System.Windows.Media.SolidColorBrush)
-                        tb.Foreground = new System.Windows.Media.SolidColorBrush(
-                            (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(fg));
-                    break;
-                case System.Windows.Controls.TextBox tx:
-                    tx.Background = new System.Windows.Media.SolidColorBrush(
-                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(inputBg));
-                    tx.BorderBrush = new System.Windows.Media.SolidColorBrush(
-                        (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(inputBorder));
-                    break;
-            }
-            ApplyThemeToTree(child, bg, fg, sub, border, inputBg, inputBorder);
-        }
+            Source = new Uri(isDark ? "Themes/Dark.xaml" : "Themes/Light.xaml", UriKind.Relative)
+        });
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -1133,9 +1114,9 @@ public partial class MainWindow : Window
         }
         else if (e.Key == Key.Enter)
         {
-            if (_view.Count > 0)
+            if (_view.Cast<ChannelItem>().Count() > 0)
             {
-                var first = _view[0];
+                var first = _view.Cast<ChannelItem>().First();
                 SelectInList(first);
                 _ = PlayAsync(first);
             }
@@ -1170,7 +1151,7 @@ public partial class MainWindow : Window
     {
         if (ChannelList.SelectedItem is ChannelItem ch)
         {
-            try { Clipboard.SetText(ch.Url); } catch { }
+            try { Clipboard.SetText(ch.Url); } catch (Exception ex) { AppLog.Error($"copy url failed: {ex.Message}"); }
         }
     }
 
@@ -1246,10 +1227,10 @@ public partial class MainWindow : Window
             case Key.R when Keyboard.Modifiers == ModifierKeys.Control:
                 ResetLayout();
                 return true;
-            case Key.Up when Keyboard.Modifiers == ModifierKeys.None && _view.Count > 0:
+            case Key.Up when Keyboard.Modifiers == ModifierKeys.None && _view.Cast<ChannelItem>().Count() > 0:
                 MoveChannel(-1);
                 return true;
-            case Key.Down when Keyboard.Modifiers == ModifierKeys.None && _view.Count > 0:
+            case Key.Down when Keyboard.Modifiers == ModifierKeys.None && _view.Cast<ChannelItem>().Count() > 0:
                 MoveChannel(1);
                 return true;
             case Key.F when Keyboard.Modifiers == ModifierKeys.Control:
@@ -1301,13 +1282,14 @@ public partial class MainWindow : Window
 
     private void MoveChannel(int delta)
     {
-        if (_view.Count == 0) return;
+        if (_view.Cast<ChannelItem>().Count() == 0) return;
+        var items = _view.Cast<ChannelItem>().ToList();
         int idx;
         if (ChannelList.SelectedIndex < 0)
-            idx = delta > 0 ? 0 : _view.Count - 1;  // 无选中：↓从第1个开始，↑从最后1个开始
+            idx = delta > 0 ? 0 : items.Count - 1;  // 无选中：↓从第1个开始，↑从最后1个开始
         else
-            idx = (ChannelList.SelectedIndex + delta + _view.Count) % _view.Count;
-        var ch = _view[idx];
+            idx = (ChannelList.SelectedIndex + delta + items.Count) % items.Count;
+        var ch = items[idx];
         ChannelList.SelectedItem = ch;
         ChannelList.ScrollIntoView(ch);
         NowPlaying.Text = ch.Name;             // 选中/滚动/名称即时反馈
@@ -1423,6 +1405,7 @@ public partial class MainWindow : Window
     private void Window_Closing(object sender, CancelEventArgs e)
     {
         _closing = true;                    // 挂起回调（自动跳台/防抖/看门狗）不再操作 UI
+        _netCts.Cancel();                  // 取消挂起的网络拉取（播放列表/EPG/Xtream）
         _stallWatch.Stop();
         _switchDebounce.Stop();
         _osdTimer.Stop();

@@ -1,0 +1,44 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 深色主题：默认主题 -->
+    <!-- 背景 -->
+    <SolidColorBrush x:Key="WindowBgBrush" Color="#FF12161B"/>
+    <SolidColorBrush x:Key="SideBgBrush" Color="#FF191F26"/>
+    <SolidColorBrush x:Key="PanelBgBrush" Color="#FF20262E"/>
+    <SolidColorBrush x:Key="EpgBgBrush" Color="#FF14181D"/>
+    <SolidColorBrush x:Key="OverlayBgBrush" Color="#66000000"/>
+
+    <!-- 前景文字 -->
+    <SolidColorBrush x:Key="FgBrush" Color="#FFE8EDF2"/>
+    <SolidColorBrush x:Key="SubFgBrush" Color="#FF7A8896"/>
+    <SolidColorBrush x:Key="MutedFgBrush" Color="#FF66727F"/>
+    <SolidColorBrush x:Key="ItemFgBrush" Color="#FFE2E8EF"/>
+    <SolidColorBrush x:Key="ItemSubFgBrush" Color="#FF4E5967"/>
+    <SolidColorBrush x:Key="NumberFgBrush" Color="#FF5E6B79"/>
+    <SolidColorBrush x:Key="EpgSubFgBrush" Color="#FFB9C4CE"/>
+    <SolidColorBrush x:Key="EmptyFgBrush" Color="#FF8A97A5"/>
+    <SolidColorBrush x:Key="AccentBrush" Color="#FF4FA3E3"/>
+    <SolidColorBrush x:Key="StarBrush" Color="#FFD9A521"/>
+
+    <!-- 边框 -->
+    <SolidColorBrush x:Key="BorderBrush" Color="#FF272E37"/>
+
+    <!-- 输入框 -->
+    <SolidColorBrush x:Key="InputBgBrush" Color="#FF20262E"/>
+    <SolidColorBrush x:Key="InputBorderBrush" Color="#FF2D3540"/>
+    <SolidColorBrush x:Key="InputFgBrush" Color="#FFDDE4EB"/>
+
+    <!-- 按钮 -->
+    <SolidColorBrush x:Key="BtnBgBrush" Color="#FF232B34"/>
+    <SolidColorBrush x:Key="BtnFgBrush" Color="#FFC7D1DA"/>
+    <SolidColorBrush x:Key="BtnHoverBrush" Color="#FF31404F"/>
+    <SolidColorBrush x:Key="BtnSelectedBrush" Color="#FF1F4E7A"/>
+    <SolidColorBrush x:Key="FsBtnBgBrush" Color="#CC232B34"/>
+
+    <!-- 进度条 -->
+    <SolidColorBrush x:Key="SliderFillBrush" Color="#FF4FA3E3"/>
+    <SolidColorBrush x:Key="SliderTrackBrush" Color="#FF2D3540"/>
+    <SolidColorBrush x:Key="SliderThumbStrokeBrush" Color="#FFDDE4EB"/>
+
+</ResourceDictionary>

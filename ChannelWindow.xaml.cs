@@ -14,6 +14,8 @@ public partial class ChannelWindow : Window
     private Media? _media;   // 当前 Media：Play 后需保持存活直到换台/关闭
     private ChannelItem? _channel;
     private int _volume;
+    // 播放串行化：libVLC MediaPlayer 非线程安全，快速换台时多个 Play 需串行执行
+    private readonly SemaphoreSlim _playGate = new(1, 1);
 
     public ChannelWindow(LibVLC libvlc, int volume)
     {
@@ -29,22 +31,30 @@ public partial class ChannelWindow : Window
 
     private bool _engineReleased;
 
-    /// <summary>播放指定频道</summary>
-    public void Play(ChannelItem ch)
+    /// <summary>播放指定频道（串行化，避免并发调用 MediaPlayer 崩溃）</summary>
+    public async void Play(ChannelItem ch)
     {
         _channel = ch;
         Title = ch.Name;
         TitleText.Text = ch.Name;
         try
         {
-            var media = ch.Url.Contains("://")
-                ? new Media(_libvlc, new Uri(ch.Url))
-                : new Media(_libvlc, ch.Url, FromType.FromPath);
-            media.AddOption(":network-caching=800");
-            _player.Play(media);
-            var old = _media;
-            _media = media;   // 新 Media 接管
-            old?.Dispose();
+            await _playGate.WaitAsync();
+            try
+            {
+                await Task.Run(() =>
+                {
+                    var media = ch.Url.Contains("://")
+                        ? new Media(_libvlc, new Uri(ch.Url))
+                        : new Media(_libvlc, ch.Url, FromType.FromPath);
+                    media.AddOption(":network-caching=800");
+                    _player.Play(media);
+                    var old = _media;
+                    _media = media;   // 新 Media 接管
+                    old?.Dispose();
+                });
+            }
+            finally { _playGate.Release(); }
         }
         catch (Exception ex)
         {

@@ -4,14 +4,14 @@
         xmlns:lvc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
         Title="星辰直播" Height="640" Width="1120" MinWidth="780" MinHeight="480"
         WindowStartupLocation="CenterScreen"
-        Background="#FF12161B" Foreground="#FFE8EDF2"
+        Background="{DynamicResource WindowBgBrush}" Foreground="{DynamicResource FgBrush}"
         FontFamily="Microsoft YaHei UI" UseLayoutRounding="True"
         Loaded="Window_Loaded" Closing="Window_Closing" Closed="Window_Closed"
         PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
         <Style x:Key="ToolBtn" TargetType="Button">
-            <Setter Property="Background" Value="#FF232B34"/>
-            <Setter Property="Foreground" Value="#FFC7D1DA"/>
+            <Setter Property="Background" Value="{DynamicResource BtnBgBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource BtnFgBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="10,5"/>
             <Setter Property="Margin" Value="0,0,6,0"/>
@@ -25,10 +25,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#FF31404F"/>
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource BtnHoverBrush}"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#FF1F4E7A"/>
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource BtnSelectedBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -37,7 +37,7 @@
         </Style>
 
         <Style TargetType="ListBoxItem">
-            <Setter Property="Foreground" Value="#FFE2E8EF"/>
+            <Setter Property="Foreground" Value="{DynamicResource ItemFgBrush}"/>
             <Setter Property="Padding" Value="4,3"/>
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
             <Setter Property="Template">
@@ -48,10 +48,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#FF232B34"/>
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource BtnBgBrush}"/>
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#FF1F4E7A"/>
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource BtnSelectedBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -77,19 +77,19 @@
                         <Grid Background="Transparent">
                             <Track x:Name="PART_Track" Height="6" VerticalAlignment="Center">
                                 <Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="Slider.DecreaseLarge" Background="#FF4FA3E3"
-                                                  Focusable="False"/>
+                                <RepeatButton Command="Slider.DecreaseLarge" Background="{DynamicResource SliderFillBrush}"
+                                              Focusable="False"/>
                                 </Track.DecreaseRepeatButton>
                                 <Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="Slider.IncreaseLarge" Background="#FF2D3540"
+                                    <RepeatButton Command="Slider.IncreaseLarge" Background="{DynamicResource SliderTrackBrush}"
                                                   Focusable="False"/>
                                 </Track.IncreaseRepeatButton>
                                 <Track.Thumb>
                                     <Thumb>
                                         <Thumb.Template>
                                             <ControlTemplate TargetType="Thumb">
-                                                <Ellipse Width="12" Height="12" Fill="#FF4FA3E3"
-                                                         Stroke="#FFDDE4EB" StrokeThickness="1"/>
+                                                <Ellipse Width="12" Height="12" Fill="{DynamicResource SliderFillBrush}"
+                                                         Stroke="{DynamicResource SliderThumbStrokeBrush}" StrokeThickness="1"/>
                                             </ControlTemplate>
                                         </Thumb.Template>
                                     </Thumb>
@@ -110,18 +110,18 @@
         </Grid.ColumnDefinitions>
 
         <!-- 侧栏边缘收起/展开按钮：点击缩进到最左（视频区占满），再点展开 -->
-        <Button x:Name="SideToggleBtn" Grid.Column="1" Width="12" Background="#FF191F26"
+        <Button x:Name="SideToggleBtn" Grid.Column="1" Width="12" Background="{DynamicResource SideBgBrush}"
                 BorderThickness="0" Cursor="Hand" Click="SideToggle_Click"
                 ToolTip="收起/展开侧栏（Tab）" Focusable="False">
             <Button.Template>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="#FF272E37" BorderThickness="0,0,1,0">
-                        <TextBlock x:Name="Txt" Text="◀" Foreground="#FF66727F" FontSize="9"
+                    <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
+                        <TextBlock x:Name="Txt" Text="◀" Foreground="{DynamicResource MutedFgBrush}" FontSize="9"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="Background" Value="#FF232B34"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource BtnBgBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -129,10 +129,10 @@
         </Button>
 
         <!-- 左侧栏 -->
-        <Border Grid.Column="0" Background="#FF191F26" BorderBrush="#FF272E37" BorderThickness="0,0,1,0">
+        <Border Grid.Column="0" Background="{DynamicResource SideBgBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
             <DockPanel>
                 <TextBlock Text="直播列表" DockPanel.Dock="Top" FontSize="17" FontWeight="Bold"
-                           Foreground="#FF4FA3E3" Margin="14,14,12,10"/>
+                           Foreground="{DynamicResource AccentBrush}" Margin="14,14,12,10"/>
 
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,0,12,10">
                     <Button Style="{StaticResource ToolBtn}" Content="添加源" Click="BtnAdd_Click"/>
@@ -143,23 +143,23 @@
                 </StackPanel>
 
                 <Grid DockPanel.Dock="Top" Margin="12,0,12,8">
-                    <TextBox x:Name="SearchBox" Height="30" Background="#FF20262E" BorderBrush="#FF2D3540"
-                             BorderThickness="1" Foreground="#FFDDE4EB" Padding="8,4" VerticalContentAlignment="Center"
+                    <TextBox x:Name="SearchBox" Height="30" Background="{DynamicResource InputBgBrush}" BorderBrush="{DynamicResource InputBorderBrush}"
+                             BorderThickness="1" Foreground="{DynamicResource InputFgBrush}" Padding="8,4" VerticalContentAlignment="Center"
                              TextChanged="SearchBox_TextChanged" KeyDown="SearchBox_KeyDown"
                              ToolTip="Ctrl+F 聚焦搜索，Esc 清空，回车播放第一个结果"/>
                     <TextBlock Text="搜索频道 / 分组（Ctrl+F）" Style="{StaticResource SearchHint}"
-                               Foreground="#FF66727F" FontSize="12" IsHitTestVisible="False"
+                               Foreground="{DynamicResource MutedFgBrush}" FontSize="12" IsHitTestVisible="False"
                                VerticalAlignment="Center" Margin="12,0,0,0"/>
                 </Grid>
 
                 <!-- 独立源管理面板：可展开/收起，显示所有源并点击切换 -->
-                <Border DockPanel.Dock="Top" Margin="12,0,12,8" Background="#FF20262E"
-                        BorderBrush="#FF2D3540" BorderThickness="1" CornerRadius="4">
+                <Border DockPanel.Dock="Top" Margin="12,0,12,8" Background="{DynamicResource PanelBgBrush}"
+                        BorderBrush="{DynamicResource InputBorderBrush}" BorderThickness="1" CornerRadius="4">
                     <DockPanel>
                         <Button x:Name="SrcToggleBtn" DockPanel.Dock="Right" Width="30" Height="30"
-                                Content="▾" Foreground="#FFC7D1DA" Background="Transparent" BorderThickness="0"
+                                Content="▾" Foreground="{DynamicResource BtnFgBrush}" Background="Transparent" BorderThickness="0"
                                 Cursor="Hand" Click="SrcToggle_Click" ToolTip="展开/收起源列表"/>
-                        <TextBlock Text="源列表" Foreground="#FF4FA3E3" FontSize="12" FontWeight="Bold"
+                        <TextBlock Text="源列表" Foreground="{DynamicResource AccentBrush}" FontSize="12" FontWeight="Bold"
                                    VerticalAlignment="Center" Margin="10,0,0,0"/>
                     </DockPanel>
                     <Border.Style>
@@ -175,35 +175,35 @@
                 </Border>
 
                 <StackPanel x:Name="SrcPanel" DockPanel.Dock="Top" Margin="12,0,12,8" Visibility="Collapsed">
-                    <ListBox x:Name="SrcList" MaxHeight="160" Background="#FF20262E" BorderBrush="#FF2D3540"
+                    <ListBox x:Name="SrcList" MaxHeight="160" Background="{DynamicResource PanelBgBrush}" BorderBrush="{DynamicResource InputBorderBrush}"
                              BorderThickness="1" SelectionChanged="SrcList_SelectionChanged"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <DockPanel Margin="6,3">
-                                    <TextBlock Text="●" Foreground="#FF4FA3E3" FontSize="10"
+                                    <TextBlock Text="●" Foreground="{DynamicResource AccentBrush}" FontSize="10"
                                                VerticalAlignment="Center" DockPanel.Dock="Left" Margin="0,0,8,0"/>
-                                    <TextBlock Text="{Binding Name}" Foreground="#FFE2E8EF" FontSize="12"
+                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ItemFgBrush}" FontSize="12"
                                                TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
                                 </DockPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
-                    <Button Content="管理源…" Height="28" Margin="0,6,0,0" Background="#FF232B34"
-                            Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand" FontSize="12"
+                    <Button Content="管理源…" Height="28" Margin="0,6,0,0" Background="{DynamicResource BtnBgBrush}"
+                            Foreground="{DynamicResource BtnFgBrush}" BorderThickness="0" Cursor="Hand" FontSize="12"
                             Click="BtnAdd_Click"/>
                 </StackPanel>
 
                 <DockPanel DockPanel.Dock="Top" Margin="12,0,12,8">
                     <Button DockPanel.Dock="Right" Content="管理" Width="44" Height="30" Margin="6,0,0,0"
-                            Background="#FF232B34" Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand"
+                            Background="{DynamicResource BtnBgBrush}" Foreground="{DynamicResource BtnFgBrush}" BorderThickness="0" Cursor="Hand"
                             FontSize="11" Click="BtnManageGroups_Click" ToolTip="分组管理"/>
-                    <ComboBox x:Name="GroupCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB"
+                    <ComboBox x:Name="GroupCombo" Height="30" Background="{DynamicResource PanelBgBrush}" Foreground="{DynamicResource InputFgBrush}"
                               SelectionChanged="GroupCombo_SelectionChanged"/>
                 </DockPanel>
 
                 <TextBlock x:Name="CountText" DockPanel.Dock="Top" Text="0 个频道"
-                           Foreground="#FF66727F" FontSize="12" Margin="14,2,12,6"/>
+                           Foreground="{DynamicResource MutedFgBrush}" FontSize="12" Margin="14,2,12,6"/>
 
                 <ListBox x:Name="ChannelList" Margin="4,0,4,6" Background="Transparent" BorderThickness="0"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -229,17 +229,17 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <DockPanel Margin="8,2">
-                                <TextBlock Text="{Binding Number}" Width="34" Foreground="#FF5E6B79" FontSize="12"
+                                <TextBlock Text="{Binding Number}" Width="34" Foreground="{DynamicResource NumberFgBrush}" FontSize="12"
                                            VerticalAlignment="Center" DockPanel.Dock="Left"/>
                                 <Button Content="{Binding FavoriteMark}" Tag="{Binding}" Click="FavStar_Click"
                                         Width="22" Height="22" Background="Transparent" BorderThickness="0"
-                                        Foreground="#FFD9A521" FontSize="14" Cursor="Hand" Focusable="False"
+                                        Foreground="{DynamicResource StarBrush}" FontSize="14" Cursor="Hand" Focusable="False"
                                         ToolTip="点击收藏 / 取消收藏" DockPanel.Dock="Right" Margin="0,0,4,0"
                                         VerticalAlignment="Center"/>
-                                <TextBlock Text="{Binding Group}" Foreground="#FF4E5967" FontSize="11"
+                                <TextBlock Text="{Binding Group}" Foreground="{DynamicResource ItemSubFgBrush}" FontSize="11"
                                            VerticalAlignment="Center" MaxWidth="80" Margin="6,0,0,0"
                                            TextTrimming="CharacterEllipsis" DockPanel.Dock="Right" ToolTip="{Binding Group}"/>
-                                <TextBlock Text="{Binding Name}" Foreground="#FFE2E8EF" FontSize="13"
+                                <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ItemFgBrush}" FontSize="13"
                                            Margin="0,0,6,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
                             </DockPanel>
                         </DataTemplate>
@@ -262,19 +262,19 @@
             <lvc:VideoView x:Name="VideoView" Grid.Row="0" Grid.Column="0" Background="Black" Focusable="False"/>
 
             <!-- EPG 节目单面板 -->
-            <Border x:Name="EpgPanel" Grid.Row="0" Grid.Column="1" Width="260" Background="#FF14181D"
-                    BorderBrush="#FF272E37" BorderThickness="1,0,0,0" Visibility="Collapsed">
+            <Border x:Name="EpgPanel" Grid.Row="0" Grid.Column="1" Width="260" Background="{DynamicResource EpgBgBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0" Visibility="Collapsed">
                 <DockPanel>
-                    <TextBlock Text="节目单" DockPanel.Dock="Top" FontWeight="Bold" Foreground="#FF4FA3E3"
+                    <TextBlock Text="节目单" DockPanel.Dock="Top" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}"
                                FontSize="13" Margin="12,10,12,6"/>
-                    <TextBlock x:Name="EpgNow" DockPanel.Dock="Top" Foreground="#FFB9C4CE" FontSize="11"
+                    <TextBlock x:Name="EpgNow" DockPanel.Dock="Top" Foreground="{DynamicResource EpgSubFgBrush}" FontSize="11"
                                Margin="12,0,12,8" TextWrapping="Wrap"/>
                     <ListBox x:Name="EpgList" Background="Transparent" BorderThickness="0" Margin="0,0,0,6">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel Margin="10,4">
-                                    <TextBlock Text="{Binding TimeRange}" Foreground="#FF4FA3E3" FontSize="11"/>
-                                    <TextBlock Text="{Binding Title}" Foreground="#FFE2E8EF" FontSize="12"
+                                    <TextBlock Text="{Binding TimeRange}" Foreground="{DynamicResource AccentBrush}" FontSize="11"/>
+                                    <TextBlock Text="{Binding Title}" Foreground="{DynamicResource ItemFgBrush}" FontSize="12"
                                                TextWrapping="Wrap" Margin="0,2,0,0"/>
                                 </StackPanel>
                             </DataTemplate>
@@ -285,51 +285,51 @@
 
             <StackPanel x:Name="EmptyState" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Center" VerticalAlignment="Center"
                         Visibility="Collapsed">
-                <TextBlock Text="暂无频道" FontSize="18" Foreground="#FF8A97A5" HorizontalAlignment="Center"/>
-                <TextBlock Text="添加 M3U / M3U8 播放列表后即可观看" FontSize="12" Foreground="#FF5E6B79"
+                <TextBlock Text="暂无频道" FontSize="18" Foreground="{DynamicResource EmptyFgBrush}" HorizontalAlignment="Center"/>
+                <TextBlock Text="添加 M3U / M3U8 播放列表后即可观看" FontSize="12" Foreground="{DynamicResource SubFgBrush}"
                            HorizontalAlignment="Center" Margin="0,6,0,0"/>
                 <Button Content="添加播放列表" Style="{StaticResource ToolBtn}" FontSize="13" Padding="18,8"
                          Margin="0,16,0,0" HorizontalAlignment="Center" Click="BtnAdd_Click"/>
             </StackPanel>
 
             <!-- 全屏控制浮层：鼠标移动显示，静止自动隐藏 -->
-            <Border x:Name="FullscreenOverlay" Grid.Row="0" Grid.ColumnSpan="2" Background="#66000000"
+            <Border x:Name="FullscreenOverlay" Grid.Row="0" Grid.ColumnSpan="2" Background="{DynamicResource OverlayBgBrush}"
                     Visibility="Collapsed" VerticalAlignment="Bottom" Padding="0,10,0,10">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                    <TextBlock x:Name="FsNowPlaying" Text="" Foreground="#FFE8EDF2" FontSize="14"
+                    <TextBlock x:Name="FsNowPlaying" Text="" Foreground="{DynamicResource FgBrush}" FontSize="14"
                                VerticalAlignment="Center" Margin="0,0,20,0" MaxWidth="360"
                                TextTrimming="CharacterEllipsis"/>
                     <Button x:Name="FsPlayPause" Content="⏸" Width="40" Height="36" Margin="4,0"
-                            Background="#CC232B34" Foreground="#FFE8EDF2" BorderThickness="0" Cursor="Hand"
+                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
                             Click="BtnPlayPause_Click" ToolTip="播放/暂停（Space）"/>
                     <Button x:Name="FsStop" Content="⏹" Width="40" Height="36" Margin="4,0"
-                            Background="#CC232B34" Foreground="#FFE8EDF2" BorderThickness="0" Cursor="Hand"
+                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
                             Click="BtnStop_Click" ToolTip="停止（S）"/>
                     <Button x:Name="FsExitFull" Content="退出全屏" Width="88" Height="36" Margin="4,0"
-                            Background="#CC232B34" Foreground="#FFE8EDF2" BorderThickness="0" Cursor="Hand"
+                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
                             Click="BtnFull_Click" ToolTip="退出全屏（Esc / F11）"/>
                 </StackPanel>
             </Border>
 
-            <Border x:Name="StatusBar" Grid.Row="1" Grid.ColumnSpan="2" Background="#FF191F26" BorderBrush="#FF272E37"
+            <Border x:Name="StatusBar" Grid.Row="1" Grid.ColumnSpan="2" Background="{DynamicResource SideBgBrush}" BorderBrush="{DynamicResource BorderBrush}"
                     BorderThickness="0,1,0,0" Padding="14,7">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button x:Name="BtnPlayPause" Content="⏸" Width="26" Height="24" Margin="4,0,0,0"
-                                Background="#FF232B34" Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand"
+                                Background="{DynamicResource BtnBgBrush}" Foreground="{DynamicResource BtnFgBrush}" BorderThickness="0" Cursor="Hand"
                                 Click="BtnPlayPause_Click" ToolTip="播放/暂停（Space）"/>
                         <Button x:Name="BtnStop" Content="⏹" Width="26" Height="24" Margin="4,0,0,0"
-                                Background="#FF232B34" Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand"
+                                Background="{DynamicResource BtnBgBrush}" Foreground="{DynamicResource BtnFgBrush}" BorderThickness="0" Cursor="Hand"
                                 Click="BtnStop_Click" ToolTip="停止（S）"/>
                         <Button x:Name="BtnSettings" Content="⚙" Width="26" Height="24" Margin="4,0,0,0"
-                                Background="#FF232B34" Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand"
+                                Background="{DynamicResource BtnBgBrush}" Foreground="{DynamicResource BtnFgBrush}" BorderThickness="0" Cursor="Hand"
                                 Click="BtnSettings_Click" ToolTip="设置"/>
-                        <TextBlock x:Name="VolumeText" Text="音量 80%" Foreground="#FF7A8896" FontSize="12"
+                        <TextBlock x:Name="VolumeText" Text="音量 80%" Foreground="{DynamicResource SubFgBrush}" FontSize="12"
                                    Margin="14,0,0,0" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="PlayState" Text="就绪" Foreground="#FF7A8896" FontSize="12"
+                        <TextBlock x:Name="PlayState" Text="就绪" Foreground="{DynamicResource SubFgBrush}" FontSize="12"
                                    Margin="14,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
-                    <TextBlock x:Name="NowPlaying" Text="未播放" Foreground="#FFB9C4CE" FontSize="13"
+                    <TextBlock x:Name="NowPlaying" Text="未播放" Foreground="{DynamicResource EpgSubFgBrush}" FontSize="13"
                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
                                DockPanel.Dock="Left" MaxWidth="280"/>
                     <Grid VerticalAlignment="Center" Margin="14,0,0,0">
@@ -338,7 +338,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="TimeText" Text="00:00" Foreground="#FF7A8896" FontSize="11"
+                        <TextBlock x:Name="TimeText" Text="00:00" Foreground="{DynamicResource SubFgBrush}" FontSize="11"
                                    VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <Slider x:Name="SeekBar" Grid.Column="1" Minimum="0" Maximum="100" Value="0"
                                 VerticalAlignment="Center" IsMoveToPointEnabled="True"
@@ -346,7 +346,7 @@
                                 ValueChanged="SeekBar_ValueChanged"
                                 PreviewMouseDown="SeekBar_PreviewMouseDown"
                                 PreviewMouseUp="SeekBar_PreviewMouseUp"/>
-                        <TextBlock x:Name="DurationText" Text="--:--" Grid.Column="2" Foreground="#FF7A8896"
+                        <TextBlock x:Name="DurationText" Text="--:--" Grid.Column="2" Foreground="{DynamicResource SubFgBrush}"
                                    FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
                     </Grid>
                 </DockPanel>

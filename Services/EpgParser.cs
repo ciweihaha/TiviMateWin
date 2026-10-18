@@ -1,9 +1,13 @@
+using System.IO;
+using System.Xml;
 using System.Xml.Linq;
 using TiviMateWin.Models;
 
 namespace TiviMateWin.Services;
 
-/// <summary>XMLTV EPG 解析器：解析节目单数据，按频道 id 索引</summary>
+/// <summary>XMLTV EPG 解析器：解析节目单数据，按频道 id 索引。
+/// 用 XmlReader 流式读取每个 programme 元素（XElement.ReadFrom），
+/// 避免 XDocument 全量加载大 XML 造成的内存 spike。</summary>
 public static class EpgParser
 {
     /// <summary>解析 XMLTV 数据，返回 频道id → 节目列表（按开始时间排序）</summary>
@@ -14,29 +18,43 @@ public static class EpgParser
 
         try
         {
-            var doc = XDocument.Parse(xml);
-            foreach (var p in doc.Descendants("programme"))
+            using var reader = XmlReader.Create(new StringReader(xml), new XmlReaderSettings
             {
-                var channelId = (string?)p.Attribute("channel") ?? "";
+                IgnoreWhitespace = true,
+                IgnoreComments = true,
+                DtdProcessing = DtdProcessing.Ignore
+            });
+
+            while (reader.Read())
+            {
+                if (reader.NodeType != XmlNodeType.Element || reader.Name != "programme") continue;
+
+                // 用 ReadSubtree 只加载当前 programme 子树，reader 自动移到下一个节点
+                using var subtree = reader.ReadSubtree();
+                var el = (XElement)XElement.Load(subtree);
+
+                var channelId = (string?)el.Attribute("channel") ?? "";
                 if (channelId.Length == 0) continue;
 
-                var startStr = (string?)p.Attribute("start") ?? "";
-                var stopStr = (string?)p.Attribute("stop") ?? "";
+                var startStr = (string?)el.Attribute("start") ?? "";
+                var stopStr = (string?)el.Attribute("stop") ?? "";
                 var start = ParseXmltvTime(startStr);
                 var stop = ParseXmltvTime(stopStr);
                 if (start == DateTime.MinValue) continue;
                 if (stop == DateTime.MinValue) stop = start.AddHours(1);
 
+                var title = el.Element("title")?.Value?.Trim() ?? "";
+                if (title.Length == 0) continue;
+
                 var prog = new EpgProgram
                 {
                     ChannelId = channelId,
-                    Title = p.Element("title")?.Value?.Trim() ?? "",
-                    Description = p.Element("desc")?.Value?.Trim(),
-                    Category = p.Element("category")?.Value?.Trim(),
+                    Title = title,
+                    Description = el.Element("desc")?.Value?.Trim(),
+                    Category = el.Element("category")?.Value?.Trim(),
                     Start = start,
                     Stop = stop
                 };
-                if (prog.Title.Length == 0) continue;
 
                 if (!result.TryGetValue(channelId, out var list))
                 {
