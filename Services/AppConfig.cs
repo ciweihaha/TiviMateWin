@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -34,6 +35,7 @@ public class AppConfig
     // DPAPI 加密/解密 Xtream 密码：避免明文存盘
     // 存储格式：Base64(DPAPI(UTF8(明文)))，带 "DPAPI:" 前缀便于识别
     // 兼容旧配置：无前缀的旧明文密码直接返回（首次保存时自动加密）
+    // SECURITY(fail-closed)：加密失败时抛错，绝不以降级明文回写入配置文件
     private static string? EncryptSecret(string? plain)
     {
         if (string.IsNullOrEmpty(plain)) return null;
@@ -43,7 +45,10 @@ public class AppConfig
             var enc = ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser);
             return "DPAPI:" + Convert.ToBase64String(enc);
         }
-        catch { return plain; }   // 加密失败则回退明文（不影响功能）
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("DPAPI 加密失败：拒绝以明文保存 Xtream 密码", ex);
+        }
     }
 
     private static string? DecryptSecret(string? stored)
@@ -56,7 +61,11 @@ public class AppConfig
             var dec = ProtectedData.Unprotect(bytes, null, DataProtectionScope.CurrentUser);
             return Encoding.UTF8.GetString(dec);
         }
-        catch { return stored; }  // 解密失败（如换了用户）则回退原值
+        catch (Exception ex)
+        {
+            // SECURITY(fail-closed)：解密失败（如换了用户/配置被替换）时不静默回退，抛错
+            throw new InvalidOperationException("DPAPI 解密失败：存储的 Xtream 密码不可用", ex);
+        }
     }
     private static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TiviMateWin");
@@ -71,7 +80,15 @@ public class AppConfig
                 var cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath));
                 if (cfg != null)
                 {
-                    cfg.XtreamPassword = DecryptSecret(cfg.XtreamPassword); // 解密密码
+                    try
+                    {
+                        cfg.XtreamPassword = DecryptSecret(cfg.XtreamPassword); // 解密密码
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // 解密失败时清空密码（需重新输入），绝不把加密串当作密码使用
+                        cfg.XtreamPassword = null;
+                    }
                     return cfg;
                 }
             }
