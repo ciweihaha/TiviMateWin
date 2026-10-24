@@ -333,10 +333,10 @@ public partial class MainWindow : Window
             // 网络抖动容错：最多重试 2 次（间隔 1s），仅对瞬时失败重试
             for (var attempt = 0; ; attempt++)
             {
-                try { return await _http.GetStringAsync(url, ct); }
+                try { return await _http.GetStringAsync(AppConfig.ResolveXtreamUrl(url, _config.XtreamServer, _config.XtreamUsername, _config.XtreamPassword), ct); }
                 catch (Exception ex) when (attempt < 2)
                 {
-                    AppLog.Error($"fetch retry {attempt + 1} [{url}]: {ex.Message}");
+                    AppLog.Error($"fetch retry {attempt + 1} [{AppConfig.RedactUrlForLog(url)}]: {ex.Message}");
                     await Task.Delay(1000, ct);
                 }
             }
@@ -472,10 +472,10 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             PlayState.Text = "播放失败";
-            AppLog.Error($"play failed [{ch.Name}] {url}: {ex.Message}");
+            AppLog.Error($"play failed [{ch.Name}] {AppConfig.RedactUrlForLog(url)}: {ex.Message}");
             return;                            // 失败不写断点、不抢焦点
         }
-        AppLog.Info($"play [{ch.Name}] {url}");
+        AppLog.Info($"play [{ch.Name}] {AppConfig.RedactUrlForLog(url)}");
 
         // 应用用户设置的倍速与画面比例（MediaPlayer 级别，播放后生效）
         try
@@ -1071,7 +1071,7 @@ public partial class MainWindow : Window
             {
                 AdoptChannels(list);
                 _config.ActivePlaylist = "Xtream";
-                _config.Playlists.Add(new PlaylistSource { Name = "Xtream", Url = url });
+                _config.Playlists.Add(new PlaylistSource { Name = "Xtream", Url = $"{server}/get.php?type=live&output=m3u8" });
                 _config.Save();
                 PlayState.Text = $"已载入 {list.Count} 个频道（Xtream）";
                 AppLog.Info($"xtream loaded {list.Count} channels");
