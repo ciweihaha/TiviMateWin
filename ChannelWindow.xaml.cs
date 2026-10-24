@@ -16,6 +16,9 @@ public partial class ChannelWindow : Window
     private int _volume;
     // 播放串行化：libVLC MediaPlayer 非线程安全，快速换台时多个 Play 需串行执行
     private readonly SemaphoreSlim _playGate = new(1, 1);
+    // F6(a)：窗口关闭中标志。Window_Closing 置位后，Play 不再启动新的播放，
+    // 避免关闭后继续操作已释放的播放器/Media。
+    private volatile bool _closing;
 
     public ChannelWindow(LibVLC libvlc, int volume)
     {
@@ -34,6 +37,8 @@ public partial class ChannelWindow : Window
     /// <summary>播放指定频道（串行化，避免并发调用 MediaPlayer 崩溃）</summary>
     public async void Play(ChannelItem ch)
     {
+        // F6(a)：关闭中不再启动新播放。
+        if (_closing) return;
         _channel = ch;
         Title = ch.Name;
         TitleText.Text = ch.Name;
@@ -77,6 +82,8 @@ public partial class ChannelWindow : Window
 
     private void Window_Closing(object sender, CancelEventArgs e)
     {
+        // F6(a)：先置位再 Stop，使关闭后到达的 Play 直接返回。
+        _closing = true;
         try { _player.Stop(); } catch { }
     }
 
