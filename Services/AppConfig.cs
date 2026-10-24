@@ -95,6 +95,41 @@ public class AppConfig
         return kept.Count == 0 ? baseUrl + fragment : baseUrl + "?" + string.Join("&", kept) + fragment;
     }
 
+    // 日志脱敏：只留 scheme://host[:port]+path，剥离 query 与 fragment；非绝对地址则剥离 ? 之后部分。
+    internal static string RedactUrlForLog(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return url;
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            var port = uri.IsDefaultPort ? "" : ":" + uri.Port;
+            return uri.Scheme + "://" + uri.Host + port + uri.AbsolutePath;
+        }
+        var q = url.IndexOf('?');
+        return q >= 0 ? url[..q] : url;
+    }
+
+    // 请求时重拼 Xtream 凭据 URL：仅当地址是与 XtreamServer 同源的 get.php 占位标识
+    //（不含 username=/password=）时，才由 XtreamServer/Username/Password 实时拼出完整地址；
+    // 已含凭据或与当前服务器不匹配的地址原样返回，不改动普通播放列表。
+    internal static string ResolveXtreamUrl(string url, string? server, string? username, string? password)
+    {
+        if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(server) ||
+            string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password)) return url;
+        if (url.Contains("username=", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains("password=", StringComparison.OrdinalIgnoreCase)) return url;
+        var serverBase = server.TrimEnd('/') + "/get.php";
+        var q = url.IndexOf('?');
+        var baseUrl = q >= 0 ? url[..q] : url;
+        if (!baseUrl.Equals(serverBase, StringComparison.OrdinalIgnoreCase)) return url;
+        var query = q >= 0 ? url[(q + 1)..] : "";
+        var hash = query.IndexOf('#');
+        var fragment = hash >= 0 ? query[hash..] : "";
+        if (hash >= 0) query = query[..hash];
+        var rest = string.IsNullOrEmpty(query) ? "" : "&" + query;
+        return baseUrl + "?username=" + Uri.EscapeDataString(username) +
+            "&password=" + Uri.EscapeDataString(password) + rest + fragment;
+    }
+
     /// <summary>测试隔离：SelfTest 可注入临时目录，避免污染真实配置</summary>
     public static string? OverrideDir { get; set; }
 
