@@ -207,6 +207,32 @@ public static class SelfTest
             try { if (Directory.Exists(cfgBadDir)) Directory.Delete(cfgBadDir, true); } catch { }
             AppConfig.OverrideDir = null;
 
+            // --- 凭据解密失败提示（隔离目录；与损坏分支分开断言） ---
+            // 写入合法 JSON 但含无法 Base64 解码的 DPAPI 串：Load 必须走解密失败分支，
+            // 而非损坏分支——其余设置保留、密码清空、LastLoadError 非空且不提损坏/保全、
+            // 不产生 config.corrupt-* 保全文件；成功加载后错误状态清除。
+            var cfgDecDir = Path.Combine(Path.GetTempPath(), "tivimate_cfg_decrypt_selftest");
+            try { if (Directory.Exists(cfgDecDir)) Directory.Delete(cfgDecDir, true); } catch { }
+            Directory.CreateDirectory(cfgDecDir);
+            AppConfig.OverrideDir = cfgDecDir;
+            var cfgDecPath = Path.Combine(cfgDecDir, "config.json");
+            File.WriteAllText(cfgDecPath, "{\"Volume\": 77, \"XtreamPassword\": \"DPAPI:!!!not-base64!!!\"}");
+            var cfgDec = AppConfig.Load();
+            var decErr = AppConfig.LastLoadError ?? "";
+            lines.Add(cfgDec.Volume == 77 && cfgDec.XtreamPassword == null
+                ? "PASS 凭据解密失败-其余设置保留且密码清空" : "FAIL 凭据解密失败-其余设置保留且密码清空");
+            lines.Add(!string.IsNullOrEmpty(decErr) && decErr.Contains("重新输入")
+                    && !decErr.Contains("配置文件损坏") && !decErr.Contains("config.corrupt-")
+                ? "PASS 凭据解密失败-错误可见且不与损坏混淆" : "FAIL 凭据解密失败-错误可见且不与损坏混淆");
+            lines.Add(Directory.GetFiles(cfgDecDir, "config.corrupt-*.json").Length == 0
+                ? "PASS 凭据解密失败-不产生损坏保全文件" : "FAIL 凭据解密失败-不产生损坏保全文件");
+            File.WriteAllText(cfgDecPath, "{\"Volume\": 78}");
+            var cfgDecOk = AppConfig.Load();
+            lines.Add(cfgDecOk.Volume == 78 && AppConfig.LastLoadError == null
+                ? "PASS 凭据解密失败-后续成功加载清除错误" : "FAIL 凭据解密失败-后续成功加载清除错误");
+            try { if (Directory.Exists(cfgDecDir)) Directory.Delete(cfgDecDir, true); } catch { }
+            AppConfig.OverrideDir = null;
+
             // --- 播放测试 ---
             if (playTest)
             {
