@@ -28,17 +28,43 @@ public static class ChannelCache
 
     public static List<ChannelItem> Load(string sourceUrl)
     {
+        var path = PathFor(sourceUrl);
         try
         {
-            var path = PathFor(sourceUrl);
             if (File.Exists(path))
             {
                 var list = JsonSerializer.Deserialize<List<ChannelItem>>(File.ReadAllText(path));
                 if (list != null) return list;
+                // JSON 为 null（如文件内容就是 null）：与损坏同处理，记日志并移为 .corrupt。
+                AppLog.Error($"频道缓存加载失败（{path}，反序列化结果为空），已移为损坏缓存（不含缓存内容）。");
+                MoveToCorrupt(path);
             }
         }
-        catch { }
+        catch (JsonException ex)
+        {
+            // 损坏缓存：记一条不含缓存内容的日志，并把损坏文件移为 *.corrupt（与配置侧保全同模式），下次不再反复解析损坏文件。
+            AppLog.Error($"频道缓存加载失败（{path}）: {ex.Message}");
+            MoveToCorrupt(path);
+        }
+        catch (Exception ex)
+        {
+            // 瞬时读盘失败等：只记日志（不含缓存内容），不移动原文件，下次仍可重试读取。
+            AppLog.Error($"频道缓存加载失败（{path}）: {ex.Message}");
+        }
         return new List<ChannelItem>();
+    }
+
+    private static void MoveToCorrupt(string path)
+    {
+        try
+        {
+            var stamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+            var dest = path + $".corrupt-{stamp}";
+            var n = 1;
+            while (File.Exists(dest)) dest = path + $".corrupt-{stamp}-{n++}";
+            File.Move(path, dest);
+        }
+        catch { }
     }
 
     /// <summary>
