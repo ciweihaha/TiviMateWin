@@ -75,8 +75,11 @@ public class AppConfig
     private static string ConfigPath => Path.Combine(Dir, "config.json");
 
     /// <summary>
-    /// 最近一次 Load 的错误说明（文件损坏时非空，含保全路径）；加载成功或文件不存在时为 null。
-    /// 调用方（如主窗口）可据此向用户提示配置已损坏并已保全，避免静默丢失设置。
+    /// 最近一次 Load 的错误说明；加载成功或文件不存在时为 null。
+    /// 两种非空情形语义不同、不得混淆：
+    /// （1）配置文件损坏：含保全路径 config.corrupt-…，本次以默认配置启动（见 HandleCorruptConfig）；
+    /// （2）凭据解密失败：文件本身未损坏、其余设置已正常加载，仅 Xtream 密码被清空、需重新输入。
+    /// 调用方可据此向用户提示，避免凭据静默丢失。
     /// </summary>
     public static string? LastLoadError { get; private set; }
 
@@ -96,8 +99,14 @@ public class AppConfig
             }
             catch (InvalidOperationException)
             {
-                // 解密失败时清空密码（需重新输入），绝不把加密串当作密码使用
+                // 解密失败时清空密码（需重新输入），绝不把加密串当作密码使用；
+                // 并置 LastLoadError + 记脱敏日志，让调用方得知凭据已丢。
+                // 注意：此分支与配置文件损坏分支语义不同——文件本身未损坏、其余设置
+                // 已正常加载，不走保全流程；提示文本不得含“配置文件损坏”或保全路径，
+                // 以免与损坏分支混淆。日志为固定文本，不含密码、密文或异常详情。
                 cfg.XtreamPassword = null;
+                LastLoadError = "Xtream 登录凭据无法解密，已清空密码，请重新输入密码后保存；配置文件本身未损坏，其余设置已正常加载。";
+                AppLog.Error("Xtream 凭据解密失败，已清空密码，需重新输入（日志中不记录密码或密文）。");
             }
             return cfg;
         }
