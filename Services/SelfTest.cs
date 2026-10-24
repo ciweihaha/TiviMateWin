@@ -168,6 +168,45 @@ public static class SelfTest
             try { if (Directory.Exists(cfgSaveDir)) Directory.Delete(cfgSaveDir, true); } catch { }
             AppConfig.OverrideDir = null;
 
+            // --- 配置加载损坏保全与原子保存（隔离目录） ---
+            var cfgBadDir = Path.Combine(Path.GetTempPath(), "tivimate_cfg_corrupt_selftest");
+            try { if (Directory.Exists(cfgBadDir)) Directory.Delete(cfgBadDir, true); } catch { }
+            Directory.CreateDirectory(cfgBadDir);
+            AppConfig.OverrideDir = cfgBadDir;
+            var cfgBadPath = Path.Combine(cfgBadDir, "config.json");
+            // 无文件：返回默认配置且不记错误
+            var cfgNone = AppConfig.Load();
+            lines.Add(cfgNone.Volume == 80 && AppConfig.LastLoadError == null
+                ? "PASS 配置加载-无文件返回默认且无错误" : "FAIL 配置加载-无文件返回默认且无错误");
+            // 写入被截断的 JSON（内含 Volume=42，若被误当有效配置会暴露），Load 必须走损坏路径
+            var corruptText = "{\"Volume\": 42, \"Playlists\": [{\"Name\": \"x\"";
+            File.WriteAllText(cfgBadPath, corruptText);
+            var cfgBad = AppConfig.Load();
+            lines.Add(cfgBad.Volume == 80 && cfgBad.Playlists.Count == 0
+                ? "PASS 配置加载-损坏返回默认配置" : "FAIL 配置加载-损坏返回默认配置");
+            var preservedFiles = Directory.GetFiles(cfgBadDir, "config.corrupt-*.json");
+            lines.Add(preservedFiles.Length == 1 && File.ReadAllText(preservedFiles[0]) == corruptText
+                ? "PASS 配置加载-损坏原文件被保全" : "FAIL 配置加载-损坏原文件被保全");
+            lines.Add(!string.IsNullOrEmpty(AppConfig.LastLoadError) && AppConfig.LastLoadError.Contains("config.corrupt-")
+                ? "PASS 配置加载-损坏错误可见" : "FAIL 配置加载-损坏错误可见");
+            // 损坏后保存默认配置：保全文件必须原样保留，新配置可正常往返且错误状态清除
+            cfgBad.Volume = 81;
+            var cfgBadSaveOk = cfgBad.Save();
+            lines.Add(cfgBadSaveOk && preservedFiles.Length == 1 && File.Exists(preservedFiles[0]) && File.ReadAllText(preservedFiles[0]) == corruptText
+                ? "PASS 配置加载-损坏后保存不丢保全" : "FAIL 配置加载-损坏后保存不丢保全");
+            var cfgAfterBad = AppConfig.Load();
+            lines.Add(cfgAfterBad.Volume == 81 && AppConfig.LastLoadError == null
+                ? "PASS 配置保存-损坏恢复后往返一致" : "FAIL 配置保存-损坏恢复后往返一致");
+            // 原子替换：对已存在的 config.json 再保存（走 File.Replace 路径），且无 .tmp/.bak 残留
+            cfgAfterBad.Volume = 82;
+            var cfgAtomicOk = cfgAfterBad.Save();
+            var cfgAtomicReload = AppConfig.Load();
+            lines.Add(cfgAtomicOk && cfgAtomicReload.Volume == 82
+                && !File.Exists(cfgBadPath + ".tmp") && !File.Exists(cfgBadPath + ".bak")
+                ? "PASS 配置保存-原子替换往返无残留" : "FAIL 配置保存-原子替换往返无残留");
+            try { if (Directory.Exists(cfgBadDir)) Directory.Delete(cfgBadDir, true); } catch { }
+            AppConfig.OverrideDir = null;
+
             // --- 播放测试 ---
             if (playTest)
             {
