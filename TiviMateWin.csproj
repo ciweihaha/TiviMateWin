@@ -9,6 +9,8 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
     <Version>1.3.3</Version>
+    <!-- F9：1.3.3 仅为本地构建回退版本；tag 构建由 CI 在 Publish 时以 -p:Version 注入（见 .github/workflows/build.yml）。历史已发 v1.3.5 构建的版本号无法追改，只能从新版本起纠正。 -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Optimize>true</Optimize>
   </PropertyGroup>
 

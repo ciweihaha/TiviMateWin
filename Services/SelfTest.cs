@@ -5,7 +5,7 @@ using TiviMateWin.Models;
 
 namespace TiviMateWin.Services;
 
-/// <summary>无界面自检：--selftest 验证引擎与解析器；--playtest &lt;url&gt; 验证真实播放</summary>
+/// <summary>无界面自检：--selftest 验证引擎与解析器；--playtest <url> 验证真实播放</summary>
 public static class SelfTest
 {
     private const string SampleM3u = """
@@ -197,14 +197,47 @@ public static class SelfTest
             var cfgAfterBad = AppConfig.Load();
             lines.Add(cfgAfterBad.Volume == 81 && AppConfig.LastLoadError == null
                 ? "PASS 配置保存-损坏恢复后往返一致" : "FAIL 配置保存-损坏恢复后往返一致");
-            // 原子替换：对已存在的 config.json 再保存（走 File.Replace 路径），且无 .tmp/.bak 残留
+            // 原子替换：对已存在的 config.json 再保存（走 File.Replace 路径），且无 config.*.tmp 临时残留与 .bak 残留
+            // F3：保存临时名已改为 config.<pid>.<guid>.tmp，故按通配符检查，不再断言固定 config.json.tmp 不存在。
             cfgAfterBad.Volume = 82;
             var cfgAtomicOk = cfgAfterBad.Save();
             var cfgAtomicReload = AppConfig.Load();
             lines.Add(cfgAtomicOk && cfgAtomicReload.Volume == 82
-                && !File.Exists(cfgBadPath + ".tmp") && !File.Exists(cfgBadPath + ".bak")
+                && Directory.GetFiles(cfgBadDir, "config.*.tmp").Length == 0 && !File.Exists(cfgBadPath + ".bak")
                 ? "PASS 配置保存-原子替换往返无残留" : "FAIL 配置保存-原子替换往返无残留");
             try { if (Directory.Exists(cfgBadDir)) Directory.Delete(cfgBadDir, true); } catch { }
+            AppConfig.OverrideDir = null;
+
+            // --- 配置读盘失败（F4，隔离目录；与损坏分支分开断言） ---
+            // 独占锁定 config.json 后调 Load()：必须走读盘失败分支——不产生保全、
+            // 原文件字节不变、LastLoadError 非空且不含“损坏”字样、返回默认配置；
+            // 释放锁后再次 Load() 能读回原值且错误清除，证明原文件未被破坏、可恢复。
+            // 注意：锁定期间不调 Save()（ReadFailurePending 为真时 Save 会弹确认框阻塞自检）。
+            var cfgReadDir = Path.Combine(Path.GetTempPath(), "tivimate_cfg_readfail_selftest");
+            try { if (Directory.Exists(cfgReadDir)) Directory.Delete(cfgReadDir, true); } catch { }
+            Directory.CreateDirectory(cfgReadDir);
+            AppConfig.OverrideDir = cfgReadDir;
+            var cfgReadPath = Path.Combine(cfgReadDir, "config.json");
+            File.WriteAllText(cfgReadPath, "{\"Volume\": 43}");
+            var cfgReadBytes = File.ReadAllBytes(cfgReadPath);
+            AppConfig cfgRead;
+            using (var fsLock3 = new FileStream(cfgReadPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                cfgRead = AppConfig.Load();
+            }
+            var readErr = AppConfig.LastLoadError ?? "";
+            lines.Add(cfgRead.Volume == 80
+                ? "PASS 配置读盘失败-返回默认配置" : "FAIL 配置读盘失败-返回默认配置");
+            lines.Add(!string.IsNullOrEmpty(readErr) && !readErr.Contains("损坏")
+                ? "PASS 配置读盘失败-错误可见且不与损坏混淆" : "FAIL 配置读盘失败-错误可见且不与损坏混淆");
+            lines.Add(Directory.GetFiles(cfgReadDir, "config.corrupt-*.json").Length == 0
+                ? "PASS 配置读盘失败-不产生损坏保全文件" : "FAIL 配置读盘失败-不产生损坏保全文件");
+            lines.Add(File.ReadAllBytes(cfgReadPath).SequenceEqual(cfgReadBytes)
+                ? "PASS 配置读盘失败-原文件字节不变" : "FAIL 配置读盘失败-原文件字节不变");
+            var cfgReadOk = AppConfig.Load();
+            lines.Add(cfgReadOk.Volume == 43 && AppConfig.LastLoadError == null
+                ? "PASS 配置读盘失败-释放锁后可恢复读回原值" : "FAIL 配置读盘失败-释放锁后可恢复读回原值");
+            try { if (Directory.Exists(cfgReadDir)) Directory.Delete(cfgReadDir, true); } catch { }
             AppConfig.OverrideDir = null;
 
             // --- 凭据解密失败提示（隔离目录；与损坏分支分开断言） ---
