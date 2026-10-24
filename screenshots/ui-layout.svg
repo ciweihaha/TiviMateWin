@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 640" font-family="'Microsoft YaHei UI','Segoe UI',sans-serif">
+  <!-- ============ 窗体外框 ============ -->
+  <rect x="0" y="0" width="1120" height="640" rx="8" fill="#14161b"/>
+  <rect x="0.5" y="0.5" width="1119" height="639" rx="8" fill="none" stroke="#2a2e38" stroke-width="1"/>
+
+  <!-- ============ 左侧栏（300px） ============ -->
+  <rect x="0" y="0" width="300" height="640" fill="#1a1d23"/>
+  <line x1="300" y1="0" x2="300" y2="640" stroke="#2a2e38" stroke-width="1"/>
+
+  <!-- 标题 -->
+  <text x="14" y="34" fill="#4da3ff" font-size="17" font-weight="bold">直播列表</text>
+
+  <!-- 工具栏按钮 -->
+  <g font-size="12" fill="#c8cdd6">
+    <rect x="12" y="48" width="52" height="26" rx="4" fill="#262a33"/>
+    <text x="24" y="65">添加源</text>
+    <rect x="70" y="48" width="40" height="26" rx="4" fill="#262a33"/>
+    <text x="82" y="65">刷新</text>
+    <rect x="116" y="48" width="40" height="26" rx="4" fill="#262a33"/>
+    <text x="128" y="65">收藏</text>
+    <rect x="162" y="48" width="40" height="26" rx="4" fill="#262a33"/>
+    <text x="174" y="65">小窗</text>
+    <rect x="208" y="48" width="40" height="26" rx="4" fill="#262a33"/>
+    <text x="220" y="65">全屏</text>
+  </g>
+
+  <!-- 搜索框 -->
+  <rect x="12" y="84" width="276" height="30" rx="4" fill="#12141a" stroke="#333947" stroke-width="1"/>
+  <text x="22" y="104" fill="#6b7280" font-size="12">搜索频道 / 分组（Ctrl+F）</text>
+
+  <!-- 源列表面板（收起状态） -->
+  <rect x="12" y="122" width="276" height="32" rx="4" fill="#20242c" stroke="#333947" stroke-width="1"/>
+  <text x="22" y="143" fill="#4da3ff" font-size="12" font-weight="bold">源列表</text>
+  <text x="252" y="143" fill="#6b7280" font-size="12">▾</text>
+
+  <!-- 分组下拉 -->
+  <rect x="12" y="162" width="222" height="30" rx="4" fill="#20242c" stroke="#333947" stroke-width="1"/>
+  <text x="22" y="182" fill="#c8cdd6" font-size="12">全部频道</text>
+  <text x="196" y="182" fill="#6b7280" font-size="10">▾</text>
+  <rect x="240" y="162" width="48" height="30" rx="4" fill="#262a33"/>
+  <text x="252" y="182" fill="#c8cdd6" font-size="11">管理</text>
+
+  <!-- 频道计数 -->
+  <text x="14" y="212" fill="#6b7280" font-size="12">106 个频道</text>
+
+  <!-- 频道列表 -->
+  <g font-size="13">
+    <!-- 选中频道 -->
+    <rect x="4" y="222" width="292" height="30" rx="3" fill="#1f3a5f"/>
+    <text x="12" y="242" fill="#4da3ff" font-size="12">001</text>
+    <text x="50" y="242" fill="#e8ebf0">CCTV-1 综合</text>
+    <text x="212" y="242" fill="#6b7280" font-size="11">央视</text>
+    <text x="272" y="243" fill="#f5c542" font-size="14">★</text>
+
+    <text x="12" y="275" fill="#4da3ff" font-size="12">002</text>
+    <text x="50" y="275" fill="#c8cdd6">CCTV-5 体育</text>
+    <text x="212" y="275" fill="#6b7280" font-size="11">央视</text>
+    <text x="272" y="276" fill="#f5c542" font-size="14">★</text>
+
+    <text x="12" y="308" fill="#4da3ff" font-size="12">003</text>
+    <text x="50" y="308" fill="#c8cdd6">CCTV-6 电影</text>
+    <text x="212" y="308" fill="#6b7280" font-size="11">央视</text>
+
+    <text x="12" y="341" fill="#4da3ff" font-size="12">058</text>
+    <text x="50" y="341" fill="#c8cdd6">湖南卫视</text>
+    <text x="212" y="341" fill="#6b7280" font-size="11">卫视</text>
+
+    <text x="12" y="374" fill="#4da3ff" font-size="12">101</text>
+    <text x="50" y="374" fill="#c8cdd6">凤凰中文台</text>
+    <text x="212" y="374" fill="#6b7280" font-size="11">港澳台</text>
+
+    <text x="12" y="407" fill="#4da3ff" font-size="12">120</text>
+    <text x="50" y="407" fill="#c8cdd6">HBO</text>
+    <text x="212" y="407" fill="#6b7280" font-size="11">国际</text>
+    <text x="272" y="408" fill="#f5c542" font-size="14">★</text>
+
+    <text x="12" y="440" fill="#4da3ff" font-size="12">135</text>
+    <text x="50" y="440" fill="#c8cdd6">NHK World</text>
+    <text x="212" y="440" fill="#6b7280" font-size="11">国际</text>
+
+    <text x="12" y="473" fill="#4da3ff" font-size="12">150</text>
+    <text x="50" y="473" fill="#c8cdd6">广东体育</text>
+    <text x="212" y="473" fill="#6b7280" font-size="11">地方</text>
+
+    <text x="12" y="540" fill="#4b5563" font-size="12" opacity="0.6">. . .</text>
+  </g>
+
+  <!-- ============ 侧栏收起条（12px） ============ -->
+  <rect x="300" y="0" width="12" height="640" fill="#1a1d23"/>
+  <line x1="312" y1="0" x2="312" y2="640" stroke="#2a2e38" stroke-width="1"/>
+  <text x="304" y="325" fill="#6b7280" font-size="9">◀</text>
+
+  <!-- ============ 视频区 ============ -->
+  <rect x="312" y="0" width="548" height="596" fill="#000000"/>
+  <!-- 视频内容示意：渐变模拟画面 -->
+  <defs>
+    <linearGradient id="vid" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b3a5c"/>
+      <stop offset="0.5" stop-color="#0f2438"/>
+      <stop offset="1" stop-color="#0a1622"/>
+    </linearGradient>
+  </defs>
+  <rect x="312" y="0" width="548" height="596" fill="url(#vid)"/>
+  <!-- 台标示意 -->
+  <rect x="332" y="20" width="58" height="24" rx="3" fill="#000000" opacity="0.45"/>
+  <text x="339" y="37" fill="#ffffff" font-size="12" font-weight="bold">CCTV-1</text>
+  <!-- 中央播放示意 -->
+  <text x="586" y="290" fill="#e8ebf0" font-size="22" font-weight="bold" text-anchor="middle" opacity="0.92">CCTV-1 综合</text>
+  <text x="586" y="318" fill="#9aa3b2" font-size="13" text-anchor="middle">正在直播 · 1080i</text>
+  <!-- 全屏控制浮层示意（底部） -->
+  <rect x="312" y="536" width="548" height="60" fill="#000000" opacity="0.55"/>
+  <text x="340" y="572" fill="#e8ebf0" font-size="14">新闻联播</text>
+  <circle cx="700" cy="566" r="18" fill="#262a33"/>
+  <rect x="693" y="556" width="4" height="20" fill="#c8cdd6"/>
+  <rect x="701" y="556" width="4" height="20" fill="#c8cdd6"/>
+  <rect x="740" y="548" width="88" height="36" rx="4" fill="#262a33"/>
+  <text x="758" y="571" fill="#c8cdd6" font-size="13">退出全屏</text>
+
+  <!-- ============ EPG 节目单面板（260px） ============ -->
+  <rect x="860" y="0" width="260" height="596" fill="#171a20"/>
+  <line x1="860" y1="0" x2="860" y2="596" stroke="#2a2e38" stroke-width="1"/>
+  <text x="872" y="32" fill="#4da3ff" font-size="13" font-weight="bold">节目单</text>
+  <text x="872" y="52" fill="#8a93a5" font-size="11">正在播放：新闻联播</text>
+
+  <!-- 当前节目（高亮） -->
+  <rect x="864" y="62" width="252" height="44" rx="3" fill="#1f3a5f"/>
+  <text x="874" y="80" fill="#4da3ff" font-size="11">19:00 - 19:30</text>
+  <text x="874" y="97" fill="#e8ebf0" font-size="12">新闻联播</text>
+
+  <g fill="#c8cdd6">
+    <text x="874" y="130" fill="#4da3ff" font-size="11">19:30 - 20:00</text>
+    <text x="874" y="147" font-size="12">焦点访谈</text>
+
+    <text x="874" y="176" fill="#4da3ff" font-size="11">20:00 - 20:30</text>
+    <text x="874" y="193" font-size="12">黄金档剧场（1/2）</text>
+
+    <text x="874" y="222" fill="#4da3ff" font-size="11">20:30 - 21:20</text>
+    <text x="874" y="239" font-size="12">黄金档剧场（2/2）</text>
+
+    <text x="874" y="268" fill="#4da3ff" font-size="11">21:20 - 22:00</text>
+    <text x="874" y="285" font-size="12">晚间新闻</text>
+
+    <text x="874" y="314" fill="#4da3ff" font-size="11">22:00 - 22:30</text>
+    <text x="874" y="331" font-size="12">今日说法</text>
+  </g>
+  <text x="874" y="380" fill="#4b5563" font-size="12" opacity="0.6">. . .</text>
+
+  <!-- ============ 底部状态栏 ============ -->
+  <rect x="312" y="596" width="808" height="44" fill="#1a1d23"/>
+  <line x1="312" y1="596" x2="1120" y2="596" stroke="#2a2e38" stroke-width="1"/>
+  <text x="326" y="622" fill="#8a93a5" font-size="13">CCTV-1 综合</text>
+  <!-- 进度条 -->
+  <text x="440" y="622" fill="#6b7280" font-size="11">19:12</text>
+  <rect x="486" y="616" width="300" height="6" rx="3" fill="#2a2e38"/>
+  <rect x="486" y="616" width="84" height="6" rx="3" fill="#4da3ff"/>
+  <circle cx="570" cy="619" r="6" fill="#4da3ff"/>
+  <text x="796" y="622" fill="#6b7280" font-size="11">直播</text>
+  <!-- 右侧控制按钮 -->
+  <circle cx="920" cy="617" r="12" fill="#262a33"/>
+  <rect x="917" y="611" width="3" height="13" fill="#c8cdd6"/>
+  <rect x="923" y="611" width="3" height="13" fill="#c8cdd6"/>
+  <rect x="942" y="605" width="22" height="22" rx="3" fill="#262a33"/>
+  <rect x="947" y="610" width="12" height="12" fill="#c8cdd6"/>
+  <circle cx="984" cy="617" r="12" fill="#262a33"/>
+  <text x="978" y="622" fill="#c8cdd6" font-size="12">⚙</text>
+  <text x="1010" y="622" fill="#6b7280" font-size="12">音量 80%</text>
+  <text x="1092" y="622" fill="#6b7280" font-size="12">就绪</text>
+
+  <!-- ============ 标注说明 ============ -->
+  <g font-size="12" fill="#4da3ff">
+    <text x="14" y="632">① 源/分组/频道侧栏</text>
+    <text x="560" y="632" text-anchor="middle">② 视频区（libVLC）</text>
+    <text x="990" y="632" text-anchor="middle">③ EPG 节目单</text>
+  </g>
+</svg>
