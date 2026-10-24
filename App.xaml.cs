@@ -29,7 +29,7 @@ public partial class App : Application
                 AppLog.Error($"unhandled UI exception: {detail}");
                 try
                 {
-                    MessageBox.Show($"发生未处理异常，已记录日志：\n{TruncateForMessage(detail)}", "错误",
+                    MessageBox.Show($"发生未处理异常，已记录日志。建议重启应用以恢复到干净状态：\n{TruncateForMessage(detail)}", "错误",
                         MessageBoxButton.OK, MessageBoxImage.Error);
                 }
                 catch { }
