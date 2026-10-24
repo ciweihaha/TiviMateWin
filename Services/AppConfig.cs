@@ -67,6 +67,34 @@ public class AppConfig
             throw new InvalidOperationException("DPAPI 解密失败：存储的 Xtream 密码不可用", ex);
         }
     }
+
+    // 纵深防御：Playlists[].Url 不得把凭据带进 config.json。触发条件是 query 含 password= 时，
+    // 同时剥离 username=/password= 两个凭据参数，保留 type/output 等非凭据参数；
+    // 若不含 password=，原样返回（不改动普通播放列表地址）。
+    internal static string StripCredentialQuery(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return url;
+        var q = url.IndexOf('?');
+        if (q < 0) return url;
+        var query = url[(q + 1)..];
+        var hash = query.IndexOf('#');
+        var fragment = hash >= 0 ? query[hash..] : "";
+        if (hash >= 0) query = query[..hash];
+        var kept = new List<string>();
+        var hasPassword = false;
+        foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var eq = part.IndexOf('=');
+            var key = eq >= 0 ? part[..eq] : part;
+            if (key.Equals("password", StringComparison.OrdinalIgnoreCase)) { hasPassword = true; continue; }
+            if (key.Equals("username", StringComparison.OrdinalIgnoreCase)) continue;
+            kept.Add(part);
+        }
+        if (!hasPassword) return url;
+        var baseUrl = url[..q];
+        return kept.Count == 0 ? baseUrl + fragment : baseUrl + "?" + string.Join("&", kept) + fragment;
+    }
+
     /// <summary>测试隔离：SelfTest 可注入临时目录，避免污染真实配置</summary>
     public static string? OverrideDir { get; set; }
 
@@ -108,6 +136,17 @@ public class AppConfig
                 LastLoadError = "Xtream 登录凭据无法解密，已清空密码，请重新输入密码后保存；配置文件本身未损坏，其余设置已正常加载。";
                 AppLog.Error("Xtream 凭据解密失败，已清空密码，需重新输入（日志中不记录密码或密文）。");
             }
+            // 纵深防御：已落盘的旧配置若含 password= 的 URL，加载时同样剥离，
+            // 避免它在下一次 Save 时重新写回明文；凭据改由 XtreamServer/Username/Password 在请求时重拼。
+            if (cfg.Playlists != null)
+            {
+                foreach (var p in cfg.Playlists)
+                {
+                    if (!string.IsNullOrEmpty(p.Url) &&
+                        p.Url.Contains("password=", StringComparison.OrdinalIgnoreCase))
+                        p.Url = StripCredentialQuery(p.Url);
+                }
+            }
             return cfg;
         }
         catch (Exception ex)
@@ -148,10 +187,15 @@ public class AppConfig
     /// 保存配置。成功返回 true；失败返回 false 并记录日志，调用方据此感知失败（不再静默吞掉）。
     /// 内存中的 XtreamPassword 在 finally 中无条件恢复为保存前的明文——无论写盘成功、
     /// 写盘失败还是加密抛错，都不会让 DPAPI 密文串留在会话里冒充密码。
+    /// 序列化前还会剥离 Playlists[].Url 中含 password= 的凭据参数（见 StripCredentialQuery），
+    /// 仅影响落盘内容；finally 中把内存中的原始 Url 一并恢复。
     /// </summary>
     public bool Save()
     {
         var plain = XtreamPassword;
+        var originalUrls = new List<string>();
+        if (Playlists != null)
+            foreach (var p in Playlists) originalUrls.Add(p.Url);
         var path = ConfigPath;
         var tmp = path + ".tmp";
         try
@@ -160,6 +204,16 @@ public class AppConfig
             // 保存前加密密码（若已是加密值则不重复加密）；加密失败由 EncryptSecret 抛错（fail-closed）
             if (!string.IsNullOrEmpty(plain) && !plain.StartsWith("DPAPI:", StringComparison.Ordinal))
                 XtreamPassword = EncryptSecret(plain);
+            // 纵深防御：序列化前剥离 Playlists[].Url 中的凭据参数，仅影响落盘内容。
+            if (Playlists != null)
+            {
+                foreach (var p in Playlists)
+                {
+                    if (!string.IsNullOrEmpty(p.Url) &&
+                        p.Url.Contains("password=", StringComparison.OrdinalIgnoreCase))
+                        p.Url = StripCredentialQuery(p.Url);
+                }
+            }
             // 原子写：先写同目录（同卷）临时文件，再 File.Replace 原子换名——与 ChannelCache 同一模式，
             // 不存在「旧文件写一半被截断」的窗口；替换失败时旧文件保持原样。
             File.WriteAllText(tmp,
@@ -185,6 +239,11 @@ public class AppConfig
         finally
         {
             XtreamPassword = plain; // 恢复明文，供本次会话继续使用（成功、失败都执行）
+            if (Playlists != null)
+            {
+                for (var i = 0; i < Playlists.Count && i < originalUrls.Count; i++)
+                    Playlists[i].Url = originalUrls[i];
+            }
         }
     }
 }
