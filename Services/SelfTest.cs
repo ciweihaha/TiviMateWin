@@ -95,6 +95,35 @@ public static class SelfTest
             try { if (Directory.Exists(testCacheDir)) Directory.Delete(testCacheDir, true); } catch { }
             ChannelCache.OverrideDir = null;
 
+            // --- 缓存原子替换与故障注入（隔离目录）：替换失败须保留旧缓存且返回 false ---
+            var atomicDir = Path.Combine(Path.GetTempPath(), "tivimate_cache_atomic_selftest");
+            try { if (Directory.Exists(atomicDir)) Directory.Delete(atomicDir, true); } catch { }
+            ChannelCache.OverrideDir = atomicDir;
+            var atomicUrl = "https://selftest.example.com/atomic.m3u8";
+            var cacheV1 = new List<ChannelItem> { new() { Number = 1, Name = "版本一", Url = "http://v1.m3u8", Group = "测试" } };
+            var cacheV2 = new List<ChannelItem> { new() { Number = 2, Name = "版本二", Url = "http://v2.m3u8", Group = "测试" } };
+            lines.Add(ChannelCache.Save(atomicUrl, cacheV1) && ChannelCache.Load(atomicUrl).FirstOrDefault()?.Name == "版本一"
+                ? "PASS 缓存原子替换-首次保存" : "FAIL 缓存原子替换-首次保存");
+            lines.Add(ChannelCache.Save(atomicUrl, cacheV2) && ChannelCache.Load(atomicUrl).FirstOrDefault()?.Name == "版本二"
+                ? "PASS 缓存原子替换-覆盖保存" : "FAIL 缓存原子替换-覆盖保存");
+            // 注入故障：独占锁住缓存文件，替换应失败（返回 false）、旧缓存仍可读、临时文件被清理
+            var atomicFiles = Directory.GetFiles(atomicDir, "*.json");
+            var lockFailOk = false; var lockKeepOk = false; var lockTmpOk = false;
+            if (atomicFiles.Length == 1)
+            {
+                using (var fsLock = new FileStream(atomicFiles[0], FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    lockFailOk = !ChannelCache.Save(atomicUrl, cacheV1);
+                }
+                lockKeepOk = ChannelCache.Load(atomicUrl).FirstOrDefault()?.Name == "版本二";
+                lockTmpOk = Directory.GetFiles(atomicDir, "*.tmp").Length == 0;
+            }
+            lines.Add(lockFailOk ? "PASS 缓存故障注入-占用时返回失败" : "FAIL 缓存故障注入-占用时返回失败");
+            lines.Add(lockKeepOk ? "PASS 缓存故障注入-旧缓存保留" : "FAIL 缓存故障注入-旧缓存保留");
+            lines.Add(lockTmpOk ? "PASS 缓存故障注入-临时文件清理" : "FAIL 缓存故障注入-临时文件清理");
+            try { if (Directory.Exists(atomicDir)) Directory.Delete(atomicDir, true); } catch { }
+            ChannelCache.OverrideDir = null;
+
             // --- 配置序列化 ---
             var cfg = new AppConfig { ActivePlaylist = "测试源", Volume = 55 };
             cfg.Playlists.Add(new PlaylistSource { Name = "测试源", Url = "http://test.m3u8" });
@@ -108,6 +137,36 @@ public static class SelfTest
             }
             catch (Exception ex) { lines.Add("FAIL 配置序列化: " + ex.Message); }
             finally { try { File.Delete(cfgPath); } catch { } }
+
+            // --- 配置保存：DPAPI 落盘往返与失败恢复（隔离目录） ---
+            var cfgSaveDir = Path.Combine(Path.GetTempPath(), "tivimate_cfg_save_selftest");
+            try { if (Directory.Exists(cfgSaveDir)) Directory.Delete(cfgSaveDir, true); } catch { }
+            AppConfig.OverrideDir = cfgSaveDir;
+            var cfgSave = new AppConfig { Volume = 66, XtreamPassword = "selftest-secret" };
+            var cfgSaveOk = cfgSave.Save();
+            var cfgSaveFile = Path.Combine(cfgSaveDir, "config.json");
+            var cfgRaw = File.Exists(cfgSaveFile) ? File.ReadAllText(cfgSaveFile) : "";
+            lines.Add(cfgSaveOk && cfgRaw.Contains("DPAPI:") && !cfgRaw.Contains("selftest-secret")
+                ? "PASS 配置保存-落盘为DPAPI密文" : "FAIL 配置保存-落盘为DPAPI密文");
+            lines.Add(cfgSave.XtreamPassword == "selftest-secret"
+                ? "PASS 配置保存-成功后内存恢复明文" : "FAIL 配置保存-成功后内存恢复明文");
+            var cfgReload = AppConfig.Load();
+            lines.Add(cfgReload.XtreamPassword == "selftest-secret" && cfgReload.Volume == 66
+                ? "PASS 配置保存-重新加载解密一致" : "FAIL 配置保存-重新加载解密一致");
+            // 注入故障：独占锁住配置文件，保存应返回 false、内存仍为明文、旧文件字节不变
+            var cfgGoodBytes = File.ReadAllBytes(cfgSaveFile);
+            var cfgFailOk = false; var cfgMemOk = false; var cfgFileOk = false;
+            using (var fsLock2 = new FileStream(cfgSaveFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                cfgFailOk = !cfgSave.Save();
+                cfgMemOk = cfgSave.XtreamPassword == "selftest-secret";
+            }
+            cfgFileOk = File.ReadAllBytes(cfgSaveFile).SequenceEqual(cfgGoodBytes);
+            lines.Add(cfgFailOk ? "PASS 配置保存-占用时返回失败" : "FAIL 配置保存-占用时返回失败");
+            lines.Add(cfgMemOk ? "PASS 配置保存-失败后内存仍为明文" : "FAIL 配置保存-失败后内存仍为明文");
+            lines.Add(cfgFileOk ? "PASS 配置保存-失败不破坏旧文件" : "FAIL 配置保存-失败不破坏旧文件");
+            try { if (Directory.Exists(cfgSaveDir)) Directory.Delete(cfgSaveDir, true); } catch { }
+            AppConfig.OverrideDir = null;
 
             // --- 播放测试 ---
             if (playTest)

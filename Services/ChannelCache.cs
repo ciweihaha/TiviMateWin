@@ -41,21 +41,41 @@ public static class ChannelCache
         return new List<ChannelItem>();
     }
 
-    public static void Save(string sourceUrl, List<ChannelItem> channels)
+    /// <summary>
+    /// 保存频道缓存。成功返回 true；失败返回 false 并写入日志，旧缓存保持原样可读。
+    /// 替换走同目录临时文件 + File.Replace 原子换名：要么整体成功、要么不发生，
+    /// 不存在「旧文件已删、新文件未到」的窗口；替换失败不吞异常、不动旧文件。
+    /// </summary>
+    public static bool Save(string sourceUrl, List<ChannelItem> channels)
     {
-        try
+        lock (Gate)   // 串行化写盘，避免并发写同一/不同缓存文件时冲突
         {
-            lock (Gate)   // 串行化写盘，避免并发写同一/不同缓存文件时冲突
+            var path = PathFor(sourceUrl);
+            var tmp = path + ".tmp";
+            try
             {
                 Directory.CreateDirectory(CacheDir);
-                // 原子写：先写临时文件再替换，避免写一半崩溃留下损坏缓存
-                var path = PathFor(sourceUrl);
-                var tmp = path + ".tmp";
+                // 先把完整内容写到同目录（同卷）临时文件，再原子替换正式文件
                 File.WriteAllText(tmp, JsonSerializer.Serialize(channels));
-                if (File.Exists(path)) File.Delete(path);
-                File.Move(tmp, path);
+                if (File.Exists(path))
+                {
+                    var bak = path + ".bak";
+                    File.Replace(tmp, path, bak);
+                    try { File.Delete(bak); } catch { }
+                }
+                else
+                {
+                    File.Move(tmp, path);
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // 失败可观测：记录日志并向调用方返回 false；旧缓存文件不删除、不移动
+                AppLog.Error($"频道缓存保存失败（{path}）: {ex.Message}");
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                return false;
             }
         }
-        catch { }
     }
 }

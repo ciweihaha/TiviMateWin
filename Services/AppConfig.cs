@@ -67,7 +67,10 @@ public class AppConfig
             throw new InvalidOperationException("DPAPI 解密失败：存储的 Xtream 密码不可用", ex);
         }
     }
-    private static string Dir => Path.Combine(
+    /// <summary>测试隔离：SelfTest 可注入临时目录，避免污染真实配置</summary>
+    public static string? OverrideDir { get; set; }
+
+    private static string Dir => OverrideDir ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TiviMateWin");
     private static string ConfigPath => Path.Combine(Dir, "config.json");
 
@@ -97,19 +100,32 @@ public class AppConfig
         return new AppConfig();
     }
 
-    public void Save()
+    /// <summary>
+    /// 保存配置。成功返回 true；失败返回 false 并记录日志，调用方据此感知失败（不再静默吞掉）。
+    /// 内存中的 XtreamPassword 在 finally 中无条件恢复为保存前的明文——无论写盘成功、
+    /// 写盘失败还是加密抛错，都不会让 DPAPI 密文串留在会话里冒充密码。
+    /// </summary>
+    public bool Save()
     {
+        var plain = XtreamPassword;
         try
         {
             Directory.CreateDirectory(Dir);
-            // 保存前加密密码（若已是加密值则不重复加密）
-            var plain = XtreamPassword;
+            // 保存前加密密码（若已是加密值则不重复加密）；加密失败由 EncryptSecret 抛错（fail-closed）
             if (!string.IsNullOrEmpty(plain) && !plain.StartsWith("DPAPI:", StringComparison.Ordinal))
                 XtreamPassword = EncryptSecret(plain);
             File.WriteAllText(ConfigPath,
                 JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-            XtreamPassword = plain; // 恢复明文，供本次会话继续使用
+            return true;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Error($"配置保存失败: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            XtreamPassword = plain; // 恢复明文，供本次会话继续使用（成功、失败都执行）
+        }
     }
 }
