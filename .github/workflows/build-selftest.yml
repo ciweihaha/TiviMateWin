@@ -1,0 +1,40 @@
+name: Build & SelfTest
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-selftest:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build (Release)
+        run: dotnet build TiviMateWin.csproj -c Release
+
+      - name: Run --selftest
+        shell: pwsh
+        run: |
+          $exe = "bin\Release\net8.0-windows\win-x64\TiviMateWin.exe"
+          if (-not (Test-Path $exe)) { throw "build output not found: $exe" }
+          $log = Join-Path $env:TEMP "tivimate_selftest.txt"
+          if (Test-Path $log) { Remove-Item $log -Force }
+          $p = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList "--selftest" -Wait -PassThru
+          Write-Host "selftest exit code: $($p.ExitCode)"
+          $fail = $false
+          if ($p.ExitCode -ne 0) { $fail = $true }
+          if (Test-Path $log) {
+            Get-Content $log | ForEach-Object { Write-Host $_ }
+            if (Select-String -Path $log -Pattern '^FAIL' -Quiet) { $fail = $true }
+            if (-not (Select-String -Path $log -Pattern '^DONE' -Quiet)) { $fail = $true }
+          } else {
+            Write-Host "SELFTEST LOG NOT FOUND: $log"
+            $fail = $true
+          }
+          if ($fail) { exit 1 }
