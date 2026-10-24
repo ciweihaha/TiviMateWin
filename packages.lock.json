@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0-windows": {
+      "LibVLCSharp": {
+        "type": "Transitive",
+        "resolved": "3.10.1",
+        "contentHash": "lZovE6sHL0L4Q+sslAqLh+Eax3a8e9nPC9j414E8tjL41NxE6wudb0vAYKdlreFo6EFIZ4TCRdDJ1FAhEhSNJg=="
+      },
+      "LibVLCSharp.WPF": {
+        "type": "Direct",
+        "requested": "[3.10.1, )",
+        "resolved": "3.10.1",
+        "contentHash": "4QVNP+VER3yq5sHY83WuO3Ve36Z6ckf0kyel+JddS2SKukoPjxUeFNroQ13lgR4ljwgWDZeQyGl9hed1FkIyg==",
+        "dependencies": {
+          "LibVLCSharp": "3.10.1"
+        }
+      },
+      "System.Security.Cryptography.ProtectedData": {
+        "type": "Direct",
+        "requested": "[8.0.0, )",
+        "resolved": "8.0.0",
+        "contentHash": "hvcXZ/IR+KXxY9IC9S2izw5/fGYoODJR2r9kQSvs5v/HUAnBRuYYZPJrHzaT0CeDRJzIm8BHJb1ZrwHQ59j3uQ=="
+      },
+      "VideoLAN.LibVLC.Windows": {
+        "type": "Direct",
+        "requested": "[3.0.24, )",
+        "resolved": "3.0.24",
+        "contentHash": "Gt4kK5nSNVVZ7z7FnDHfwpLMQIqWTJ6fshFnP/OA3erUdBkj7L5PLmLrVxKEVSh0WFk5CXiwEu8Me/c3Db7g=="
+      }
+    },
+    "net8.0-windows/win-x64": {
+      "LibVLCSharp": {
+        "type": "Transitive",
+        "resolved": "3.10.1",
+        "contentHash": "lZovE6sHL0L4Q+sslAqLh+Eax3a8e9nPC9j414E8tjL41NxE6wudb0vAYKdlreFo6EFIZ4TCRdDJ1FAhEhSNJg=="
+      },
+      "LibVLCSharp.WPF": {
+        "type": "Direct",
+        "requested": "[3.10.1, )",
+        "resolved": "3.10.1",
+        "contentHash": "4QVNP+VER3yq5sHY83WuO3Ve36Z6ckf0kyel+JddS2SKukoPjxUeFNroQ13lgR4ljwgWDZeQyGl9hed1FkIyg==",
+        "dependencies": {
+          "LibVLCSharp": "3.10.1"
+        }
+      },
+      "System.Security.Cryptography.ProtectedData": {
+        "type": "Direct",
+        "requested": "[8.0.0, )",
+        "resolved": "8.0.0",
+        "contentHash": "hvcXZ/IR+KXxY9IC9S2izw5/fGYoODJR2r9kQSvs5v/HUAnBRuYYZPJrHzaT0CeDRJzIm8BHJb1ZrwHQ59j3uQ=="
+      },
+      "VideoLAN.LibVLC.Windows": {
+        "type": "Direct",
+        "requested": "[3.0.24, )",
+        "resolved": "3.0.24",
+        "contentHash": "Gt4kK5nSNVVZ7z7FnDHfwpLMQIqWTJ6fshFnP/OA3erUdBkj7L5PLmLrVxKEVSh0WFk5CXiwEu8Me/c3Db7g=="
+      }
+    }
+  }
+}
