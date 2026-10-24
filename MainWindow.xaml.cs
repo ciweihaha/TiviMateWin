@@ -102,6 +102,7 @@ public partial class MainWindow : Window
     // EPG 电子节目指南：频道id → 节目列表
     private Dictionary<string, List<EpgProgram>> _epg = new();
     private string? _epgUrl;
+    private int _epgSeq;   // F7：EPG 加载序号：只采纳最后一次请求的结果，防止旧结果覆盖新结果
 
     public MainWindow()
     {
@@ -156,13 +157,43 @@ public partial class MainWindow : Window
     {
         AppLog.Info($"start v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
         _config = AppConfig.Load();
+        // F2：仅在 Window_Loaded 检查一次 LastLoadError（每次 Load() 后不弹）。
+        // 三种语义严格区分，文案约束见 AppConfig.LastLoadError 注释。
+        if (!string.IsNullOrEmpty(AppConfig.LastLoadError))
+        {
+            string msg;
+            if (AppConfig.ReadFailurePending)
+            {
+                // 读盘失败：不得含“损坏”字样，也不得含保全路径。
+                msg = "配置读取失败，原文件未动，请重试。本次以默认配置启动（仅内存态），下一次保存前将提示确认，避免覆盖原文件。";
+            }
+            else if (AppConfig.LastLoadError.Contains("config.corrupt-"))
+            {
+                // 损坏：给出保全文件名（仅文件名，不给完整路径）。
+                var err = AppConfig.LastLoadError;
+                var idx = err.IndexOf("config.corrupt-", StringComparison.Ordinal);
+                var parts = err[idx..].Split(new[] { ' ', '"', '\'', '\r', '\n', '，', '。', ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                var fileName = parts.Length > 0 ? parts[0] : "config.corrupt-*.json";
+                msg = $"配置文件已损坏，已保全为 {fileName}，本次以默认配置启动。";
+            }
+            else if (AppConfig.LastLoadError.Contains("无法解密") || AppConfig.LastLoadError.Contains("重新输入"))
+            {
+                // 解密失败：不得提“配置文件损坏”或保全路径；其余设置已正常加载。
+                msg = "Xtream 登录凭据无法解密，已清空密码，请重新输入密码后保存；其余设置已正常加载。";
+            }
+            else
+            {
+                msg = AppConfig.LastLoadError;
+            }
+            MessageBox.Show(this, msg, "配置加载提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
         VolumeText.Text = $"音量 {_config.Volume}%";
         _aspectRatio = _config.AspectRatio ?? "";
         _playbackRate = (float)(_config.PlaybackRate > 0 ? _config.PlaybackRate : 1.0);
         RefreshPlaylistCombo();
         _ = EnsureEngineAsync();          // 后台初始化，不阻塞界面
         _progressTimer.Start();           // 进度条/时间刷新
-        await LoadPlaylistAsync(false, CancellationToken.None);   // 缓存优先秒开，再后台刷新
+        await LoadPlaylistAsync(false, _netCts.Token);   // F6(c)：初始加载改传 _netCts.Token，不再传 CancellationToken.None；缓存优先秒开，再后台刷新
         ChannelList.Focus();              // 启动焦点给频道列表（否则默认落在搜索框，方向键失效）
     }
 
@@ -220,18 +251,27 @@ public partial class MainWindow : Window
     private async Task LoadPlaylistAsync(bool forceRefresh, CancellationToken ct)
     {
         var seq = ++_loadSeq;   // 本次请求序号
-        await _loadGate.WaitAsync(ct);
         try
         {
-            // 若等待期间又有更新的加载请求，本次结果作废
-            if (seq != _loadSeq) return;
-            await LoadCoreAsync(forceRefresh, ct);
+            await _loadGate.WaitAsync(ct);
+            try
+            {
+                // 若等待期间又有更新的加载请求，本次结果作废
+                if (seq != _loadSeq) return;
+                await LoadCoreAsync(forceRefresh, ct);
+            }
+            finally { _loadGate.Release(); }
         }
-        finally { _loadGate.Release(); }
+        catch (OperationCanceledException)
+        {
+            // F6(c)：取消属正常关闭/切换，不上抛到 async void 的 Window_Loaded。
+        }
     }
 
     private async Task LoadCoreAsync(bool forceRefresh, CancellationToken ct)
     {
+        // F6(c)：触 UI 前检查取消/关闭状态。
+        if (_closing || ct.IsCancellationRequested) return;
         var src = _config.Playlists.FirstOrDefault(p => p.Name == _config.ActivePlaylist)
                   ?? _config.Playlists.FirstOrDefault();
         if (src is null)
@@ -246,6 +286,8 @@ public partial class MainWindow : Window
         if (!forceRefresh && _all.Count == 0)
         {
             var cached = await Task.Run(() => ChannelCache.Load(src.Url));
+            // F6(c)：缓存采纳（AdoptChannels 触 UI）前再检查取消/关闭。
+            if (_closing || ct.IsCancellationRequested) return;
             if (cached.Count > 0)
             {
                 AdoptChannels(cached);
@@ -259,6 +301,8 @@ public partial class MainWindow : Window
         {
             var text = await FetchTextAsync(src.Url, ct);
             var list = await Task.Run(() => M3uParser.Parse(text), ct);
+            // F6(c)：网络结果采纳（AdoptChannels 触 UI）前再检查取消/关闭。
+            if (_closing || ct.IsCancellationRequested) return;
             if (list.Count == 0 && text.Contains("#EXT-X-"))
             {
                 // 单流地址（HLS 直播流）：自动包装为单频道，直接贴流地址也能看
@@ -287,6 +331,11 @@ public partial class MainWindow : Window
             {
                 PlayState.Text = "播放列表为空";
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // F6(c)：取消透传给 LoadPlaylistAsync 统一静默处理，不写失败状态。
+            throw;
         }
         catch (Exception ex)
         {
@@ -475,6 +524,8 @@ public partial class MainWindow : Window
             AppLog.Error($"play failed [{ch.Name}] {AppConfig.RedactUrlForLog(url)}: {ex.Message}");
             return;                            // 失败不写断点、不抢焦点
         }
+        // F6(a)：_playGate 释放后、后续触 UI（焦点/断点保存）前再检查关闭状态。
+        if (_closing) return;
         AppLog.Info($"play [{ch.Name}] {AppConfig.RedactUrlForLog(url)}");
 
         // 应用用户设置的倍速与画面比例（MediaPlayer 级别，播放后生效）
@@ -810,7 +861,9 @@ public partial class MainWindow : Window
     {
         if (_pipWindow != null)
         {
-            try { _pipWindow.DetachEngine(); _pipWindow.Close(); } catch { }
+            // F6(b)：不调 PipWindow.DetachEngine，直接 Close()，让 PipWindow.Window_Closed 正常释放 _media/_player。
+            // 主窗口关闭路径仍先 DetachEngine 再 Close（见 Window_Closing），与本路径分离，避免重复释放。
+            try { _pipWindow.Close(); } catch { }
             _pipWindow = null;
         }
         _pipChannel = null;
@@ -1006,17 +1059,25 @@ public partial class MainWindow : Window
     /// <summary>加载 EPG 节目单（XMLTV）</summary>
     private async Task LoadEpgAsync(string url, CancellationToken ct)
     {
+        // F7：与 _loadSeq 同模式的序号，并捕获调用时的 url；完成时比对不一致则丢弃。
+        var seq = ++_epgSeq;
         try
         {
             var xml = await FetchTextAsync(url, ct);
             var epg = await Task.Run(() => EpgParser.Parse(xml), ct);
+            if (seq != _epgSeq || url != _epgUrl) return;   // 已有更新的 EPG 请求，丢弃旧结果，不覆盖 _epg、不刷新当前频道节目
             _epg = epg;
-            AppLog.Info($"epg loaded {epg.Count} channels from {url}");
+            AppLog.Info($"epg loaded {epg.Count} channels from {AppConfig.RedactUrlForLog(url)}");
             // 刷新当前频道节目显示
             if (_current != null) ShowEpgForChannel(_current);
         }
+        catch (OperationCanceledException)
+        {
+            // 取消属正常关闭/切换，静默返回。
+        }
         catch (Exception ex)
         {
+            // F7：失败不清空已有 _epg，仅记日志，当前节目显示保持旧数据。
             AppLog.Error($"epg load failed: {ex.Message}");
         }
     }
@@ -1071,6 +1132,8 @@ public partial class MainWindow : Window
             {
                 AdoptChannels(list);
                 _config.ActivePlaylist = "Xtream";
+                // F7：追加前先按 Name 去重，保证 Xtream 项恰为 1。
+                _config.Playlists.RemoveAll(p => p.Name == "Xtream");
                 _config.Playlists.Add(new PlaylistSource { Name = "Xtream", Url = $"{server}/get.php?type=live&output=m3u8" });
                 _config.Save();
                 PlayState.Text = $"已载入 {list.Count} 个频道（Xtream）";
@@ -1405,6 +1468,15 @@ public partial class MainWindow : Window
     private void Window_Closing(object sender, CancelEventArgs e)
     {
         _closing = true;                    // 挂起回调（自动跳台/防抖/看门狗）不再操作 UI
+        // F6(a)：尝试以短超时等待在途 PlayAsync 释放 _playGate；超时不无限阻塞关闭。
+        // 注意：Window_Closing 在 UI 线程同步执行，PlayAsync 的释放续体也需 UI 线程，
+        // 因此等待可能超时；超时仅记日志并继续关闭，_closing 守卫会阻止关闭后的后续 UI 操作。
+        try
+        {
+            if (_playGate.Wait(TimeSpan.FromSeconds(2))) _playGate.Release();
+            else AppLog.Error("window closing: play gate wait timed out, continuing close");
+        }
+        catch (Exception ex) { AppLog.Error($"window closing: play gate wait failed: {ex.Message}"); }
         _netCts.Cancel();                  // 取消挂起的网络拉取（播放列表/EPG/Xtream）
         _stallWatch.Stop();
         _switchDebounce.Stop();
