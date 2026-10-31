@@ -17,7 +17,7 @@
   <ItemGroup>
     <PackageReference Include="LibVLCSharp.WPF" Version="3.10.1" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" />
   </ItemGroup>
 
   <!-- 主题资源字典：不作为 Page 编译进程序集，而是作为 Content 复制到输出目录，运行时按相对路径加载 -->
