@@ -4,11 +4,11 @@
     "net8.0-windows7.0": {
       "LibVLCSharp.WPF": {
         "type": "Direct",
-        "requested": "[3.10.1, )",
-        "resolved": "3.10.1",
-        "contentHash": "aE/yQPT57bYl+xZ7decqS9TtwvWncIFOzyd7yauM4EWTW8XAfjjwp4HPEx/vh9+uE5GpskIM2EtUc7tyyDjoVQ==",
+        "requested": "[3.10.2, )",
+        "resolved": "3.10.2",
+        "contentHash": "jV7ThQIwaQxuLPLNWb1z7+qOGh6ctg/lBF5hVPfu+s+xI5HvtFEvCiYb8a88rEEd/g5WI/Llhy7ipeicAL5gsw==",
         "dependencies": {
-          "LibVLCSharp": "3.10.1"
+          "LibVLCSharp": "3.10.2"
         }
       },
       "System.Security.Cryptography.ProtectedData": {
@@ -25,8 +25,8 @@
       },
       "LibVLCSharp": {
         "type": "Transitive",
-        "resolved": "3.10.1",
-        "contentHash": "6iSrYMk6RU8fyftdXrfR1TW3xpR/WhEmliORuWvAu2N05wECb8k2hykWiU53/1zqx616v/qUlDbJJyqv78MDkQ=="
+        "resolved": "3.10.2",
+        "contentHash": "WNLHBIK5QcOH0kNGBGupKC9Ds3hksPthHyp6ueE8zG5Hy/6EBwAU0BbMqukBCdLatCOY+V9DYHDwSVSXSmPGSA=="
       }
     },
     "net8.0-windows7.0/win-x64": {}
