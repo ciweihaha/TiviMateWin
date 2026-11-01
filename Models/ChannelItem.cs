@@ -29,5 +29,30 @@ public class ChannelItem : INotifyPropertyChanged
     [JsonIgnore]
     public string FavoriteMark => IsFavorite ? "★" : "☆";
 
+    private bool _isPlaying;
+    /// <summary>是否为当前正在播放的频道（列表内高亮指示，V1.4）</summary>
+    [JsonIgnore]
+    public bool IsPlaying
+    {
+        get => _isPlaying;
+        set
+        {
+            if (_isPlaying == value) return;
+            _isPlaying = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPlaying)));
+        }
+    }
+
+    /// <summary>无 Logo 时的首字符占位（V1.4）</summary>
+    [JsonIgnore]
+    public string Initial
+    {
+        get
+        {
+            var s = Name?.TrimStart();
+            return string.IsNullOrEmpty(s) ? "?" : s[..1];
+        }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 }

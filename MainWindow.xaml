@@ -205,11 +205,12 @@
                 <TextBlock x:Name="CountText" DockPanel.Dock="Top" Text="0 个频道"
                            Foreground="{DynamicResource MutedFgBrush}" FontSize="12" Margin="14,2,12,6"/>
 
-                <ListBox x:Name="ChannelList" Margin="4,0,4,6" Background="Transparent" BorderThickness="0"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         VirtualizingPanel.VirtualizationMode="Recycling"
-                         VirtualizingPanel.IsVirtualizing="True"
-                         MouseDoubleClick="ChannelList_MouseDoubleClick">
+                <Grid Margin="4,0,4,6">
+                    <ListBox x:Name="ChannelList" Background="Transparent" BorderThickness="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             MouseDoubleClick="ChannelList_MouseDoubleClick">
                     <ListBox.ContextMenu>
                         <ContextMenu>
                             <MenuItem Header="小窗播放" Click="MiPip_Click"/>
@@ -229,6 +230,29 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <DockPanel Margin="8,2">
+                                <!-- 播放中指示条（V1.4）：当前频道左侧蓝色竖条 -->
+                                <Border Width="3" CornerRadius="1.5" Background="{DynamicResource AccentBrush}"
+                                        DockPanel.Dock="Left" Margin="-6,0,7,0">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                </Border>
+                                <!-- 频道 Logo（V1.4）：异步加载 + 磁盘缓存；无 Logo 时显示首字符占位 -->
+                                <Grid Width="24" Height="24" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0">
+                                    <Border x:Name="LogoFallback" CornerRadius="4" Background="#26808FA0">
+                                        <TextBlock Text="{Binding Initial}" FontSize="11" FontWeight="Bold"
+                                                   Foreground="{DynamicResource ItemFgBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <Image x:Name="LogoImg" Width="24" Height="24" Stretch="Uniform" Loaded="LogoImg_Loaded"/>
+                                </Grid>
                                 <TextBlock Text="{Binding Number}" Width="34" Foreground="{DynamicResource NumberFgBrush}" FontSize="12"
                                            VerticalAlignment="Center" DockPanel.Dock="Left"/>
                                 <Button Content="{Binding FavoriteMark}" Tag="{Binding}" Click="FavStar_Click"
@@ -245,6 +269,10 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
+                <TextBlock x:Name="NoMatchText" Grid.Row="0" Text="未找到匹配频道" Foreground="{DynamicResource MutedFgBrush}"
+                           FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Visibility="Collapsed" IsHitTestVisible="False"/>
+            </Grid>
             </DockPanel>
         </Border>
 
@@ -260,6 +288,22 @@
             </Grid.ColumnDefinitions>
 
             <lvc:VideoView x:Name="VideoView" Grid.Row="0" Grid.Column="0" Background="Black" Focusable="False"/>
+
+            <!-- 换台 OSD（V1.4）：频道号 + 名称 + 当前节目，右上角半透明卡片，3 秒自动隐藏 -->
+            <Border x:Name="ChannelOsd" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="0,16,16,0" Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
+                    CornerRadius="10" Padding="18,12" Visibility="Collapsed" IsHitTestVisible="False">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="OsdNumber" Text="" FontSize="34" FontWeight="Bold" Foreground="#FF4FA3E3"
+                               VerticalAlignment="Center" MinWidth="40" TextAlignment="Center"/>
+                    <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="OsdName" Text="" FontSize="17" FontWeight="SemiBold" Foreground="#FFE8EDF2"
+                                   MaxWidth="320" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock x:Name="OsdEpg" Text="" FontSize="12" Foreground="#FF9FB3C8" Margin="0,2,0,0"
+                                   MaxWidth="320" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
 
             <!-- EPG 节目单面板 -->
             <Border x:Name="EpgPanel" Grid.Row="0" Grid.Column="1" Width="260" Background="{DynamicResource EpgBgBrush}"

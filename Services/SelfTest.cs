@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Windows;   // SystemParameters（窗口位置校验自测用，无界面可访问）
 using LibVLCSharp.Shared;
 using TiviMateWin.Models;
 
@@ -123,6 +124,35 @@ public static class SelfTest
             lines.Add(lockTmpOk ? "PASS 缓存故障注入-临时文件清理" : "FAIL 缓存故障注入-临时文件清理");
             try { if (Directory.Exists(atomicDir)) Directory.Delete(atomicDir, true); } catch { }
             ChannelCache.OverrideDir = null;
+
+            // --- 数字键换台匹配逻辑（V1.4，纯逻辑） ---
+            var digitList = new List<ChannelItem>
+            {
+                new() { Number = 1, Name = "CCTV-1", Url = "http://d1.m3u8" },
+                new() { Number = 12, Name = "CCTV-12", Url = "http://d12.m3u8" },
+                new() { Number = 125, Name = "卫视125", Url = "http://d125.m3u8" },
+            };
+            lines.Add(DigitTuner.AppendDigit("", '1') == "1" ? "PASS 数字缓冲-追加" : "FAIL 数字缓冲-追加");
+            lines.Add(DigitTuner.AppendDigit("1234", '5') == "2345" ? "PASS 数字缓冲-超长截断" : "FAIL 数字缓冲-超长截断");
+            lines.Add(DigitTuner.AppendDigit("12", 'x') == "12" ? "PASS 数字缓冲-非数字忽略" : "FAIL 数字缓冲-非数字忽略");
+            lines.Add(DigitTuner.Match(digitList, "12")?.Name == "CCTV-12" ? "PASS 数字匹配-精确" : "FAIL 数字匹配-精确");
+            lines.Add(DigitTuner.Match(digitList, "999") == null ? "PASS 数字匹配-无号返回空" : "FAIL 数字匹配-无号返回空");
+            lines.Add(DigitTuner.HasLongerNumber(digitList, "1") && !DigitTuner.HasLongerNumber(digitList, "12")
+                ? "PASS 数字匹配-更长号码判定" : "FAIL 数字匹配-更长号码判定");
+            lines.Add(!DigitTuner.ShouldCommit(digitList, "1") && DigitTuner.ShouldCommit(digitList, "12") && !DigitTuner.ShouldCommit(digitList, "5")
+                ? "PASS 数字匹配-立即提交判定" : "FAIL 数字匹配-立即提交判定");
+
+            // --- 窗口位置校验（V1.4，基于当前虚拟桌面相对坐标，单屏/多屏均可断言） ---
+            var vl = SystemParameters.VirtualScreenLeft;
+            var vt = SystemParameters.VirtualScreenTop;
+            var vw = SystemParameters.VirtualScreenWidth;
+            var vh = SystemParameters.VirtualScreenHeight;
+            lines.Add(WindowPlacement.CanRestore(vl + vw / 2 - 400, vt + vh / 2 - 300, 800, 600)
+                ? "PASS 窗口校验-桌面中心可恢复" : "FAIL 窗口校验-桌面中心可恢复");
+            lines.Add(!WindowPlacement.CanRestore(vl - 5000, vt, 800, 600)
+                ? "PASS 窗口校验-屏幕外拒绝" : "FAIL 窗口校验-屏幕外拒绝");
+            lines.Add(!WindowPlacement.CanRestore(vl - 700, vt + 100, 800, 600)
+                ? "PASS 窗口校验-可见面积过小拒绝" : "FAIL 窗口校验-可见面积过小拒绝");
 
             // --- 配置序列化 ---
             var cfg = new AppConfig { ActivePlaylist = "测试源", Volume = 55 };

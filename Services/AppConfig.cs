@@ -34,6 +34,14 @@ public class AppConfig
     public string? XtreamUsername { get; set; }        // Xtream 用户名
     public string? XtreamPassword { get; set; }        // Xtream 密码（DPAPI 加密存储，读取时解密）
 
+    // 窗口位置记忆（V1.4）：null = 未记忆/使用默认定位；Maximized 只存标志，
+    // 恢复时位置字段仅在 IsOnAnyScreen 校验通过后应用，防止投影断开后窗口“消失”在屏幕外。
+    public double? WindowLeft { get; set; }
+    public double? WindowTop { get; set; }
+    public double? WindowWidth { get; set; }
+    public double? WindowHeight { get; set; }
+    public bool WindowMaximized { get; set; }
+
     // DPAPI 加密/解密 Xtream 密码：避免明文存盘
     // 存储格式：Base64(DPAPI(UTF8(明文)))，带 "DPAPI:" 前缀便于识别
     // 兼容旧配置：无前缀的旧明文密码直接返回（首次保存时自动加密）

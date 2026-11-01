@@ -104,6 +104,16 @@ public partial class MainWindow : Window
     private string? _epgUrl;
     private int _epgSeq;   // F7：EPG 加载序号：只采纳最后一次请求的结果，防止旧结果覆盖新结果
 
+    // 数字键换台（V1.4）：输入缓冲 + 超时确认；匹配规则在 DigitTuner（纯逻辑可自测）
+    private string _digitBuf = "";
+    private readonly DispatcherTimer _digitTimer = new() { Interval = TimeSpan.FromMilliseconds(1200) };
+    // 换台 OSD（V1.4）：右上角频道号+名称+当前节目卡片，3 秒自动隐藏
+    private readonly DispatcherTimer _osdHideTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    // EPG 时效刷新（V1.4）：每分钟刷新“正在播放”，避免长时间停留时节目过期
+    private readonly DispatcherTimer _epgRefreshTimer = new() { Interval = TimeSpan.FromMinutes(1) };
+    // 当前处于播放态的列表项引用（列表高亮用；AdoptChannels 整体替换列表后按 Url 恢复）
+    private ChannelItem? _playingItem;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -121,6 +131,9 @@ public partial class MainWindow : Window
         _fsHideTimer.Tick += (_, _) => { _fsHideTimer.Stop(); FullscreenOverlay.Visibility = Visibility.Collapsed; };
         _stallWatch.Tick += OnStallWatchTick;
         _progressTimer.Tick += (_, _) => UpdateProgress();
+        _digitTimer.Tick += (_, _) => CommitDigits();
+        _osdHideTimer.Tick += (_, _) => { _osdHideTimer.Stop(); ChannelOsd.Visibility = Visibility.Collapsed; };
+        _epgRefreshTimer.Tick += (_, _) => OnEpgRefreshTick();
 
         // 焦点守护：窗口激活/VLC原生窗口拖走焦点时，把键盘焦点还给频道列表，保证↑↓换台始终可用
         Activated += OnWindowActivated;
@@ -157,6 +170,7 @@ public partial class MainWindow : Window
     {
         AppLog.Info($"start v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
         _config = AppConfig.Load();
+        RestoreWindowPlacement();   // V1.4：恢复上次窗口位置/尺寸（边界校验通过才应用）
         // F2：仅在 Window_Loaded 检查一次 LastLoadError（每次 Load() 后不弹）。
         // 三种语义严格区分，文案约束见 AppConfig.LastLoadError 注释。
         if (!string.IsNullOrEmpty(AppConfig.LastLoadError))
@@ -193,6 +207,7 @@ public partial class MainWindow : Window
         RefreshPlaylistCombo();
         _ = EnsureEngineAsync();          // 后台初始化，不阻塞界面
         _progressTimer.Start();           // 进度条/时间刷新
+        _epgRefreshTimer.Start();         // EPG 每分钟刷新（V1.4）
         await LoadPlaylistAsync(false, _netCts.Token);   // F6(c)：初始加载改传 _netCts.Token，不再传 CancellationToken.None；缓存优先秒开，再后台刷新
         ChannelList.Focus();              // 启动焦点给频道列表（否则默认落在搜索框，方向键失效）
     }
@@ -350,6 +365,7 @@ public partial class MainWindow : Window
         foreach (var c in list) c.IsFavorite = favs.Contains(c.Url);
 
         var keepUrl = _current?.Url;
+        var wasPlayingUrl = _playingItem?.Url;   // V1.4：旧列表中处于播放态的频道，新列表中恢复高亮
         _all = list;
         _view = CollectionViewSource.GetDefaultView(_all);   // 重新绑定视图（_all 被整体替换）
         ChannelList.ItemsSource = _view;
@@ -360,7 +376,16 @@ public partial class MainWindow : Window
         if (keepUrl != null)
         {
             var again = _all.FirstOrDefault(c => c.Url == keepUrl);
-            if (again != null) { _current = again; SelectInList(again); }
+            if (again != null)
+            {
+                _current = again;
+                if (wasPlayingUrl == keepUrl)
+                {
+                    _playingItem = again;
+                    again.IsPlaying = true;
+                }
+                SelectInList(again);
+            }
         }
     }
 
@@ -446,6 +471,9 @@ public partial class MainWindow : Window
         }
 
         CountText.Text = $"{_view.Cast<ChannelItem>().Count()} 个频道";
+        // V1.4：有频道但被过滤得一个不剩时，给出明确反馈而不是空白列表
+        NoMatchText.Visibility = _all.Count > 0 && !_view.Cast<ChannelItem>().Any()
+            ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void SelectInList(ChannelItem ch)
@@ -485,6 +513,7 @@ public partial class MainWindow : Window
         PlayState.Text = "连接中…";
         EmptyState.Visibility = Visibility.Collapsed;
         ShowOsd();
+        ShowChannelOsd(ch);   // V1.4：换台 OSD（频道号+名称+当前节目）
         _isPaused = false;
         BtnPlayPause.Content = "⏸";
         FsPlayPause.Content = "⏸";
@@ -527,6 +556,10 @@ public partial class MainWindow : Window
         // F6(a)：_playGate 释放后、后续触 UI（焦点/断点保存）前再检查关闭状态。
         if (_closing) return;
         AppLog.Info($"play [{ch.Name}] {AppConfig.RedactUrlForLog(url)}");
+
+        // V1.4：标记正在播放的频道（列表高亮）+ 标题栏同步频道名
+        SetPlayingChannel(ch);
+        Title = "星辰直播 - " + ch.Name;
 
         // 应用用户设置的倍速与画面比例（MediaPlayer 级别，播放后生效）
         try
@@ -591,6 +624,8 @@ public partial class MainWindow : Window
             _player.Stop();
             _current = null;
             _isPaused = false;
+            ClearPlayingChannel();          // V1.4：取消列表播放高亮
+            Title = "星辰直播";             // V1.4：标题栏恢复
             BtnPlayPause.Content = "⏸";
             FsPlayPause.Content = "⏸";
             SeekBar.Value = 0;
@@ -791,6 +826,145 @@ public partial class MainWindow : Window
         AppLog.Info("layout reset");
     }
 
+    // ---------- 数字键换台 / 换台 OSD / 播放高亮（V1.4） ----------
+
+    /// <summary>数字键输入：缓冲 → OSD 预览 → 唯一匹配立即提交，否则 1.2s 超时提交</summary>
+    private void HandleDigit(char d)
+    {
+        _digitBuf = DigitTuner.AppendDigit(_digitBuf, d);
+        OsdNumber.Text = _digitBuf;
+        OsdName.Text = "输入频道号…";
+        OsdEpg.Text = "";
+        ChannelOsd.Visibility = Visibility.Visible;
+        _osdHideTimer.Stop();
+        _osdHideTimer.Start();
+        if (DigitTuner.ShouldCommit(_all, _digitBuf))
+        {
+            CommitDigits();
+            return;
+        }
+        _digitTimer.Stop();
+        _digitTimer.Start();
+    }
+
+    /// <summary>提交当前数字缓冲：匹配频道则换台，无匹配则提示后消失</summary>
+    private void CommitDigits()
+    {
+        _digitTimer.Stop();
+        var buf = _digitBuf;
+        _digitBuf = "";
+        if (buf.Length == 0) return;
+        if (_closing) return;
+        var ch = DigitTuner.Match(_all, buf);
+        if (ch is null)
+        {
+            OsdNumber.Text = buf;
+            OsdName.Text = $"无 {buf} 号频道";
+            OsdEpg.Text = "";
+            ChannelOsd.Visibility = Visibility.Visible;
+            _osdHideTimer.Stop();
+            _osdHideTimer.Start();
+            AppLog.Info($"digit tune miss: {buf}");
+            return;
+        }
+        SelectInList(ch);
+        NowPlaying.Text = ch.Name;
+        ShowChannelOsd(ch);
+        _ = PlayAsync(ch);
+    }
+
+    /// <summary>换台 OSD：右上角频道号 + 名称 + 当前节目，3 秒自动隐藏（数字输入中不覆盖）</summary>
+    private void ShowChannelOsd(ChannelItem ch)
+    {
+        if (_digitBuf.Length > 0) return;
+        OsdNumber.Text = ch.Number > 0 ? ch.Number.ToString() : "";
+        OsdName.Text = ch.Name;
+        var now = DateTime.Now;
+        var cur = GetPrograms(ch).FirstOrDefault(p => p.Start <= now && now < p.Stop);
+        OsdEpg.Text = cur != null ? $"正在播放 {cur.TimeRange}  {cur.Title}" : "";
+        ChannelOsd.Visibility = Visibility.Visible;
+        _osdHideTimer.Stop();
+        _osdHideTimer.Start();
+    }
+
+    /// <summary>标记正在播放的列表项（左侧蓝色指示条）；旧项取消高亮</summary>
+    private void SetPlayingChannel(ChannelItem ch)
+    {
+        if (ReferenceEquals(_playingItem, ch)) return;
+        var old = _playingItem;
+        _playingItem = ch;
+        if (old != null) old.IsPlaying = false;
+        ch.IsPlaying = true;
+    }
+
+    /// <summary>清除播放态高亮（停止播放/切换源时）</summary>
+    private void ClearPlayingChannel()
+    {
+        if (_playingItem is null) return;
+        _playingItem.IsPlaying = false;
+        _playingItem = null;
+    }
+
+    /// <summary>EPG 每分钟刷新：节目跨档后“正在播放”保持准确，OSD 可见时同步刷新</summary>
+    private void OnEpgRefreshTick()
+    {
+        if (_closing || _current is null) return;
+        ShowEpgForChannel(_current);
+        if (ChannelOsd.Visibility == Visibility.Visible && _digitBuf.Length == 0)
+            ShowChannelOsd(_current);   // 顺带重置隐藏计时，刷新后重新计 3 秒
+    }
+
+    /// <summary>频道 Logo 异步加载：内存/磁盘缓存命中即显示，失败留在首字符占位</summary>
+    private void LogoImg_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Image img) return;
+        img.Source = null;
+        if (img.DataContext is not ChannelItem ch || string.IsNullOrWhiteSpace(ch.Logo)) return;
+        _ = LoadLogoInto(img, ch.Logo);
+    }
+
+    private async Task LoadLogoInto(Image img, string url)
+    {
+        var bmp = await LogoService.GetAsync(url);
+        // 虚拟化回收后 DataContext 可能已换绑到其他频道：仅当仍是原图请求时才赋值
+        if (img.DataContext is not ChannelItem cur || cur.Logo != url) return;
+        img.Source = bmp;
+        if (img.Parent is Grid g && g.Children.Count > 0 && g.Children[0] is Border fallback)
+            fallback.Visibility = bmp != null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    // ---------- 窗口位置记忆（V1.4） ----------
+
+    /// <summary>启动时恢复上次窗口位置/尺寸：校验通过才应用，最大化状态单独恢复</summary>
+    private void RestoreWindowPlacement()
+    {
+        if (_config.WindowMaximized) WindowState = WindowState.Maximized;
+        if (_config.WindowWidth is double w && _config.WindowHeight is double h &&
+            w >= MinWidth && h >= MinHeight &&
+            _config.WindowLeft is double l && _config.WindowTop is double t &&
+            WindowPlacement.CanRestore(l, t, w, h))
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = l;
+            Top = t;
+            Width = w;
+            Height = h;
+        }
+    }
+
+    /// <summary>关闭时保存窗口位置/尺寸；最大化只记标志，避免存下异常坐标</summary>
+    private void SaveWindowPlacement()
+    {
+        if (WindowState == WindowState.Normal && !_fullscreen)
+        {
+            _config.WindowLeft = Left;
+            _config.WindowTop = Top;
+            _config.WindowWidth = Width;
+            _config.WindowHeight = Height;
+        }
+        _config.WindowMaximized = WindowState == WindowState.Maximized;
+    }
+
     // ---------- 小窗播放（画中画） ----------
 
     private void BtnPip_Click(object sender, RoutedEventArgs e)
@@ -925,6 +1099,8 @@ public partial class MainWindow : Window
         var p = _player;
         if (p is { IsPlaying: true }) _ = Task.Run(() => { try { p.Stop(); } catch { } });
         _current = null;
+        ClearPlayingChannel();
+        Title = "星辰直播";
         NowPlaying.Text = "未播放";
         PlayState.Text = "未播放";
         _ = LoadPlaylistAsync(true, _netCts.Token);
@@ -943,6 +1119,8 @@ public partial class MainWindow : Window
             var p = _player;
             if (p is { IsPlaying: true }) _ = Task.Run(() => { try { p.Stop(); } catch { } });
             _current = null;
+            ClearPlayingChannel();
+            Title = "星辰直播";
             NowPlaying.Text = "未播放";
             PlayState.Text = "未播放";
             _ = LoadPlaylistAsync(false, _netCts.Token);
@@ -1282,6 +1460,19 @@ public partial class MainWindow : Window
     {
         if (Keyboard.FocusedElement is TextBox or MenuItem or ComboBox) return false; // 输入/菜单/下拉中不接管
 
+        // 数字键换台（V1.4）：主键盘 + 小键盘，无修饰键时拦截
+        var k = (int)key;
+        if (Keyboard.Modifiers == ModifierKeys.None && k is >= (int)Key.D0 and <= (int)Key.D9)
+        {
+            HandleDigit((char)('0' + (k - (int)Key.D0)));
+            return true;
+        }
+        if (Keyboard.Modifiers == ModifierKeys.None && k is >= (int)Key.NumPad0 and <= (int)Key.NumPad9)
+        {
+            HandleDigit((char)('0' + (k - (int)Key.NumPad0)));
+            return true;
+        }
+
         switch (key)
         {
             case Key.Tab when Keyboard.Modifiers == ModifierKeys.None:
@@ -1360,6 +1551,7 @@ public partial class MainWindow : Window
         _switchDebounce.Stop();
         _switchDebounce.Start();
         ShowOsd();
+        ShowChannelOsd(ch);                    // V1.4：换台 OSD 即时预览
     }
 
     // ---------- 坏源容错 ----------
@@ -1468,6 +1660,7 @@ public partial class MainWindow : Window
     private void Window_Closing(object sender, CancelEventArgs e)
     {
         _closing = true;                    // 挂起回调（自动跳台/防抖/看门狗）不再操作 UI
+        SaveWindowPlacement();              // V1.4：记忆窗口位置/尺寸
         // F6(a)：尝试以短超时等待在途 PlayAsync 释放 _playGate；超时不无限阻塞关闭。
         // 注意：Window_Closing 在 UI 线程同步执行，PlayAsync 的释放续体也需 UI 线程，
         // 因此等待可能超时；超时仅记日志并继续关闭，_closing 守卫会阻止关闭后的后续 UI 操作。
@@ -1484,6 +1677,9 @@ public partial class MainWindow : Window
         _fsHideTimer.Stop();
         _searchDebounce.Stop();
         _saveDebounce.Stop();
+        _digitTimer.Stop();
+        _osdHideTimer.Stop();
+        _epgRefreshTimer.Stop();
         // 取消订阅静态事件，避免窗口对象被静态引用导致无法回收（内存泄漏）
         ComponentDispatcher.ThreadFilterMessage -= OnThreadFilterMessage;
         Activated -= OnWindowActivated;
