@@ -85,6 +85,15 @@ public static class SelfTest
             var epgNospace = EpgParser.Parse("<tv><programme start=\"20260101120000+0800\" stop=\"20260101130000+0800\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
             lines.Add(epgNospace.TryGetValue("cctv1", out var nsList) && nsList.Count == 1 && nsList[0].Start == epg["cctv1"][0].Start
                 ? "PASS EPG解析-有无空格偏移等价" : "FAIL EPG时区-有无空格偏移不等价");
+            // 深查第 3 轮：冒号偏移 +08:00（ISO 8601 写法）须与 +0800 等价换算，
+            // 其 UTC 时刻为 04:00/05:00（与机器时区无关的断言）；无空格冒号写法亦然。
+            var epgColon = EpgParser.Parse("<tv><programme start=\"20260101120000 +08:00\" stop=\"20260101130000 +08:00\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
+            lines.Add(epgColon.TryGetValue("cctv1", out var coList) && coList.Count == 1 && coList[0].Start == epg["cctv1"][0].Start && coList[0].Stop == epg["cctv1"][0].Stop
+                ? "PASS EPG解析-冒号偏移等价" : "FAIL EPG时区-冒号偏移不等价");
+            var epgColonNospace = EpgParser.Parse("<tv><programme start=\"20260101120000+08:00\" stop=\"20260101130000+08:00\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
+            lines.Add(epgColonNospace.TryGetValue("cctv1", out var cnList) && cnList.Count == 1 && cnList[0].Start.ToUniversalTime() == new DateTime(2026, 1, 1, 4, 0, 0, DateTimeKind.Utc) &&
+                      cnList[0].Stop.ToUniversalTime() == new DateTime(2026, 1, 1, 5, 0, 0, DateTimeKind.Utc)
+                ? "PASS EPG解析-冒号偏移无空格换算" : "FAIL EPG时区-冒号偏移无空格换算");
 
             // --- EPG 空输入 ---
             lines.Add(EpgParser.Parse("").Count == 0 ? "PASS EPG空输入" : "FAIL EPG空输入");
