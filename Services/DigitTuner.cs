@@ -27,12 +27,15 @@ public static class DigitTuner
     }
 
     /// <summary>是否存在以当前输入为前缀的更大号码（如输入 "1" 时存在 ≥10 号）。
-    /// 存在则不能立即提交（用户可能还想输入下一位），须等待超时。</summary>
+    /// 存在则不能立即提交（用户可能还想输入下一位），须等待超时。
+    /// 深查第 1 轮：旧实现用 (n+1)*10 作下界，输入 "12" 时下界 130，
+    /// 把已存在的 125 漏掉，误判为可立即提交。现改为字符串前缀判定：
+    /// 号码文本以 buf 开头且位数更多，即为更长号码。</summary>
     public static bool HasLongerNumber(IEnumerable<ChannelItem> list, string buf)
     {
-        if (buf.Length == 0 || !int.TryParse(buf, out var n)) return false;
-        var lowerBound = (n + 1) * 10;   // 更长号码的区间下界：10^n ~ 10^(n+1)-1
-        return list.Any(c => c.Number >= lowerBound);
+        if (buf.Length == 0 || !int.TryParse(buf, out _)) return false;
+        return list.Any(c => c.Number.ToString().StartsWith(buf, StringComparison.Ordinal)
+            && c.Number.ToString().Length > buf.Length);
     }
 
     /// <summary>是否可立即提交（存在精确匹配且不存在更长号码）。</summary>
