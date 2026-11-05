@@ -105,6 +105,52 @@ public class AppConfig
         return kept.Count == 0 ? baseUrl + fragment : baseUrl + "?" + string.Join("&", kept) + fragment;
     }
 
+    // 缓存键脱敏（供 LogoService.DiskPath/内存缓存键使用，不改 StripCredentialQuery 本身，
+    // 以免影响配置落盘语义）。实读缺口：StripCredentialQuery 仅在含 password= 时才剥离，
+    // 且不处理 userinfo——以下两种带凭据 logo URL 会原样进入原哈希输入：
+    // （1）仅含 username=（无 password=）时原方法原样返回；
+    // （2）scheme://user[:pass]@host 形式的 userinfo 不在 query 中，原方法不动。
+    // 本方法先走 StripCredentialQuery，再无条件补剥 username=/password=、剥离 userinfo、
+    // 并去掉 fragment（fragment 不发往服务器、不影响响应字节，同图不应多键）；
+    // 其余 query 参数原样保留，避免仅 query 不同的图片误撞同一缓存键。
+    // 未处理：token= 等其他参数——仓库内无 logo URL 带此类参数的证据，不凭空扩展剥离表；
+    // 幂等：对已脱敏地址再跑一次结果不变，LogoService 两处调用可安全叠加。
+    internal static string StripCredentialsForCacheKey(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return url;
+        var stripped = StripCredentialQuery(url);
+        var hash = stripped.IndexOf('#');
+        if (hash >= 0) stripped = stripped[..hash];
+        var scheme = stripped.IndexOf("://", StringComparison.Ordinal);
+        if (scheme >= 0)
+        {
+            var authStart = scheme + 3;
+            var authEnd = stripped.IndexOfAny(new[] { '/', '?' }, authStart);
+            if (authEnd < 0) authEnd = stripped.Length;
+            if (authEnd > authStart)
+            {
+                var at = stripped.LastIndexOf('@', authEnd - 1, authEnd - authStart);
+                if (at >= authStart) stripped = stripped[..authStart] + stripped[(at + 1)..];
+            }
+        }
+        var q = stripped.IndexOf('?');
+        if (q >= 0)
+        {
+            var kept = new List<string>();
+            foreach (var part in stripped[(q + 1)..].Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eq = part.IndexOf('=');
+                var key = eq >= 0 ? part[..eq] : part;
+                if (key.Equals("username", StringComparison.OrdinalIgnoreCase) ||
+                    key.Equals("password", StringComparison.OrdinalIgnoreCase)) continue;
+                kept.Add(part);
+            }
+            var baseUrl = stripped[..q];
+            stripped = kept.Count == 0 ? baseUrl : baseUrl + "?" + string.Join("&", kept);
+        }
+        return stripped;
+    }
+
     // 日志脱敏：只留 scheme://host[:port]+path，剥离 query 与 fragment；非绝对地址则剥离 ? 之后部分。
     internal static string RedactUrlForLog(string url)
     {
