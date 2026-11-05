@@ -145,9 +145,9 @@ public static class SelfTest
             lines.Add(DigitTuner.AppendDigit("12", 'x') == "12" ? "PASS 数字缓冲-非数字忽略" : "FAIL 数字缓冲-非数字忽略");
             lines.Add(DigitTuner.Match(digitList, "12")?.Name == "CCTV-12" ? "PASS 数字匹配-精确" : "FAIL 数字匹配-精确");
             lines.Add(DigitTuner.Match(digitList, "999") == null ? "PASS 数字匹配-无号返回空" : "FAIL 数字匹配-无号返回空");
-            lines.Add(DigitTuner.HasLongerNumber(digitList, "1") && !DigitTuner.HasLongerNumber(digitList, "12")
+            lines.Add(DigitTuner.HasLongerNumber(digitList, "1") && DigitTuner.HasLongerNumber(digitList, "12") && !DigitTuner.HasLongerNumber(digitList, "125") && !DigitTuner.HasLongerNumber(digitList, "5")
                 ? "PASS 数字匹配-更长号码判定" : "FAIL 数字匹配-更长号码判定");
-            lines.Add(!DigitTuner.ShouldCommit(digitList, "1") && DigitTuner.ShouldCommit(digitList, "12") && !DigitTuner.ShouldCommit(digitList, "5")
+            lines.Add(!DigitTuner.ShouldCommit(digitList, "1") && !DigitTuner.ShouldCommit(digitList, "12") && DigitTuner.ShouldCommit(digitList, "125") && !DigitTuner.ShouldCommit(digitList, "5")
                 ? "PASS 数字匹配-立即提交判定" : "FAIL 数字匹配-立即提交判定");
 
             // --- 窗口位置校验（V1.4，基于当前虚拟桌面相对坐标，单屏/多屏均可断言） ---
