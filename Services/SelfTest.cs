@@ -94,6 +94,23 @@ public static class SelfTest
             lines.Add(epgColonNospace.TryGetValue("cctv1", out var cnList) && cnList.Count == 1 && cnList[0].Start.ToUniversalTime() == new DateTime(2026, 1, 1, 4, 0, 0, DateTimeKind.Utc) &&
                       cnList[0].Stop.ToUniversalTime() == new DateTime(2026, 1, 1, 5, 0, 0, DateTimeKind.Utc)
                 ? "PASS EPG解析-冒号偏移无空格换算" : "FAIL EPG时区-冒号偏移无空格换算");
+            // 深查第 4 轮：Z 后缀（ISO 8601 UTC 标志）须与 +0000 等价换算，
+            // 其 UTC 时刻为 12:00/13:00（与机器时区无关的断言）；带空格写法亦然。
+            var epgZ = EpgParser.Parse("<tv><programme start=\"20260101120000Z\" stop=\"20260101130000Z\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
+            lines.Add(epgZ.TryGetValue("cctv1", out var zList) && zList.Count == 1 && zList[0].Start.ToUniversalTime() == new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc) &&
+                      zList[0].Stop.ToUniversalTime() == new DateTime(2026, 1, 1, 13, 0, 0, DateTimeKind.Utc)
+                ? "PASS EPG解析-Z后缀等价+0000换算" : "FAIL EPG时区-Z后缀不等价+0000");
+            var epgZSpace = EpgParser.Parse("<tv><programme start=\"20260101120000 Z\" stop=\"20260101130000 Z\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
+            var epgZero = EpgParser.Parse("<tv><programme start=\"20260101120000 +0000\" stop=\"20260101130000 +0000\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
+            lines.Add(epgZSpace.TryGetValue("cctv1", out var zsList) && zsList.Count == 1 &&
+                      epgZero.TryGetValue("cctv1", out var zeList) && zeList.Count == 1 &&
+                      zsList[0].Start == zeList[0].Start && zsList[0].Stop == zeList[0].Stop
+                ? "PASS EPG解析-Z后缀带空格等价+0000" : "FAIL EPG时区-Z后缀带空格不等价+0000");
+            // 深查第 4 轮回归守卫：无偏移（既无 Z 也无 +/-）仍原样返回墙钟时间，口径不变。
+            var epgPlain = EpgParser.Parse("<tv><programme start=\"20260101120000\" stop=\"20260101130000\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
+            lines.Add(epgPlain.TryGetValue("cctv1", out var pList) && pList.Count == 1 && pList[0].Start == new DateTime(2026, 1, 1, 12, 0, 0) &&
+                      pList[0].Stop == new DateTime(2026, 1, 1, 13, 0, 0)
+                ? "PASS EPG解析-无偏移仍为墙钟时间" : "FAIL EPG时区-无偏移墙钟改变");
 
             // --- EPG 空输入 ---
             lines.Add(EpgParser.Parse("").Count == 0 ? "PASS EPG空输入" : "FAIL EPG空输入");
