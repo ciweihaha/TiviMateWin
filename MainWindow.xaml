@@ -219,12 +219,12 @@
                             <MenuItem Header="隐藏频道" Click="MiHide_Click"/>
                             <MenuItem Header="复制频道地址" Click="MiCopy_Click"/>
                             <Separator/>
-                            <MenuItem Header="排序">
-                                <MenuItem x:Name="SortByNumber" Header="按号码" IsCheckable="True" IsChecked="True"
-                                          Click="SortByNumber_Click"/>
-                                <MenuItem x:Name="SortByName" Header="按名称" IsCheckable="True"
-                                          Click="SortByName_Click"/>
-                            </MenuItem>
+                            <!-- 2026-11-05 第 2 轮：排序由二级子菜单拍平为一级菜单项，少一次悬停展开；
+                                 名称、勾选态、点击处理均不变，不改排序逻辑、不改分组逻辑。 -->
+                            <MenuItem x:Name="SortByNumber" Header="按号码" IsCheckable="True" IsChecked="True"
+                                      Click="SortByNumber_Click"/>
+                            <MenuItem x:Name="SortByName" Header="按名称" IsCheckable="True"
+                                      Click="SortByName_Click"/>
                         </ContextMenu>
                     </ListBox.ContextMenu>
                     <ListBox.ItemTemplate>
