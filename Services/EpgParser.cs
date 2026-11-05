@@ -71,8 +71,8 @@ public static class EpgParser
         return result;
     }
 
-    /// <summary>解析 XMLTV 时间格式：yyyyMMddHHmmss +ZZZZ（如 20260101120000 +0800）。
-    /// 返回本地时间：有偏移时按偏移换算为本机本地时间（调用方 ShowEpgForChannel
+    /// <summary>解析 XMLTV 时间格式：yyyyMMddHHmmss +ZZZZ（如 20260101120000 +0800），
+    /// 偏移也接受 ISO 8601 冒号写法 +08:00。返回本地时间：有偏移时按偏移换算为本机本地时间（调用方 ShowEpgForChannel
     /// 用 DateTime.Now 比较、TimeRange 直接显示本地时间，口径须一致）；无偏移时原样返回墙钟时间。</summary>
     private static DateTime ParseXmltvTime(string s)
     {
@@ -102,7 +102,12 @@ public static class EpgParser
             {
                 var sign = s[off] == '+' ? 1 : -1;
                 var oh = int.Parse(s.Substring(off + 1, 2));
-                var om = int.Parse(s.Substring(off + 3, 2));
+                // 冒号偏移 +08:00（ISO 8601 写法，XMLTV DTD 称时间格式“loosely based on
+                // ISO 8601”）：冒号后有两位数字时跳过冒号再读分钟；否则不跳过、
+                // 仍走原有解析路径，截断偏移的行为与改前一致。
+                var miOff = off + 3;
+                if (miOff < s.Length && s[miOff] == ':' && miOff + 3 <= s.Length) miOff++;
+                var om = int.Parse(s.Substring(miOff, 2));
                 var offset = new TimeSpan(sign * oh, sign * om, 0);
                 return new DateTimeOffset(dt, offset).LocalDateTime;
             }
