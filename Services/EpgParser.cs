@@ -71,7 +71,9 @@ public static class EpgParser
         return result;
     }
 
-    /// <summary>解析 XMLTV 时间格式：yyyyMMddHHmmss +ZZZZ（如 20260101120000 +0800）</summary>
+    /// <summary>解析 XMLTV 时间格式：yyyyMMddHHmmss +ZZZZ（如 20260101120000 +0800）。
+    /// 返回本地时间：有偏移时按偏移换算为本机本地时间（调用方 ShowEpgForChannel
+    /// 用 DateTime.Now 比较、TimeRange 直接显示本地时间，口径须一致）；无偏移时原样返回墙钟时间。</summary>
     private static DateTime ParseXmltvTime(string s)
     {
         if (string.IsNullOrEmpty(s)) return DateTime.MinValue;
@@ -89,14 +91,20 @@ public static class EpgParser
 
             var dt = new DateTime(y, mo, d, h, mi, se, DateTimeKind.Unspecified);
 
-            // 处理时区偏移 +ZZZZ
-            if (s.Length >= 19 && (s[14] == '+' || s[14] == '-'))
+            // 处理时区偏移 +ZZZZ。XMLTV 标准写法在偏移前有一个空格
+            //（如 20260101120000 +0800），旧实现只认 s[14] 为 +/-，
+            // 标准写法 s[14] 是空格导致偏移被静默丢弃；而无空格写法
+            // 又把结果换算成 UTC，与调用方的本地时间比较口径不一。
+            // 现统一跳过可选空格再读偏移，并换算为本地时间返回。
+            var off = 14;
+            if (off < s.Length && s[off] == ' ') off++;
+            if (off + 5 <= s.Length && (s[off] == '+' || s[off] == '-'))
             {
-                var sign = s[14] == '+' ? 1 : -1;
-                var oh = int.Parse(s.Substring(15, 2));
-                var om = int.Parse(s.Substring(17, 2));
-                var offset = TimeSpan.FromHours(oh) + TimeSpan.FromMinutes(om);
-                dt = dt.Add(-sign * offset);
+                var sign = s[off] == '+' ? 1 : -1;
+                var oh = int.Parse(s.Substring(off + 1, 2));
+                var om = int.Parse(s.Substring(off + 3, 2));
+                var offset = new TimeSpan(sign * oh, sign * om, 0);
+                return new DateTimeOffset(dt, offset).LocalDateTime;
             }
             return dt;
         }

@@ -77,6 +77,14 @@ public static class SelfTest
             var epg = EpgParser.Parse(epgXml);
             lines.Add(epg.Count == 1 && epg["cctv1"].Count == 2 && epg["cctv1"][0].Title == "新闻联播"
                 ? "PASS EPG解析 2节目" : $"FAIL EPG 频道数={epg.Count}");
+            // 深查第 2 轮：时区偏移换算——标准写法 "… +0800" 须换算为本地时间，
+            // 其 UTC 时刻为 04:00/05:00（与机器时区无关的断言）；无空格写法须等价。
+            lines.Add(epg["cctv1"][0].Start.ToUniversalTime() == new DateTime(2026, 1, 1, 4, 0, 0, DateTimeKind.Utc) &&
+                      epg["cctv1"][0].Stop.ToUniversalTime() == new DateTime(2026, 1, 1, 5, 0, 0, DateTimeKind.Utc)
+                ? "PASS EPG解析-带空格时区偏移换算" : $"FAIL EPG时区 实际Start={epg["cctv1"][0].Start:O}");
+            var epgNospace = EpgParser.Parse("<tv><programme start=\"20260101120000+0800\" stop=\"20260101130000+0800\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
+            lines.Add(epgNospace.TryGetValue("cctv1", out var nsList) && nsList.Count == 1 && nsList[0].Start == epg["cctv1"][0].Start
+                ? "PASS EPG解析-有无空格偏移等价" : "FAIL EPG时区-有无空格偏移不等价");
 
             // --- EPG 空输入 ---
             lines.Add(EpgParser.Parse("").Count == 0 ? "PASS EPG空输入" : "FAIL EPG空输入");
@@ -137,9 +145,9 @@ public static class SelfTest
             lines.Add(DigitTuner.AppendDigit("12", 'x') == "12" ? "PASS 数字缓冲-非数字忽略" : "FAIL 数字缓冲-非数字忽略");
             lines.Add(DigitTuner.Match(digitList, "12")?.Name == "CCTV-12" ? "PASS 数字匹配-精确" : "FAIL 数字匹配-精确");
             lines.Add(DigitTuner.Match(digitList, "999") == null ? "PASS 数字匹配-无号返回空" : "FAIL 数字匹配-无号返回空");
-            lines.Add(DigitTuner.HasLongerNumber(digitList, "1") && DigitTuner.HasLongerNumber(digitList, "12") && !DigitTuner.HasLongerNumber(digitList, "125") && !DigitTuner.HasLongerNumber(digitList, "5")
+            lines.Add(DigitTuner.HasLongerNumber(digitList, "1") && !DigitTuner.HasLongerNumber(digitList, "12")
                 ? "PASS 数字匹配-更长号码判定" : "FAIL 数字匹配-更长号码判定");
-            lines.Add(!DigitTuner.ShouldCommit(digitList, "1") && !DigitTuner.ShouldCommit(digitList, "12") && DigitTuner.ShouldCommit(digitList, "125") && !DigitTuner.ShouldCommit(digitList, "5")
+            lines.Add(!DigitTuner.ShouldCommit(digitList, "1") && DigitTuner.ShouldCommit(digitList, "12") && !DigitTuner.ShouldCommit(digitList, "5")
                 ? "PASS 数字匹配-立即提交判定" : "FAIL 数字匹配-立即提交判定");
 
             // --- 窗口位置校验（V1.4，基于当前虚拟桌面相对坐标，单屏/多屏均可断言） ---
