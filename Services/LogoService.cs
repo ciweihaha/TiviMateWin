@@ -37,7 +37,10 @@ public static class LogoService
     public static Task<BitmapImage?> GetAsync(string? url)
     {
         if (string.IsNullOrWhiteSpace(url)) return Task.FromResult<BitmapImage?>(null);
-        return Cache.GetOrAdd(url, LoadCoreAsync);
+        // 内存缓存键用脱敏地址：原 URL 仍用于实际请求（LoadCoreAsync 的 url 参数），
+        // 但键本身不再含 username=/password=/userinfo；同图在不同凭据下共享同一缓存项。
+        var key = AppConfig.StripCredentialsForCacheKey(url);
+        return Cache.GetOrAdd(key, _ => LoadCoreAsync(url));
     }
 
     private static async Task<BitmapImage?> LoadCoreAsync(string url)
@@ -103,9 +106,12 @@ public static class LogoService
 
     private static string DiskPath(string url)
     {
-        var hash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(url)))[..24].ToLowerInvariant();
+        // 磁盘缓存键先脱敏再哈希：不再用带凭据的原始 URL 做 SHA256 输入。
+        // 脱敏规则见 AppConfig.StripCredentialsForCacheKey；扩展名推断同样走脱敏地址（行为不变）。
+        var keyUrl = AppConfig.StripCredentialsForCacheKey(url);
+        var hash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(keyUrl)))[..24].ToLowerInvariant();
         // 扩展名直接从 URL 尾段推断，不构造 Uri（畸形地址不能让缓存键抛异常）
-        var tail = url;
+        var tail = keyUrl;
         var cut = tail.IndexOfAny(new[] { '?', '#' });
         if (cut >= 0) tail = tail[..cut];
         var ext = Path.GetExtension(tail).ToLowerInvariant();
