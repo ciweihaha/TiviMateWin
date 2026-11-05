@@ -109,7 +109,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _digitTimer = new() { Interval = TimeSpan.FromMilliseconds(1200) };
     // 换台 OSD（V1.4）：右上角频道号+名称+当前节目卡片，3 秒自动隐藏
     private readonly DispatcherTimer _osdHideTimer = new() { Interval = TimeSpan.FromSeconds(3) };
-    // EPG 时效刷新（V1.4）：每分钟刷新“正在播放”，避免长时间停留时节目过期
+    // EPG 时效刷新（V1.4）：每分钟刷新本地正在播放显示，避免长时间停留时节目过期
     private readonly DispatcherTimer _epgRefreshTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     // 当前处于播放态的列表项引用（列表高亮用；AdoptChannels 整体替换列表后按 Url 恢复）
     private ChannelItem? _playingItem;
@@ -207,7 +207,7 @@ public partial class MainWindow : Window
         RefreshPlaylistCombo();
         _ = EnsureEngineAsync();          // 后台初始化，不阻塞界面
         _progressTimer.Start();           // 进度条/时间刷新
-        _epgRefreshTimer.Start();         // EPG 每分钟刷新（V1.4）
+        _epgRefreshTimer.Start();         // EPG 每分钟刷新本地正在播放显示（V1.4）
         await LoadPlaylistAsync(false, _netCts.Token);   // F6(c)：初始加载改传 _netCts.Token，不再传 CancellationToken.None；缓存优先秒开，再后台刷新
         ChannelList.Focus();              // 启动焦点给频道列表（否则默认落在搜索框，方向键失效）
     }
@@ -905,7 +905,7 @@ public partial class MainWindow : Window
         _playingItem = null;
     }
 
-    /// <summary>EPG 每分钟刷新：节目跨档后“正在播放”保持准确，OSD 可见时同步刷新</summary>
+    /// <summary>EPG 每分钟刷新本地正在播放显示：节目跨档后“正在播放”保持准确，OSD 可见时同步刷新</summary>
     private void OnEpgRefreshTick()
     {
         if (_closing || _current is null) return;
@@ -935,7 +935,8 @@ public partial class MainWindow : Window
 
     // ---------- 窗口位置记忆（V1.4） ----------
 
-    /// <summary>启动时恢复上次窗口位置/尺寸：校验通过才应用，最大化状态单独恢复</summary>
+    /// <summary>启动时恢复上次窗口位置/尺寸：校验通过才应用（并钳制到可见屏幕内），
+    /// 非法/越界/非有限值时不应用记忆值、回落 XAML 默认（CenterScreen，1120x640），最大化状态单独恢复</summary>
     private void RestoreWindowPlacement()
     {
         if (_config.WindowMaximized) WindowState = WindowState.Maximized;
@@ -944,11 +945,17 @@ public partial class MainWindow : Window
             _config.WindowLeft is double l && _config.WindowTop is double t &&
             WindowPlacement.CanRestore(l, t, w, h))
         {
+            var (cl, ct, cw, ch) = WindowPlacement.ClampToVisible(l, t, w, h);
             WindowStartupLocation = WindowStartupLocation.Manual;
-            Left = l;
-            Top = t;
-            Width = w;
-            Height = h;
+            Left = cl;
+            Top = ct;
+            Width = cw;
+            Height = ch;
+        }
+        else if (!_config.WindowMaximized)
+        {
+            // 显式回落：不以记忆值覆盖默认位置（此前是隐式不应用，此处写明意图）。
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
         }
     }
 

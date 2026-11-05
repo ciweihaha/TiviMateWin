@@ -153,6 +153,21 @@ public static class SelfTest
                 ? "PASS 窗口校验-屏幕外拒绝" : "FAIL 窗口校验-屏幕外拒绝");
             lines.Add(!WindowPlacement.CanRestore(vl - 700, vt + 100, 800, 600)
                 ? "PASS 窗口校验-可见面积过小拒绝" : "FAIL 窗口校验-可见面积过小拒绝");
+            lines.Add(!WindowPlacement.CanRestore(double.NaN, vt, 800, 600) &&
+                      !WindowPlacement.CanRestore(vl, vt, double.PositiveInfinity, 600)
+                ? "PASS 窗口校验-非有限值拒绝" : "FAIL 窗口校验-非有限值拒绝");
+            var clamped = WindowPlacement.ClampToVisible(vl - 100, vt - 50, 800, 600);
+            lines.Add(clamped.Left == vl && clamped.Top == vt && clamped.Width == 800 && clamped.Height == 600
+                ? "PASS 窗口钳制-左上出屏压回屏内" : "FAIL 窗口钳制-左上出屏压回屏内");
+            var clampedR = WindowPlacement.ClampToVisible(vl + vw - 100, vt, 800, 600);
+            lines.Add(clampedR.Left == vl + vw - 800 && clampedR.Top == vt
+                ? "PASS 窗口钳制-右侧出屏压回屏内" : "FAIL 窗口钳制-右侧出屏压回屏内");
+            lines.Add(AppConfig.StripCredentialsForCacheKey("http://user:pass@host/logo.png?username=u&password=p&type=x#frag")
+                      == "http://host/logo.png?type=x"
+                ? "PASS 缓存键脱敏-凭据与fragment剥离" : "FAIL 缓存键脱敏-凭据与fragment剥离");
+            lines.Add(AppConfig.StripCredentialsForCacheKey("http://host/logo.png?username=u") == "http://host/logo.png" &&
+                      AppConfig.StripCredentialsForCacheKey("http://host/a.png?id=1") == "http://host/a.png?id=1"
+                ? "PASS 缓存键脱敏-仅用户名剥离且非凭据参数保留" : "FAIL 缓存键脱敏-仅用户名剥离且非凭据参数保留");
 
             // --- 配置序列化 ---
             var cfg = new AppConfig { ActivePlaylist = "测试源", Volume = 55 };
