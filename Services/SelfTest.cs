@@ -115,6 +115,30 @@ public static class SelfTest
             // --- EPG 空输入 ---
             lines.Add(EpgParser.Parse("").Count == 0 ? "PASS EPG空输入" : "FAIL EPG空输入");
 
+            // --- Logo 流式限长（深查第 5 轮；纯流逻辑，不触网络、不解码） ---
+            // ReadCappedAsync 是 LogoService 下载路径的限长核心：旧实现 GetByteArrayAsync
+            // 先整段读入内存、Decode 才在事后以 >5MB 拒收；新实现 8KB 分块读、累计超限立即停读。
+            // Run 是同步方法，测试用 GetAwaiter().GetResult()；被测方法内全部 await 均
+            // ConfigureAwait(false)，不回贴 UI 同步上下文，不会死锁。
+            var logoSmall = LogoService.ReadCappedAsync(new MemoryStream(new byte[] { 1, 2, 3 }), LogoService.MaxLogoBytes).GetAwaiter().GetResult();
+            lines.Add(logoSmall != null && logoSmall.Length == 3 && logoSmall[2] == 3
+                ? "PASS Logo限长-小文件完整返回" : "FAIL Logo限长-小文件完整返回");
+            var logoEmpty = LogoService.ReadCappedAsync(new MemoryStream(Array.Empty<byte>()), LogoService.MaxLogoBytes).GetAwaiter().GetResult();
+            lines.Add(logoEmpty != null && logoEmpty.Length == 0
+                ? "PASS Logo限长-空流返回空数组" : "FAIL Logo限长-空流返回空数组");
+            var logoExact = LogoService.ReadCappedAsync(new MemoryStream(new byte[(int)LogoService.MaxLogoBytes]), LogoService.MaxLogoBytes).GetAwaiter().GetResult();
+            lines.Add(logoExact != null && logoExact.Length == LogoService.MaxLogoBytes
+                ? "PASS Logo限长-恰达上限放行" : "FAIL Logo限长-恰达上限放行");
+            var logoOver1 = LogoService.ReadCappedAsync(new MemoryStream(new byte[(int)LogoService.MaxLogoBytes + 1]), LogoService.MaxLogoBytes).GetAwaiter().GetResult();
+            lines.Add(logoOver1 == null
+                ? "PASS Logo限长-超限1字节拒收" : "FAIL Logo限长-超限1字节拒收");
+            // 超限提前停读：6MB 流被拒收时实际消费不得超过上限 + 一个 8KB 分块
+            //（旧实现会读完全部 6MB 才拒收），以流 Position 为证。
+            var logoBigStream = new MemoryStream(new byte[6 * 1024 * 1024]);
+            var logoBig = LogoService.ReadCappedAsync(logoBigStream, LogoService.MaxLogoBytes).GetAwaiter().GetResult();
+            lines.Add(logoBig == null && logoBigStream.Position <= LogoService.MaxLogoBytes + 8192
+                ? "PASS Logo限长-超限提前停读" : $"FAIL Logo限长-超限提前停读 实际消费={logoBigStream.Position}");
+
             // --- 缓存读写（隔离目录，不污染真实缓存） ---
             var testCacheDir = Path.Combine(Path.GetTempPath(), "tivimate_cache_selftest");
             ChannelCache.OverrideDir = testCacheDir;
