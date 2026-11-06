@@ -30,6 +30,9 @@ public static class LogoService
     })
     { Timeout = TimeSpan.FromSeconds(8) };
 
+    /// <summary>单张 Logo 解码/落盘上限（与 Decode 的拒收口径同一值）。</summary>
+    internal const long MaxLogoBytes = 5 * 1024 * 1024;
+
     private static readonly ConcurrentDictionary<string, Task<BitmapImage?>> Cache = new();
     private static readonly SemaphoreSlim NetGate = new(4, 4);   // 并发下载限流，列表滚动不撑满连接池
 
@@ -64,7 +67,20 @@ public static class LogoService
             await NetGate.WaitAsync();
             try
             {
-                var bytes = await Http.GetByteArrayAsync(url);
+                // 流式限长下载：旧实现 GetByteArrayAsync 先把整段响应体读进内存，
+                // Decode 的 5MB 检查才在事后拒收；恶意/失控源（如超大图、gzip 炸弹）
+                // 会在拒收前先占满内存。改为按响应头返回后分块读，累计超限立即停读。
+                // 超限返回 null，与旧实现“下载完再拒收”的可见结果一致（不解码、不落盘），
+                // 且同一 URL 的负缓存语义不变。
+                // 注意：ResponseHeadersRead 在收到响应头时即完成，HttpClient.Timeout
+                // 此后不再约束读体；故另建一个与 HttpClient 超时同为 8 秒的 CTS，
+                // 从请求开始覆盖“响应头 + 读体”全程，保留旧实现的总耗时上限。
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+                resp.EnsureSuccessStatusCode();
+                await using var stream = await resp.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+                var bytes = await ReadCappedAsync(stream, MaxLogoBytes, cts.Token).ConfigureAwait(false);
+                if (bytes == null) return null;
                 var bmp = Decode(bytes);
                 if (bmp != null)
                 {
@@ -85,10 +101,33 @@ public static class LogoService
         }
     }
 
+    /// <summary>
+    /// 流式限长读体：8KB 分块读入，累计超过 <paramref name="maxBytes"/> 立即停读并返回 null
+    /// （不再消费剩余体）；读完未超限返回完整字节；空体返回长度 0 的数组。
+    /// 按解压后字节计数：HttpClient 开了 AutomaticDecompression，交出的流已是解压后形态，
+    /// 故 Content-Length（压缩后线长）不能作为放行依据，也不以它提前拒收。
+    /// 恰达上限放行（与 Decode 的 <c>bytes.Length &gt; MaxLogoBytes</c> 拒收口径一致）。
+    /// </summary>
+    internal static async Task<byte[]?> ReadCappedAsync(Stream stream, long maxBytes, CancellationToken ct = default)
+    {
+        using var ms = new MemoryStream();
+        var buf = new byte[8192];
+        long total = 0;
+        while (true)
+        {
+            var read = await stream.ReadAsync(buf, ct).ConfigureAwait(false);
+            if (read == 0) break;
+            if (total + read > maxBytes) return null;
+            await ms.WriteAsync(buf.AsMemory(0, read), ct).ConfigureAwait(false);
+            total += read;
+        }
+        return ms.ToArray();
+    }
+
     /// <summary>PNG/JPG 解码为 40px 宽缩略图并 Freeze（可跨线程使用）。</summary>
     private static BitmapImage? Decode(byte[] bytes)
     {
-        if (bytes.Length == 0 || bytes.Length > 5 * 1024 * 1024) return null;   // >5MB 视为异常文件
+        if (bytes.Length == 0 || bytes.Length > MaxLogoBytes) return null;   // >5MB 视为异常文件
         try
         {
             var bmp = new BitmapImage();
