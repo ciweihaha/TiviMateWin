@@ -2,14 +2,14 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
-    <Version>1.4.0</Version>
-    <!-- F9：1.4.0 仅为本地构建回退版本；tag 构建由 CI 在 Publish 时以 -p:Version 注入（见 .github/workflows/build.yml）。 -->
+    <Version>1.4.1</Version>
+    <!-- F9：1.4.1 仅为本地构建回退版本；tag 构建由 CI 在 Publish 时以 -p:Version 注入（见 .github/workflows/build.yml）。 -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Optimize>true</Optimize>
   </PropertyGroup>

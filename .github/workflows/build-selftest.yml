@@ -14,10 +14,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup .NET 8
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Build (Release)
         run: dotnet build TiviMateWin.csproj -c Release
@@ -25,7 +25,7 @@ jobs:
       - name: Run --selftest
         shell: pwsh
         run: |
-          $exe = "bin\Release\net8.0-windows\win-x64\TiviMateWin.exe"
+          $exe = "bin\Release\net10.0-windows\win-x64\TiviMateWin.exe"
           if (-not (Test-Path $exe)) { throw "build output not found: $exe" }
           $log = Join-Path $env:TEMP "tivimate_selftest.txt"
           if (Test-Path $log) { Remove-Item $log -Force }
