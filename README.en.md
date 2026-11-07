@@ -1,12 +1,12 @@
 # TiviMateWin
 
-Windows desktop IPTV player built with WPF + libVLC + .NET 8. Portable, no installation required — just unzip and run.
+Windows desktop IPTV player built with WPF + libVLC + .NET 10. Portable, no installation required — just unzip and run.
 
 [简体中文](README.md) | English
 
 ![Build & Release](https://github.com/ciweihaha/TiviMateWin/actions/workflows/build.yml/badge.svg)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![.NET](https://img.shields.io/badge/.NET-8.0-blueviolet)
+![.NET](https://img.shields.io/badge/.NET-10.0-blueviolet)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-blue)
 
 ![UI layout overview](screenshots/ui-layout.svg)
@@ -60,7 +60,7 @@ Credentials are encrypted with Windows DPAPI and stored locally in `config.json`
 dotnet publish TiviMateWin.csproj -c Release -r win-x64 --self-contained true -o publish
 ```
 
-Pushing a `v*` tag (e.g. `v1.3.3`) triggers GitHub Actions to build and publish a Release automatically.
+Pushing a `v*` tag (e.g. `v1.4.1`) triggers GitHub Actions to build and publish a Release automatically.
 
 ## Privacy
 
