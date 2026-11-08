@@ -17,14 +17,12 @@
                  BorderThickness="1" SelectionChanged="GroupList_SelectionChanged"/>
 
         <StackPanel Grid.Row="2" Margin="0,12,0,0">
-            <TextBlock Text="新名称（重命名/新建）" Foreground="#FFB9C4CE" FontSize="11"/>
+            <TextBlock Text="新名称（重命名）" Foreground="#FFB9C4CE" FontSize="11"/>
             <TextBox x:Name="NewNameBox" Height="28" Margin="0,4,0,0" Background="#FF20262E"
                      Foreground="#FFDDE4EB" BorderBrush="#FF2D3540" Padding="6,3"/>
         </StackPanel>
 
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-            <Button Content="新建分组" Width="80" Height="32" Margin="0,0,8,0" Background="#FF232B34"
-                    Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand" Click="New_Click"/>
             <Button Content="重命名" Width="80" Height="32" Margin="0,0,8,0" Background="#FF232B34"
                     Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand" Click="Rename_Click"/>
             <Button Content="删除分组" Width="80" Height="32" Margin="0,0,8,0" Background="#FF8A3B3B"

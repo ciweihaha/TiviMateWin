@@ -32,7 +32,9 @@ public static class M3uParser
 
             if (line.StartsWith("#EXTINF", StringComparison.OrdinalIgnoreCase))
             {
-                var commaIdx = line.LastIndexOf(',');
+                // 名称在第一个不在引号内的逗号之后：属性值（如 group-title="央视,卫视"）
+                // 或名称本身（如 "CCTV-1, 综合"）含逗号时，LastIndexOf(',') 会切错位置。
+                var commaIdx = IndexOfNameComma(line);
                 pendingName = commaIdx >= 0 ? line[(commaIdx + 1)..].Trim() : "";
                 pendingGroup = "未分组";
                 pendingLogo = null;
@@ -82,5 +84,18 @@ public static class M3uParser
         }
 
         return result;
+    }
+
+    /// <summary>返回分隔属性与显示名的逗号位置：第一个不在双引号内的逗号；无则 -1。</summary>
+    private static int IndexOfNameComma(string line)
+    {
+        var inQuotes = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (c == '"') inQuotes = !inQuotes;
+            else if (c == ',' && !inQuotes) return i;
+        }
+        return -1;
     }
 }

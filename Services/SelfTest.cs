@@ -50,6 +50,13 @@ public static class SelfTest
             var single = M3uParser.Parse("#EXTM3U\n#EXTINF:-1 group-title=\"直播\",测试流\nhttp://x.com/live.m3u8");
             lines.Add(single.Count == 1 && single[0].Group == "直播" && single[0].Name == "测试流"
                 ? "PASS 单流解析" : "FAIL 单流解析");
+            // 名称/属性值含逗号：名称取第一个不在引号内的逗号之后
+            var commaName = M3uParser.Parse("#EXTM3U\n#EXTINF:-1 group-title=\"央视\",CCTV-1, 综合\nhttp://c.m3u8");
+            lines.Add(commaName.Count == 1 && commaName[0].Name == "CCTV-1, 综合" && commaName[0].Group == "央视"
+                ? "PASS M3U解析-名称含逗号" : "FAIL M3U解析-名称含逗号");
+            var commaAttr = M3uParser.Parse("#EXTM3U\n#EXTINF:-1 group-title=\"央视,卫视\",CCTV-2\nhttp://c2.m3u8");
+            lines.Add(commaAttr.Count == 1 && commaAttr[0].Name == "CCTV-2" && commaAttr[0].Group == "央视,卫视"
+                ? "PASS M3U解析-属性值含逗号" : "FAIL M3U解析-属性值含逗号");
             // CRLF 与孤立 CR 兼容
             var crlf = M3uParser.Parse("#EXTM3U\r\n#EXTINF:-1,频道A\r\nhttp://a.m3u8\r\n");
             lines.Add(crlf.Count == 1 && crlf[0].Name == "频道A" ? "PASS CRLF兼容" : "FAIL CRLF");
@@ -79,16 +86,19 @@ public static class SelfTest
                 ? "PASS EPG解析 2节目" : $"FAIL EPG 频道数={epg.Count}");
             // 深查第 2 轮：时区偏移换算——标准写法 "… +0800" 须换算为本地时间，
             // 其 UTC 时刻为 04:00/05:00（与机器时区无关的断言）；无空格写法须等价。
-            lines.Add(epg["cctv1"][0].Start.ToUniversalTime() == new DateTime(2026, 1, 1, 4, 0, 0, DateTimeKind.Utc) &&
-                      epg["cctv1"][0].Stop.ToUniversalTime() == new DateTime(2026, 1, 1, 5, 0, 0, DateTimeKind.Utc)
-                ? "PASS EPG解析-带空格时区偏移换算" : $"FAIL EPG时区 实际Start={epg["cctv1"][0].Start:O}");
+            // 后续断言复用首个频道的节目表：首轮解析失败时记 FAIL 而不是抛
+            // KeyNotFoundException 中断整个自检（其后 Logo/缓存/数字键/窗口/配置检查都不再执行）。
+            var epgBase = epg.TryGetValue("cctv1", out var epgBaseList) && epgBaseList.Count >= 2 ? epgBaseList : null;
+            lines.Add(epgBase != null && epgBase[0].Start.ToUniversalTime() == new DateTime(2026, 1, 1, 4, 0, 0, DateTimeKind.Utc) &&
+                      epgBase[0].Stop.ToUniversalTime() == new DateTime(2026, 1, 1, 5, 0, 0, DateTimeKind.Utc)
+                ? "PASS EPG解析-带空格时区偏移换算" : $"FAIL EPG时区 实际Start={epgBase?[0].Start:O}");
             var epgNospace = EpgParser.Parse("<tv><programme start=\"20260101120000+0800\" stop=\"20260101130000+0800\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
-            lines.Add(epgNospace.TryGetValue("cctv1", out var nsList) && nsList.Count == 1 && nsList[0].Start == epg["cctv1"][0].Start
+            lines.Add(epgNospace.TryGetValue("cctv1", out var nsList) && nsList.Count == 1 && epgBase != null && nsList[0].Start == epgBase[0].Start
                 ? "PASS EPG解析-有无空格偏移等价" : "FAIL EPG时区-有无空格偏移不等价");
             // 深查第 3 轮：冒号偏移 +08:00（ISO 8601 写法）须与 +0800 等价换算，
             // 其 UTC 时刻为 04:00/05:00（与机器时区无关的断言）；无空格冒号写法亦然。
             var epgColon = EpgParser.Parse("<tv><programme start=\"20260101120000 +08:00\" stop=\"20260101130000 +08:00\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
-            lines.Add(epgColon.TryGetValue("cctv1", out var coList) && coList.Count == 1 && coList[0].Start == epg["cctv1"][0].Start && coList[0].Stop == epg["cctv1"][0].Stop
+            lines.Add(epgColon.TryGetValue("cctv1", out var coList) && coList.Count == 1 && epgBase != null && coList[0].Start == epgBase[0].Start && coList[0].Stop == epgBase[0].Stop
                 ? "PASS EPG解析-冒号偏移等价" : "FAIL EPG时区-冒号偏移不等价");
             var epgColonNospace = EpgParser.Parse("<tv><programme start=\"20260101120000+08:00\" stop=\"20260101130000+08:00\" channel=\"cctv1\"><title>新闻联播</title></programme></tv>");
             lines.Add(epgColonNospace.TryGetValue("cctv1", out var cnList) && cnList.Count == 1 && cnList[0].Start.ToUniversalTime() == new DateTime(2026, 1, 1, 4, 0, 0, DateTimeKind.Utc) &&

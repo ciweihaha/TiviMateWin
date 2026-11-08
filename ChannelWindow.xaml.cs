@@ -47,6 +47,7 @@ public partial class ChannelWindow : Window
             await _playGate.WaitAsync();
             try
             {
+                if (_closing) return;   // 等待期间窗口已关闭：不再启动播放
                 await Task.Run(() =>
                 {
                     var media = ch.Url.Contains("://")
@@ -58,6 +59,7 @@ public partial class ChannelWindow : Window
                     _media = media;   // 新 Media 接管
                     old?.Dispose();
                 });
+                AppLog.Info($"channel window play [{ch.Name}]");
             }
             finally { _playGate.Release(); }
         }
@@ -65,7 +67,6 @@ public partial class ChannelWindow : Window
         {
             AppLog.Error($"channel window play failed [{ch.Name}]: {ex.Message}");
         }
-        AppLog.Info($"channel window play [{ch.Name}]");
     }
 
     private void BtnVolUp_Click(object sender, RoutedEventArgs e)

@@ -3,7 +3,7 @@ using System.Windows.Controls;
 
 namespace TiviMateWin.Dialogs;
 
-/// <summary>分组管理对话框：重命名 / 新建 / 删除分组</summary>
+/// <summary>分组管理对话框：重命名 / 删除分组</summary>
 public partial class GroupManagerWindow : Window
 {
     private readonly List<string> _groups;
@@ -22,16 +22,6 @@ public partial class GroupManagerWindow : Window
     private void GroupList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (GroupList.SelectedItem is string g) NewNameBox.Text = g;
-    }
-
-    private void New_Click(object sender, RoutedEventArgs e)
-    {
-        var name = NewNameBox.Text.Trim();
-        if (name.Length == 0) return;
-        Action = "rename";
-        SelectedGroup = null;
-        NewName = name;
-        DialogResult = true;
     }
 
     private void Rename_Click(object sender, RoutedEventArgs e)

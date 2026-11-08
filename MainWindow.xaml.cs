@@ -158,6 +158,13 @@ public partial class MainWindow : Window
     {
         const int WM_KEYDOWN = 0x0100;
         if (msg.message != WM_KEYDOWN || handled) return;
+        // 模态对话框打开时不拦截：对话框均为 ShowDialog，打开时它就是活动窗口；
+        // 否则对话框内的方向键/空格等会同时触发主窗口换台/暂停/全屏（对话框焦点在
+        // 按钮等非 TextBox 控件上时，现有的 FocusedElement 守卫拦不住）。
+        foreach (Window w in OwnedWindows)
+        {
+            if (w.IsActive) return;
+        }
         // 注：不检查 IsActive——焦点/激活可能落在 VLC 顶层原生窗口上，主窗口 IsActive 为 false；
         // ThreadFilterMessage 只会收到本线程窗口的消息，天然不会拦截其他应用的按键
         var key = KeyInterop.KeyFromVirtualKey((int)msg.wParam);
@@ -408,7 +415,11 @@ public partial class MainWindow : Window
             for (var attempt = 0; ; attempt++)
             {
                 try { return await _http.GetStringAsync(AppConfig.ResolveXtreamUrl(url, _config.XtreamServer, _config.XtreamUsername, _config.XtreamPassword), ct); }
-                catch (Exception ex) when (attempt < 2)
+                // 仅对瞬时失败重试；调用方取消（窗口关闭/切换源）不重试、不记失败日志，
+                // 直接透传 OperationCanceledException。注意不能按异常类型排除：
+                // HttpClient 超时抛的也是 TaskCanceledException（OperationCanceledException
+                // 子类），但此时 ct 未取消，仍属可重试的瞬时失败，故按 ct 判定。
+                catch (Exception ex) when (attempt < 2 && !ct.IsCancellationRequested)
                 {
                     AppLog.Error($"fetch retry {attempt + 1} [{AppConfig.RedactUrlForLog(url)}]: {ex.Message}");
                     await Task.Delay(1000, ct);
@@ -1429,7 +1440,7 @@ public partial class MainWindow : Window
         ApplyFilter();
     }
 
-    /// <summary>分组管理：重命名 / 新建 / 删除分组</summary>
+    /// <summary>分组管理：重命名 / 删除分组</summary>
     private void BtnManageGroups_Click(object sender, RoutedEventArgs e)
     {
         var groups = _all.Select(c => c.Group).Distinct().OrderBy(g => g, StringComparer.CurrentCulture).ToList();
