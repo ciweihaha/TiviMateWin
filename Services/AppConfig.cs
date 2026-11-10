@@ -241,16 +241,24 @@ public class AppConfig
                 LastLoadError = "Xtream 登录凭据无法解密，已清空密码，请重新输入密码后保存；配置文件本身未损坏，其余设置已正常加载。";
                 AppLog.Error("Xtream 凭据解密失败，已清空密码，需重新输入（日志中不记录密码或密文）。");
             }
+            // JSON 显式 null 会覆盖属性初始化器（= new()）：若配置文件里把
+            // Playlists/Favorites/HiddenChannels 写成 null，反序列化后它们就是
+            // null——而非缺失字段时的空集合。调用方（RefreshPlaylistCombo、
+            // LoadCoreAsync、AdoptChannels、ApplyFilter 等）均未判空，启动即
+            // NullReferenceException（Window_Loaded 是 async void，LoadPlaylistAsync
+            // 只接 OperationCanceledException，异常无处可接）。缺失字段不受影响，
+            // 故只须在此把 null 归一化为空集合，与“字段缺失”语义一致；文件本身
+            // 是合法 JSON，不走损坏保全分支。
+            cfg.Playlists ??= new();
+            cfg.Favorites ??= new();
+            cfg.HiddenChannels ??= new();
             // 纵深防御：已落盘的旧配置若含 password= 的 URL，加载时同样剥离，
             // 避免它在下一次 Save 时重新写回明文；凭据改由 XtreamServer/Username/Password 在请求时重拼。
-            if (cfg.Playlists != null)
+            foreach (var p in cfg.Playlists)
             {
-                foreach (var p in cfg.Playlists)
-                {
-                    if (!string.IsNullOrEmpty(p.Url) &&
-                        p.Url.Contains("password=", StringComparison.OrdinalIgnoreCase))
-                        p.Url = StripCredentialQuery(p.Url);
-                }
+                if (!string.IsNullOrEmpty(p.Url) &&
+                    p.Url.Contains("password=", StringComparison.OrdinalIgnoreCase))
+                    p.Url = StripCredentialQuery(p.Url);
             }
             return cfg;
         }
