@@ -379,6 +379,40 @@ public static class SelfTest
             try { if (Directory.Exists(cfgDecDir)) Directory.Delete(cfgDecDir, true); } catch { }
             AppConfig.OverrideDir = null;
 
+            // --- 配置加载 null 集合归一化（深查第 6 轮；隔离目录） ---
+            // JSON 显式 null 会覆盖属性初始化器：{"Playlists": null} 反序列化后
+            // Playlists 即 null，而调用方均未判空，启动即 NullReferenceException。
+            // Load 须把三个集合字段的 null 归一化为空集合，与字段缺失语义一致，
+            // 且不走损坏保全分支（文件本身合法）；其余设置保留、保存后可往返。
+            var cfgNullDir = Path.Combine(Path.GetTempPath(), "tivimate_cfg_nullcoll_selftest");
+            try { if (Directory.Exists(cfgNullDir)) Directory.Delete(cfgNullDir, true); } catch { }
+            Directory.CreateDirectory(cfgNullDir);
+            AppConfig.OverrideDir = cfgNullDir;
+            var cfgNullPath = Path.Combine(cfgNullDir, "config.json");
+            File.WriteAllText(cfgNullPath, "{\"Volume\": 43, \"Playlists\": null, \"Favorites\": null, \"HiddenChannels\": null}");
+            var cfgNull = AppConfig.Load();
+            lines.Add(cfgNull.Volume == 43 && cfgNull.Playlists != null && cfgNull.Playlists.Count == 0 &&
+                      cfgNull.Favorites != null && cfgNull.Favorites.Count == 0 &&
+                      cfgNull.HiddenChannels != null && cfgNull.HiddenChannels.Count == 0
+                ? "PASS 配置加载-null集合归一化为空且其余设置保留" : "FAIL 配置加载-null集合归一化为空且其余设置保留");
+            lines.Add(AppConfig.LastLoadError == null && Directory.GetFiles(cfgNullDir, "config.corrupt-*.json").Length == 0
+                ? "PASS 配置加载-null集合不记错误且不产生损坏保全" : "FAIL 配置加载-null集合不记错误且不产生损坏保全");
+            // 归一化后保存可往返：再加载仍为有效配置、Volume 保留、集合仍为空
+            cfgNull.Volume = 44;
+            var cfgNullSaveOk = cfgNull.Save();
+            var cfgNullReload = AppConfig.Load();
+            lines.Add(cfgNullSaveOk && cfgNullReload.Volume == 44 && cfgNullReload.Playlists != null &&
+                      cfgNullReload.Playlists.Count == 0 && AppConfig.LastLoadError == null
+                ? "PASS 配置加载-null集合保存后往返一致" : "FAIL 配置加载-null集合保存后往返一致");
+            // 回归守卫：正常非空集合不受归一化影响
+            File.WriteAllText(cfgNullPath, "{\"Volume\": 45, \"Playlists\": [{\"Name\": \"x\", \"Url\": \"http://x.m3u8\"}], \"Favorites\": [\"http://f.m3u8\"], \"HiddenChannels\": [\"http://h.m3u8\"]}");
+            var cfgKeep = AppConfig.Load();
+            lines.Add(cfgKeep.Volume == 45 && cfgKeep.Playlists.Count == 1 && cfgKeep.Playlists[0].Name == "x" &&
+                      cfgKeep.Favorites.Count == 1 && cfgKeep.HiddenChannels.Count == 1
+                ? "PASS 配置加载-正常集合不受归一化影响" : "FAIL 配置加载-正常集合不受归一化影响");
+            try { if (Directory.Exists(cfgNullDir)) Directory.Delete(cfgNullDir, true); } catch { }
+            AppConfig.OverrideDir = null;
+
             // --- 播放测试 ---
             if (playTest)
             {
