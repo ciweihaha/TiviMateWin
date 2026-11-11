@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -409,7 +410,24 @@ public partial class MainWindow : Window
         await PlayAsync(ch);
     }
 
-    private async Task<string> FetchTextAsync(string url, CancellationToken ct)
+    // 响应体上限（深查第 13 轮）：播放列表/Xtream 走 20MB（实测全球源约 697KB，
+    // 20MB 已是 28 倍余量）；EPG XMLTV 全量可达数十 MB，单独放宽到 200MB。
+    // 上限防的是失控/恶意源把旧 GetStringAsync 的无界缓冲撑爆内存（Logo 下载同类
+    // 缺口已在第 5 轮以流式限长堵上，本处是同一缺口在清单拉取侧的版本）。
+    private const long MaxPlaylistBytes = 20L * 1024 * 1024;
+    private const long MaxEpgBytes = 200L * 1024 * 1024;
+
+    /// <summary>响应体超限：确定性失败，不重试（见 FetchTextAsync）。</summary>
+    internal sealed class ResponseTooLargeException : Exception
+    {
+        public ResponseTooLargeException(long limit) : base($"响应体超过上限 {limit} 字节，已拒绝") { }
+    }
+
+    private Task<string> FetchTextAsync(string url, CancellationToken ct)
+        => FetchTextAsync(url, ct, MaxPlaylistBytes);
+
+    /// <summary>按调用方上限拉取文本：流式限长读体，超限抛 ResponseTooLargeException（不重试）。</summary>
+    private async Task<string> FetchTextAsync(string url, CancellationToken ct, long maxBytes)
     {
         if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
@@ -417,7 +435,19 @@ public partial class MainWindow : Window
             // 网络抖动容错：最多重试 2 次（间隔 1s），仅对瞬时失败重试
             for (var attempt = 0; ; attempt++)
             {
-                try { return await _http.GetStringAsync(AppConfig.ResolveXtreamUrl(url, _config.XtreamServer, _config.XtreamUsername, _config.XtreamPassword), ct); }
+                try
+                {
+                    var resolved = AppConfig.ResolveXtreamUrl(url, _config.XtreamServer, _config.XtreamUsername, _config.XtreamPassword);
+                    // ResponseHeadersRead + 自建 60 秒 CTS：HttpClient.Timeout 在收到响应头后
+                    // 不再约束读体（LogoService 同款处理），慢速滴流的源否则可无限挂起。
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    cts.CancelAfter(TimeSpan.FromSeconds(60));
+                    using var resp = await _http.GetAsync(resolved, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                    resp.EnsureSuccessStatusCode();
+                    return await ReadResponseTextCappedAsync(resp, maxBytes, cts.Token);
+                }
+                // 超限是确定性失败：重试只会再下载 20MB，不重试、不记失败日志，直接透传。
+                catch (ResponseTooLargeException) { throw; }
                 // 仅对瞬时失败重试；调用方取消（窗口关闭/切换源）不重试、不记失败日志，
                 // 直接透传 OperationCanceledException。注意不能按异常类型排除：
                 // HttpClient 超时抛的也是 TaskCanceledException（OperationCanceledException
@@ -429,7 +459,23 @@ public partial class MainWindow : Window
                 }
             }
         }
+        // 本地文件：先按长度拒收超限文件，再读盘（不存在的文件仍由 ReadAllTextAsync 抛错，行为不变）。
+        if (File.Exists(url) && new FileInfo(url).Length > maxBytes) throw new ResponseTooLargeException(maxBytes);
         return await File.ReadAllTextAsync(url, ct);
+    }
+
+    /// <summary>流式限长读响应体并解码：超限在读满上限后即停读并抛 ResponseTooLargeException；
+    /// 编码优先用响应头 CharSet（与旧 GetStringAsync 口径一致），缺失/非法时回落 UTF-8。</summary>
+    internal static async Task<string> ReadResponseTextCappedAsync(HttpResponseMessage resp, long maxBytes, CancellationToken ct)
+    {
+        await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        var bytes = await LogoService.ReadCappedAsync(stream, maxBytes, ct);
+        if (bytes == null) throw new ResponseTooLargeException(maxBytes);
+        var charset = resp.Content.Headers.ContentType?.CharSet;
+        Encoding enc;
+        try { enc = string.IsNullOrWhiteSpace(charset) ? Encoding.UTF8 : Encoding.GetEncoding(charset); }
+        catch { enc = Encoding.UTF8; }
+        return enc.GetString(bytes);
     }
 
     /// <summary>从地址推断频道名：取 URL/路径的最后一段文件名（如 cctv1.m3u8 → cctv1）</summary>
@@ -1282,7 +1328,7 @@ public partial class MainWindow : Window
         var seq = ++_epgSeq;
         try
         {
-            var xml = await FetchTextAsync(url, ct);
+            var xml = await FetchTextAsync(url, ct, MaxEpgBytes);
             var epg = await Task.Run(() => EpgParser.Parse(xml), ct);
             if (seq != _epgSeq || url != _epgUrl) return;   // 已有更新的 EPG 请求，丢弃旧结果，不覆盖 _epg、不刷新当前频道节目
             _epg = epg;

@@ -138,6 +138,33 @@ public static class SelfTest
             lines.Add(MainWindow.ExtractEpgUrl("") == null && MainWindow.ExtractEpgUrl("\n\n") == null
                 ? "PASS EPG源提取-空输入返回空" : "FAIL EPG源提取-空输入返回空");
 
+            // --- 拉取限长（深查第 13 轮；纯流逻辑，不触网络） ---
+            // 旧 FetchTextAsync 用 GetStringAsync 无界缓冲，失控源可撑爆内存；
+            // 新实现流式限长（复用 LogoService.ReadCappedAsync），超限抛错且不重试。
+            var capOk = MainWindow.ReadResponseTextCappedAsync(
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes("#EXTM3U\n#EXTINF:-1,测试频道\nhttp://a.m3u8")) },
+                1024, CancellationToken.None).GetAwaiter().GetResult();
+            lines.Add(capOk.Contains("测试频道") ? "PASS 拉取限长-小响应正常解码" : "FAIL 拉取限长-小响应正常解码");
+            var capOver = false;
+            try
+            {
+                _ = MainWindow.ReadResponseTextCappedAsync(
+                    new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[1025]) },
+                    1024, CancellationToken.None).GetAwaiter().GetResult();
+            }
+            catch (MainWindow.ResponseTooLargeException) { capOver = true; }
+            lines.Add(capOver ? "PASS 拉取限长-超限抛错" : "FAIL 拉取限长-超限抛错");
+            // CharSet 优先（与旧 GetStringAsync 口径一致）：GBK 字节 + GBK 声明须正确解码
+            var capGbkResp = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(System.Text.Encoding.GetEncoding("GBK").GetBytes("测试")) };
+            capGbkResp.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/plain") { CharSet = "GBK" };
+            var capGbk = MainWindow.ReadResponseTextCappedAsync(capGbkResp, 1024, CancellationToken.None).GetAwaiter().GetResult();
+            lines.Add(capGbk == "测试" ? "PASS 拉取限长-CharSet解码" : $"FAIL 拉取限长-CharSet解码 实际={capGbk}");
+            // 恰达上限放行（与 Logo 限长口径一致）
+            var capExact = MainWindow.ReadResponseTextCappedAsync(
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[1024]) },
+                1024, CancellationToken.None).GetAwaiter().GetResult();
+            lines.Add(capExact.Length == 1024 ? "PASS 拉取限长-恰达上限放行" : "FAIL 拉取限长-恰达上限放行");
+
             // --- Logo 流式限长（深查第 5 轮；纯流逻辑，不触网络、不解码） ---
             // ReadCappedAsync 是 LogoService 下载路径的限长核心：旧实现 GetByteArrayAsync
             // 先整段读入内存、Decode 才在事后以 >5MB 拒收；新实现 8KB 分块读、累计超限立即停读。
