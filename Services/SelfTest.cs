@@ -156,11 +156,16 @@ public static class SelfTest
             }
             catch (MainWindow.ResponseTooLargeException) { capOver = true; }
             lines.Add(capOver ? "PASS 拉取限长-超限抛错" : "FAIL 拉取限长-超限抛错");
-            // CharSet 优先（与旧 GetStringAsync 口径一致）：GBK 字节 + GBK 声明须正确解码
-            var capGbkResp = new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new ByteArrayContent(System.Text.Encoding.GetEncoding("GBK").GetBytes("测试")) };
-            capGbkResp.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/plain") { CharSet = "GBK" };
-            var capGbk = MainWindow.ReadResponseTextCappedAsync(capGbkResp, 1024, CancellationToken.None).GetAwaiter().GetResult();
-            lines.Add(capGbk == "测试" ? "PASS 拉取限长-CharSet解码" : $"FAIL 拉取限长-CharSet解码 实际={capGbk}");
+            // CharSet 优先（与旧 GetStringAsync 口径一致）：UTF-16 声明须按 UTF-16 解码
+            var capU16Resp = new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new ByteArrayContent(System.Text.Encoding.Unicode.GetBytes("测试")) };
+            capU16Resp.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/plain") { CharSet = "UTF-16" };
+            var capU16 = MainWindow.ReadResponseTextCappedAsync(capU16Resp, 1024, CancellationToken.None).GetAwaiter().GetResult();
+            lines.Add(capU16 == "测试" ? "PASS 拉取限长-CharSet解码" : $"FAIL 拉取限长-CharSet解码 实际={capU16}");
+            // 非法/不支持的 CharSet（如 GBK，需 CodePages 包才可用，本程序未引用）回落 UTF-8，不抛错
+            var capBadResp = new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes("测试")) };
+            capBadResp.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/plain") { CharSet = "X-NONSENSE" };
+            var capBad = MainWindow.ReadResponseTextCappedAsync(capBadResp, 1024, CancellationToken.None).GetAwaiter().GetResult();
+            lines.Add(capBad == "测试" ? "PASS 拉取限长-非法CharSet回落UTF-8" : $"FAIL 拉取限长-非法CharSet回落UTF-8 实际={capBad}");
             // 恰达上限放行（与 Logo 限长口径一致）
             var capExact = MainWindow.ReadResponseTextCappedAsync(
                 new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[1024]) },
