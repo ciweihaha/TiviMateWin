@@ -125,6 +125,19 @@ public static class SelfTest
             // --- EPG 空输入 ---
             lines.Add(EpgParser.Parse("").Count == 0 ? "PASS EPG空输入" : "FAIL EPG空输入");
 
+            // --- EPG 源地址提取（深查第 10 轮；纯逻辑） ---
+            // 清单首行是空行时旧实现只看 [0] 行，url-tvg 永远取不到，EPG 静默缺失。
+            lines.Add(MainWindow.ExtractEpgUrl("#EXTM3U url-tvg=\"http://epg.example.com/epg.xml\"\n#EXTINF:-1,A\nhttp://a.m3u8") == "http://epg.example.com/epg.xml"
+                ? "PASS EPG源提取-标准头部" : "FAIL EPG源提取-标准头部");
+            lines.Add(MainWindow.ExtractEpgUrl("\n\n#EXTM3U url-tvg=\"http://epg.example.com/epg.xml\"\n#EXTINF:-1,A\nhttp://a.m3u8") == "http://epg.example.com/epg.xml"
+                ? "PASS EPG源提取-前导空行仍取到" : "FAIL EPG源提取-前导空行仍取到");
+            lines.Add(MainWindow.ExtractEpgUrl("\r\n#EXTM3U url-tvg=\"http://epg.example.com/epg.xml\"\n#EXTINF:-1,A\nhttp://a.m3u8") == "http://epg.example.com/epg.xml"
+                ? "PASS EPG源提取-前导CRLF空行仍取到" : "FAIL EPG源提取-前导CRLF空行仍取到");
+            lines.Add(MainWindow.ExtractEpgUrl("#EXTM3U\n#EXTINF:-1,A\nhttp://a.m3u8") == null
+                ? "PASS EPG源提取-无url-tvg返回空" : "FAIL EPG源提取-无url-tvg返回空");
+            lines.Add(MainWindow.ExtractEpgUrl("") == null && MainWindow.ExtractEpgUrl("\n\n") == null
+                ? "PASS EPG源提取-空输入返回空" : "FAIL EPG源提取-空输入返回空");
+
             // --- Logo 流式限长（深查第 5 轮；纯流逻辑，不触网络、不解码） ---
             // ReadCappedAsync 是 LogoService 下载路径的限长核心：旧实现 GetByteArrayAsync
             // 先整段读入内存、Decode 才在事后以 >5MB 拒收；新实现 8KB 分块读、累计超限立即停读。

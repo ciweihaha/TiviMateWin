@@ -1238,11 +1238,15 @@ public partial class MainWindow : Window
     }
 
     /// <summary>从 M3U 头部解析 EPG 源地址（#EXTM3U url-tvg="..."）</summary>
-    private static string? ExtractEpgUrl(string m3uText)
+    internal static string? ExtractEpgUrl(string m3uText)
     {
         try
         {
-            var firstLine = m3uText.Split('\n')[0];
+            // 深查第 10 轮：旧实现只看 Split('\n')[0]，清单首行是空行时
+            // （部分采集器输出带前导空行）url-tvg 永远取不到，EPG 静默缺失。
+            // 改为取首个非空行；M3uParser 同样跳过空行，口径一致。
+            var firstLine = m3uText.Split('\n').FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
+            if (firstLine is null) return null;
             var idx = firstLine.IndexOf("url-tvg=", StringComparison.OrdinalIgnoreCase);
             if (idx < 0) return null;
             var rest = firstLine[(idx + 8)..].Trim();
