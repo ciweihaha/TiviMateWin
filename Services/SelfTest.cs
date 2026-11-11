@@ -440,6 +440,21 @@ public static class SelfTest
             lines.Add(cfgKeep.Volume == 45 && cfgKeep.Playlists.Count == 1 && cfgKeep.Playlists[0].Name == "x" &&
                       cfgKeep.Favorites.Count == 1 && cfgKeep.HiddenChannels.Count == 1
                 ? "PASS 配置加载-正常集合不受归一化影响" : "FAIL 配置加载-正常集合不受归一化影响");
+            // --- 配置加载 null 元素归一化（深查第 8 轮；复用同一隔离目录） ---
+            // {"Playlists": [null]} 的 null 元素会让随后的 p.Url 空引用，落进通用 catch
+            // 被误判为“配置文件损坏”（原文件被移走、当轮设置全丢）；空 Url 的源还会在
+            // ChannelCache.Load 的 GetBytes(null) 抛错且缓存采纳在 try 之外，启动即弹框。
+            // Load 须丢弃 null 元素、把 null Name/Url 归一化为空串（保留条目），
+            // Favorites/HiddenChannels 的 null 串同样丢弃，且不记错误、不产生损坏保全。
+            File.WriteAllText(cfgNullPath, "{\"Volume\": 46, \"Playlists\": [null, {\"Name\": null, \"Url\": null}, {\"Name\": \"ok\", \"Url\": \"http://ok.m3u8\"}], \"Favorites\": [\"http://f.m3u8\", null], \"HiddenChannels\": [null]}");
+            var cfgNullEl = AppConfig.Load();
+            lines.Add(cfgNullEl.Volume == 46 && cfgNullEl.Playlists.Count == 2 &&
+                      cfgNullEl.Playlists[0].Name == "" && cfgNullEl.Playlists[0].Url == "" &&
+                      cfgNullEl.Playlists[1].Name == "ok" && cfgNullEl.Playlists[1].Url == "http://ok.m3u8" &&
+                      cfgNullEl.Favorites.Count == 1 && cfgNullEl.HiddenChannels.Count == 0
+                ? "PASS 配置加载-null元素丢弃且null字段归一化" : "FAIL 配置加载-null元素丢弃且null字段归一化");
+            lines.Add(AppConfig.LastLoadError == null && Directory.GetFiles(cfgNullDir, "config.corrupt-*.json").Length == 0
+                ? "PASS 配置加载-null元素不记错误且不产生损坏保全" : "FAIL 配置加载-null元素不记错误且不产生损坏保全");
             try { if (Directory.Exists(cfgNullDir)) Directory.Delete(cfgNullDir, true); } catch { }
             AppConfig.OverrideDir = null;
 

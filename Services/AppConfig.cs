@@ -252,6 +252,22 @@ public class AppConfig
             cfg.Playlists ??= new();
             cfg.Favorites ??= new();
             cfg.HiddenChannels ??= new();
+            // 深查第 8 轮：集合元素本身也可能为 null（{"Playlists": [null]}），
+            // 或 Name/Url 为 null——JSON null 同样覆盖初始化器。旧代码在随后的
+            // foreach (p.Url) 直接空引用，落进通用 catch 被误判为“配置文件损坏”
+            // （原文件被移走、当轮设置全丢）；空 Url 的源还会在 ChannelCache.Load
+            // 的 GetBytes(null) 抛 ArgumentNullException，且缓存采纳在 try 之外，
+            // 启动即弹全局异常框。故与第 6 轮集合归一化同处：丢弃 null 元素、
+            // Name/Url 的 null 归一化为空串（保留条目本身，不丢用户数据）；
+            // Favorites/HiddenChannels 中的 null 串同样丢弃。
+            cfg.Playlists.RemoveAll(p => p is null);
+            foreach (var p in cfg.Playlists)
+            {
+                p.Name ??= "";
+                p.Url ??= "";
+            }
+            cfg.Favorites.RemoveAll(s => s is null);
+            cfg.HiddenChannels.RemoveAll(s => s is null);
             // 纵深防御：已落盘的旧配置若含 password= 的 URL，加载时同样剥离，
             // 避免它在下一次 Save 时重新写回明文；凭据改由 XtreamServer/Username/Password 在请求时重拼。
             foreach (var p in cfg.Playlists)
