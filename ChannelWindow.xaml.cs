@@ -85,6 +85,16 @@ public partial class ChannelWindow : Window
     {
         // F6(a)：先置位再 Stop，使关闭后到达的 Play 直接返回。
         _closing = true;
+        // 与主窗口同款：短超时等待在途 Play 释放 _playGate，避免关闭后 Task.Run
+        // 在已释放的播放器上 Play（抛错进日志）或新建 Media 泄漏；注意 Window_Closing
+        // 在 UI 线程同步执行，Play 的释放续体也需 UI 线程，等待可能超时——超时仅记日志
+        // 并继续关闭，_closing 守卫会阻止关闭后的后续播放操作。
+        try
+        {
+            if (_playGate.Wait(TimeSpan.FromSeconds(2))) _playGate.Release();
+            else AppLog.Error("channel window closing: play gate wait timed out, continuing close");
+        }
+        catch (Exception ex) { AppLog.Error($"channel window closing: play gate wait failed: {ex.Message}"); }
         try { _player.Stop(); } catch { }
     }
 
