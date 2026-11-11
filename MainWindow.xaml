@@ -112,15 +112,15 @@
         <!-- 侧栏边缘收起/展开按钮：点击缩进到最左（视频区占满），再点展开 -->
         <!-- 深查第 17 轮：箭头须跟随代码三处 SetValue(TextBlock.TextProperty) 变化——
              旧模板把 Text 写死为 "◀"、没有任何绑定，收起后箭头永远不变。改为绑定到
-             模板化父级（即按钮本身）上该依赖属性的值；按钮上同时给初始值 "◀"，
-             首显不为空。 -->
+             模板化父级（即按钮本身）上该依赖属性的值；TextBlock.Text 不是附加属性，
+             不能在 XAML 里以属性形式给按钮设初值，初值用 TargetNullValue 兜底。 -->
         <Button x:Name="SideToggleBtn" Grid.Column="1" Width="12" Background="{DynamicResource SideBgBrush}"
-                BorderThickness="0" Cursor="Hand" Click="SideToggle_Click" TextBlock.Text="◀"
+                BorderThickness="0" Cursor="Hand" Click="SideToggle_Click"
                 ToolTip="收起/展开侧栏（Tab）" Focusable="False">
             <Button.Template>
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
-                        <TextBlock x:Name="Txt" Text="{Binding Path=(TextBlock.Text), RelativeSource={RelativeSource TemplatedParent}}" Foreground="{DynamicResource MutedFgBrush}" FontSize="9"
+                        <TextBlock x:Name="Txt" Text="{Binding Path=(TextBlock.Text), RelativeSource={RelativeSource TemplatedParent}, TargetNullValue=◀}" Foreground="{DynamicResource MutedFgBrush}" FontSize="9"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
