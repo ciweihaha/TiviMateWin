@@ -76,6 +76,9 @@ public partial class MainWindow : Window
     // 独立悬浮小窗（画中画）：无边框窗口，可拖到屏幕任意位置
     private PipWindow? _pipWindow;
     private ChannelItem? _pipChannel;
+    // 深查第 12 轮：小窗是否收起了侧栏——仅它收起的才由它恢复；用户手动收起时
+    // OpenPip 不动侧栏，关小窗也不得把 _sideWidth 恢复出来（否则侧栏自动弹开）。
+    private bool _pipCollapsedSidebar;
 
     // 多窗口播放：跟踪所有打开的独立频道窗口，主窗口关闭时统一关闭，避免引擎释放后子窗口崩溃
     private readonly List<ChannelWindow> _channelWindows = new();
@@ -1024,6 +1027,7 @@ public partial class MainWindow : Window
         {
             _sideWidth = SideCol.Width;
             SideCol.Width = new GridLength(0);
+            _pipCollapsedSidebar = true;
         }
 
         _pipChannel = ch;
@@ -1035,8 +1039,12 @@ public partial class MainWindow : Window
             {
                 _pipWindow = null;
                 _pipChannel = null;
-                // 小窗关闭后恢复侧栏
-                if (!_fullscreen) SideCol.Width = _sideWidth;
+                // 小窗关闭后恢复侧栏：仅恢复小窗自己收起的（见 _pipCollapsedSidebar）
+                if (!_fullscreen && _pipCollapsedSidebar)
+                {
+                    SideCol.Width = _sideWidth;
+                    _pipCollapsedSidebar = false;
+                }
             };
             _pipWindow.Show();
         }
@@ -1059,8 +1067,12 @@ public partial class MainWindow : Window
             _pipWindow = null;
         }
         _pipChannel = null;
-        // 恢复侧栏
-        if (!_fullscreen) SideCol.Width = _sideWidth;
+        // 恢复侧栏：仅恢复小窗自己收起的（Closed 回调已处理时此处的标志已清零，不会重复恢复）
+        if (!_fullscreen && _pipCollapsedSidebar)
+        {
+            SideCol.Width = _sideWidth;
+            _pipCollapsedSidebar = false;
+        }
     }
 
     // ---------- 播放列表管理（供管理对话框调用） ----------
