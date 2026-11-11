@@ -193,6 +193,36 @@ public static class SelfTest
             try { if (Directory.Exists(atomicDir)) Directory.Delete(atomicDir, true); } catch { }
             ChannelCache.OverrideDir = null;
 
+            // --- 缓存净化：null 元素/字段（深查第 7 轮；隔离目录） ---
+            // 磁盘缓存是外部输入：[null]、{"Name": null}、{"Group": null}、无 Url 条目
+            // 均合法 JSON 但会让 AdoptChannels/ApplyFilter 空引用。Load 须丢弃不可播条目、
+            // 其余字段归一化，与 M3uParser 产出约定一致；正常缓存往返不受影响。
+            var sanitizeDir = Path.Combine(Path.GetTempPath(), "tivimate_cache_sanitize_selftest");
+            try { if (Directory.Exists(sanitizeDir)) Directory.Delete(sanitizeDir, true); } catch { }
+            ChannelCache.OverrideDir = sanitizeDir;
+            Directory.CreateDirectory(sanitizeDir);
+            var sanitizeUrl = "https://selftest.example.com/sanitize.m3u8";
+            using (var sha1 = System.Security.Cryptography.SHA1.Create())
+            {
+                var hash = Convert.ToHexString(sha1.ComputeHash(System.Text.Encoding.UTF8.GetBytes(sanitizeUrl)));
+                File.WriteAllText(Path.Combine(sanitizeDir, hash + ".json"),
+                    "[null, {\"Number\": 1, \"Name\": \"正常频道\", \"Url\": \"http://ok.m3u8\", \"Group\": \"测试\"}, " +
+                    "{\"Number\": 2, \"Name\": null, \"Url\": \"http://noname.m3u8\", \"Group\": null}, " +
+                    "{\"Number\": 3, \"Name\": \"无地址\", \"Url\": \"\", \"Group\": \"测试\"}, " +
+                    "{\"Number\": 4, \"Name\": \"  \", \"Url\": \"http://blank.m3u8\", \"Group\": \"  \"}]");
+            }
+            var sanitized = ChannelCache.Load(sanitizeUrl);
+            lines.Add(sanitized.Count == 3 && sanitized[0].Name == "正常频道" && sanitized[0].Group == "测试"
+                ? "PASS 缓存净化-有效条目保留" : $"FAIL 缓存净化-有效条目保留 实际={sanitized.Count}");
+            lines.Add(sanitized.Count == 3 && sanitized[1].Name == "http://noname.m3u8" && sanitized[1].Group == "未分组"
+                ? "PASS 缓存净化-null名称分组归一化" : "FAIL 缓存净化-null名称分组归一化");
+            lines.Add(sanitized.Count == 3 && sanitized[2].Url == "http://blank.m3u8" && sanitized[2].Name == "http://blank.m3u8" && sanitized[2].Group == "未分组"
+                ? "PASS 缓存净化-空白名称分组归一化且无地址条目丢弃" : "FAIL 缓存净化-空白名称分组归一化且无地址条目丢弃");
+            lines.Add(sanitized.All(c => c != null) && sanitized.All(c => !string.IsNullOrWhiteSpace(c.Url))
+                ? "PASS 缓存净化-结果无null元素与无地址条目" : "FAIL 缓存净化-结果含null或无地址条目");
+            try { if (Directory.Exists(sanitizeDir)) Directory.Delete(sanitizeDir, true); } catch { }
+            ChannelCache.OverrideDir = null;
+
             // --- 数字键换台匹配逻辑（V1.4，纯逻辑） ---
             var digitList = new List<ChannelItem>
             {

@@ -34,7 +34,7 @@ public static class ChannelCache
             if (File.Exists(path))
             {
                 var list = JsonSerializer.Deserialize<List<ChannelItem>>(File.ReadAllText(path));
-                if (list != null) return list;
+                if (list != null) return Sanitize(list);
                 // JSON 为 null（如文件内容就是 null）：与损坏同处理，记日志并移为 .corrupt。
                 AppLog.Error($"频道缓存加载失败（{path}，反序列化结果为空），已移为损坏缓存（不含缓存内容）。");
                 MoveToCorrupt(path);
@@ -52,6 +52,32 @@ public static class ChannelCache
             AppLog.Error($"频道缓存加载失败（{path}）: {ex.Message}");
         }
         return new List<ChannelItem>();
+    }
+
+    /// <summary>
+    /// 缓存净化（深查第 7 轮）：磁盘缓存是手改/旧版写盘都可能碰到的外部输入，
+    /// JSON 合法但内容未必干净——[null] 会反序列化出 null 元素、{"Name": null} 会把
+    /// 非空属性写成 null。调用方 AdoptChannels/ApplyFilter 均未判空：null 元素在
+    /// AdoptChannels 的 c.IsFavorite 即 NullReferenceException，且缓存采纳在
+    /// LoadCoreAsync 的 try 之外、LoadPlaylistAsync 只接取消异常，启动即弹全局
+    /// 异常框、列表为空；null 名称/分组则在搜索过滤 ch.Name.Contains 时炸掉。
+    /// 故在此处一次性归一化：丢弃 null 元素与无 Url 的条目（无地址无法播放），
+    /// 空名称回落为 Url、空分组回落为“未分组”，与 M3uParser 的产出约定一致；
+    /// 其余字段原样保留。损坏 JSON 仍走原有的 .corrupt 保全分支，不变。
+    /// </summary>
+    private static List<ChannelItem> Sanitize(List<ChannelItem> list)
+    {
+        var clean = new List<ChannelItem>(list.Count);
+        foreach (var c in list)
+        {
+            if (c is null) continue;
+            if (string.IsNullOrWhiteSpace(c.Url)) continue;
+            c.Url = c.Url.Trim();
+            if (string.IsNullOrWhiteSpace(c.Name)) c.Name = c.Url;
+            if (string.IsNullOrWhiteSpace(c.Group)) c.Group = "未分组";
+            clean.Add(c);
+        }
+        return clean;
     }
 
     private static void MoveToCorrupt(string path)
