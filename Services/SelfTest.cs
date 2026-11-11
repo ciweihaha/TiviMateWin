@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Net.Http;
 using System.Windows;   // SystemParameters（窗口位置校验自测用，无界面可访问）
 using LibVLCSharp.Shared;
 using TiviMateWin.Models;
