@@ -1195,7 +1195,12 @@ public partial class MainWindow : Window
             var existing = _config.Playlists.FirstOrDefault(p => p.Url == dlg.SourceUrl);
             if (existing != null)
             {
-                existing.Name = EnsureUniqueName(name, existing);
+                // 深查第 11 轮：旧代码只改 existing.Name、不回写 name，
+                // 重名时 EnsureUniqueName 返回 "源名 (2)"、name 仍是原名，
+                // 随后 ActivatePlaylist(name) 会激活同名的另一个播放列表，
+                // 而不是用户刚改名的这条。回写 name，与 else 分支口径一致。
+                name = EnsureUniqueName(name, existing);
+                existing.Name = name;
             }
             else
             {
