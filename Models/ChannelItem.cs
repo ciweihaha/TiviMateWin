@@ -50,7 +50,10 @@ public class ChannelItem : INotifyPropertyChanged
         get
         {
             var s = Name?.TrimStart();
-            return string.IsNullOrEmpty(s) ? "?" : s[..1];
+            if (string.IsNullOrEmpty(s)) return "?";
+            // 深查第 16 轮：首字符是代理项对（如 emoji 📺）时只取 1 个 UTF-16 码元
+            // 会得到孤立代理项，渲染为 �；成对取。
+            return char.IsSurrogatePair(s, 0) ? s[..2] : s[..1];
         }
     }
 

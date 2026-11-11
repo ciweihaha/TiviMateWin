@@ -314,6 +314,14 @@ public static class SelfTest
                       AppConfig.StripCredentialsForCacheKey("http://host/a.png?id=1") == "http://host/a.png?id=1"
                 ? "PASS 缓存键脱敏-仅用户名剥离且非凭据参数保留" : "FAIL 缓存键脱敏-仅用户名剥离且非凭据参数保留");
 
+            // --- 首字符占位（深查第 16 轮；纯逻辑） ---
+            // emoji 开头的频道名首字符是代理项对，只取 1 个 UTF-16 码元会得到孤立代理项、渲染为 �。
+            lines.Add(new ChannelItem { Name = "📺央视" }.Initial == "📺" ? "PASS 首字符占位-emoji成对取" : "FAIL 首字符占位-emoji成对取");
+            lines.Add(new ChannelItem { Name = "CCTV-1" }.Initial == "C" ? "PASS 首字符占位-普通字符" : "FAIL 首字符占位-普通字符");
+            lines.Add(new ChannelItem { Name = "  CCTV" }.Initial == "C" ? "PASS 首字符占位-前导空格跳过" : "FAIL 首字符占位-前导空格跳过");
+            lines.Add(new ChannelItem { Name = "" }.Initial == "?" && new ChannelItem { Name = "   " }.Initial == "?"
+                ? "PASS 首字符占位-空名回落问号" : "FAIL 首字符占位-空名回落问号");
+
             // --- 配置序列化 ---
             var cfg = new AppConfig { ActivePlaylist = "测试源", Volume = 55 };
             cfg.Playlists.Add(new PlaylistSource { Name = "测试源", Url = "http://test.m3u8" });
