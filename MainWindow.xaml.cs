@@ -1401,6 +1401,9 @@ public partial class MainWindow : Window
                 _config.Playlists.RemoveAll(p => p.Name == "Xtream");
                 _config.Playlists.Add(new PlaylistSource { Name = "Xtream", Url = $"{server}/get.php?type=live&output=m3u8" });
                 _config.Save();
+                // 深查第 14 轮：改动播放列表的各处（增/删/改名/切换）都会 RefreshPlaylistCombo，
+                // 唯独本处漏了——Xtream 项已入库，源列表面板仍显示旧内容（空），要点开收起才刷新。
+                RefreshPlaylistCombo();
                 PlayState.Text = $"已载入 {list.Count} 个频道（Xtream）";
                 AppLog.Info($"xtream loaded {list.Count} channels");
             }
