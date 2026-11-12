@@ -5,8 +5,7 @@
         Title="小窗" Width="320" Height="180" WindowStyle="None" ResizeMode="CanResize"
         ShowInTaskbar="False" Topmost="True" Background="#FF000000"
         WindowStartupLocation="Manual" Closing="Window_Closing" Closed="Window_Closed">
-    <Grid Background="Transparent" MouseLeftButtonDown="Root_MouseDown"
-          MouseMove="Root_MouseMove" MouseLeftButtonUp="Root_MouseUp">
+    <Grid Background="Transparent" MouseLeftButtonDown="Root_MouseDown">
         <Grid.RowDefinitions>
             <RowDefinition Height="30"/>
             <RowDefinition Height="*"/>
