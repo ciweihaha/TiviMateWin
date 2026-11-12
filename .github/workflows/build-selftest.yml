@@ -42,3 +42,17 @@ jobs:
             $fail = $true
           }
           if ($fail) { exit 1 }
+
+      - name: Run --playtest (live stream 30s)
+        # v1.4.16：真流连续播放 30 秒，覆盖 18 秒停播问题（播完一窗就停）。
+        # continue-on-error：SCF 偶发抖动不应阻塞 PR 检查，只留信号；日志里看 PASS/FAIL。
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $exe = "bin\Release\net11.0-windows\win-x64\TiviMateWin.exe"
+          $log = Join-Path $env:TEMP "tivimate_selftest.txt"
+          if (Test-Path $log) { Remove-Item $log -Force }
+          $p = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList "--playtest","https://1255936422-hw086rntqr.ap-guangzhou.tencentscf.com/ysp/cctv1.m3u8" -Wait -PassThru
+          Write-Host "playtest exit code: $($p.ExitCode)"
+          if (Test-Path $log) { Get-Content $log | ForEach-Object { Write-Host $_ } }
+          else { Write-Host "PLAYTEST LOG NOT FOUND: $log" }
