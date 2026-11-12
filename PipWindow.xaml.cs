@@ -95,8 +95,8 @@ public partial class PipWindow : Window
             var x = (short)(lParam.ToInt32() & 0xFFFF);
             var y = (short)((lParam.ToInt32() >> 16) & 0xFFFF);
             var pt = PointFromScreen(new Point(x, y));
-            // 标题栏（高 30px）且不在右侧三个按钮区（3×28px）→ 按标题栏处理，系统接管拖动
-            if (pt.Y >= 0 && pt.Y < 30 && pt.X >= 0 && pt.X < ActualWidth - 84)
+            // 标题栏（高 30px）且不在右侧两个按钮区（2×28px）→ 按标题栏处理，系统接管拖动
+            if (pt.Y >= 0 && pt.Y < 30 && pt.X >= 0 && pt.X < ActualWidth - 56)
             {
                 handled = true;
                 return (IntPtr)HTCAPTION;
@@ -171,8 +171,6 @@ public partial class PipWindow : Window
         }
         catch { }
     }
-
-    private void Stop_Click(object sender, RoutedEventArgs e) => Stop();
 
     /// <summary>小窗停止播放</summary>
     public void Stop()

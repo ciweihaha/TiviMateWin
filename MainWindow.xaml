@@ -147,8 +147,6 @@
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,0,12,10">
-                    <Button Style="{StaticResource ToolBtn}" Content="点播" Click="BtnVod_Click"
-                            ToolTip="播放点播链接（m3u8/mp4 直链）或导入点播源选片"/>
                     <Button Style="{StaticResource ToolBtn}" Content="网盘" Click="BtnCloud_Click"
                             ToolTip="浏览 OpenList 网盘里的视频并播放"/>
                 </StackPanel>
