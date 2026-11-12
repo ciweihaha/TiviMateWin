@@ -29,6 +29,14 @@ public partial class GroupManagerWindow : Window
         if (GroupList.SelectedItem is not string g) return;
         var name = NewNameBox.Text.Trim();
         if (name.Length == 0 || name == g) return;
+        // 深查第 23 轮：改成已存在的分组名会把两组静默合并（与播放列表改名
+        // “重名拒绝”口径不一致）；此处直接拦截并提示，由用户换名。
+        if (_groups.Any(x => x != g && x == name))
+        {
+            MessageBox.Show(this, $"分组「{name}」已存在，请换一个名称。", "重名",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         Action = "rename";
         SelectedGroup = g;
         NewName = name;

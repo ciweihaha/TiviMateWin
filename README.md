@@ -1,12 +1,12 @@
 # TiviMateWin（星辰直播）
 
-Windows 桌面 IPTV 直播播放器：WPF + libVLC + .NET 10，绿色免安装，解压即用。
+Windows 桌面 IPTV 直播播放器：WPF + libVLC + .NET 11，绿色免安装，解压即用。
 
 [English](README.en.md) | 简体中文
 
 ![Build & Release](https://github.com/ciweihaha/TiviMateWin/actions/workflows/build.yml/badge.svg)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![.NET](https://img.shields.io/badge/.NET-10.0-blueviolet)
+![.NET](https://img.shields.io/badge/.NET-11.0-blueviolet)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-blue)
 
 ![界面布局示意](screenshots/ui-layout.svg)

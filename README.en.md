@@ -1,12 +1,12 @@
 # TiviMateWin
 
-Windows desktop IPTV player built with WPF + libVLC + .NET 10. Portable, no installation required — just unzip and run.
+Windows desktop IPTV player built with WPF + libVLC + .NET 11. Portable, no installation required — just unzip and run.
 
 [简体中文](README.md) | English
 
 ![Build & Release](https://github.com/ciweihaha/TiviMateWin/actions/workflows/build.yml/badge.svg)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![.NET](https://img.shields.io/badge/.NET-10.0-blueviolet)
+![.NET](https://img.shields.io/badge/.NET-11.0-blueviolet)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-blue)
 
 ![UI layout overview](screenshots/ui-layout.svg)
