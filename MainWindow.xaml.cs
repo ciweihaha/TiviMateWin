@@ -81,6 +81,53 @@ public partial class MainWindow : Window
         public int X;
         public int Y;
     }
+
+    // ---------- 底层鼠标钩子（WH_MOUSE_LL） ----------
+    // 根因：libvlc 视频窗口由 vout 线程创建/拥有，其鼠标消息进的是 vout 线程的消息队列，
+    // 根本到不了 UI 线程的 ComponentDispatcher.ThreadFilterMessage——v1.4.8 的双击识别
+    // 因此一个按下都收不到（CI 在 Linux 上只能验构建，无法验真机行为）。
+    // WH_MOUSE_LL 在原始输入层看鼠标，不依赖视频窗口归属与生命周期；钩子只观察、永不吞消息。
+    private const int WH_MOUSE_LL = 14;
+    private const int WM_MOUSEMOVE = 0x0200;
+    private const int WM_LBUTTONDOWN = 0x0201;
+    private const int WM_LBUTTONUP = 0x0202;
+    private const int WM_LBUTTONDBLCLK = 0x0203;
+    private const int WM_NCLBUTTONDOWN = 0x00A1;
+    private const int HTCAPTION = 2;
+    private const int VK_LBUTTON = 0x01;
+    private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+    private LowLevelMouseProc? _mouseHookProc; // 必须保存在字段里，防 GC 回收导致钩子崩溃
+    private IntPtr _mouseHook = IntPtr.Zero;
+    private DateTime _lastPipClickUtc = DateTime.MinValue; // 小窗视频区双击配对
+    private Point _lastPipClickPoint;
+    private Point? _pipVideoDownPoint; // 小窗视频区按下点：拖动候选
+    private bool _pipDragging;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+    [DllImport("user32.dll")]
+    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+    [DllImport("user32.dll")]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetModuleHandle(string? lpModuleName);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MSLLHOOKSTRUCT
+    {
+        public POINT pt;
+        public uint mouseData;
+        public uint flags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
     private bool _sideCollapsed;   // 侧栏是否收起（缩进最左）
     private GridLength _sideWidth = new(300);
 
@@ -195,6 +242,8 @@ public partial class MainWindow : Window
 
         // 线程消息层拦截方向键：无论焦点在 WPF 还是 VLC 原生窗口（HwndHost），↑↓换台都生效
         ComponentDispatcher.ThreadFilterMessage += OnThreadFilterMessage;
+
+        InstallMouseHook(); // 底层鼠标钩子：视频区双击/小窗视频区拖动（见 OnLowLevelMouse）
     }
 
     private void OnWindowActivated(object? sender, EventArgs e) => ReturnFocusToList();
@@ -212,13 +261,16 @@ public partial class MainWindow : Window
     private void OnThreadFilterMessage(ref MSG msg, ref bool handled)
     {
         const int WM_KEYDOWN = 0x0100;
-        const int WM_LBUTTONDOWN = 0x0201;
         if (handled) return;
         // 视频区双击切换全屏：VideoView 是原生 HWND，WPF 收不到它的鼠标事件，
         // 在此按两次左键按下识别双击。单击、拖动不受影响（只在第二次按下时切换）。
         if (msg.message == WM_LBUTTONDOWN)
         {
-            if (TryHandleVideoDoubleClick(msg.hwnd)) handled = true;
+            if (TryHandleVideoDoubleClick(msg.hwnd))
+            {
+                ToggleFullscreen();
+                handled = true;
+            }
             return;
         }
         if (msg.message != WM_KEYDOWN) return;
@@ -237,7 +289,7 @@ public partial class MainWindow : Window
 
     /// <summary>视频区双击切换全屏：全屏时双击退出，窗口化时双击进入（与 F11 一致）。
     /// 只认落到主窗口（含 VLC 原生视频子窗口）且落在视频区内的按下；小窗/独立频道窗口/
-    /// 对话框、侧栏/状态栏/全屏浮层上的按下不算。返回 true 表示已消费本次按下。</summary>
+    /// 对话框、侧栏/状态栏/全屏浮层上的按下不算。返回 true 表示本次按下构成双击，调用方负责切换。</summary>
     private bool TryHandleVideoDoubleClick(IntPtr hwnd)
     {
         if (_closing || !IsLoaded) return false;
@@ -256,13 +308,17 @@ public partial class MainWindow : Window
         // 只认落在视频区内的按下：用光标屏幕坐标比对 VideoView 的屏幕矩形；
         // 全屏浮层、换台 OSD 盖在视频区上时，它们那块不算视频区
         if (!GetCursorPos(out var pt)) return false;
-        var videoTopLeft = VideoView.PointToScreen(new Point(0, 0));
-        var videoRect = new Rect(videoTopLeft, new Size(VideoView.ActualWidth, VideoView.ActualHeight));
-        var point = new Point(pt.X, pt.Y);
-        if (!videoRect.Contains(point)) return false;
-        if (FullscreenOverlay.Visibility == Visibility.Visible && IsPointInElement(FullscreenOverlay, point)) return false;
-        if (ChannelOsd.Visibility == Visibility.Visible && IsPointInElement(ChannelOsd, point)) return false;
-        // 两次按下都在双击时间与双击矩形内即为双击
+        return TryHandleVideoDoubleClickAt(new Point(pt.X, pt.Y));
+    }
+
+    /// <summary>视频区双击配对（供线程消息层与底层鼠标钩子共用）：两次按下都在双击时间与
+    /// 矩形内即为双击。注意：只做配对判断，不切换全屏，切换由调用方做（钩子侧用 BeginInvoke
+    /// 延迟切，避免与线程消息层的同步切换重复触发——两者共用配对状态，先触发的一方
+    /// 会把 _lastVideoClickUtc 清掉，另一方就不再算双击）。</summary>
+    private bool TryHandleVideoDoubleClickAt(Point point)
+    {
+        if (!IsPointInMainVideo(point)) return false;
+        if (IsPointOnMainOverlayOrOsd(point)) return false;
         var now = DateTime.UtcNow;
         var doubleClickTime = TimeSpan.FromMilliseconds(GetDoubleClickTime());
         var dx = Math.Abs(point.X - _lastVideoClickPoint.X);
@@ -277,14 +333,167 @@ public partial class MainWindow : Window
         _lastVideoClickPoint = point;
         if (!isDouble) return false;
         _lastVideoClickUtc = DateTime.MinValue; // 本次双击已消费，避免三连击又算一次
-        ToggleFullscreen();
         return true;
+    }
+
+    private bool IsPointInMainVideo(Point screenPoint)
+    {
+        if (!IsLoaded || VideoView.ActualWidth <= 0 || VideoView.ActualHeight <= 0) return false;
+        var videoTopLeft = VideoView.PointToScreen(new Point(0, 0));
+        return new Rect(videoTopLeft, new Size(VideoView.ActualWidth, VideoView.ActualHeight)).Contains(screenPoint);
+    }
+
+    private bool IsPointOnMainOverlayOrOsd(Point screenPoint)
+    {
+        if (FullscreenOverlay.Visibility == Visibility.Visible && IsPointInElement(FullscreenOverlay, screenPoint)) return true;
+        if (ChannelOsd.Visibility == Visibility.Visible && IsPointInElement(ChannelOsd, screenPoint)) return true;
+        return false;
     }
 
     private static bool IsPointInElement(FrameworkElement element, Point screenPoint)
     {
         var topLeft = element.PointToScreen(new Point(0, 0));
         return new Rect(topLeft, new Size(element.ActualWidth, element.ActualHeight)).Contains(screenPoint);
+    }
+
+    private void InstallMouseHook()
+    {
+        try
+        {
+            _mouseHookProc = OnLowLevelMouse;
+            _mouseHook = SetWindowsHookEx(WH_MOUSE_LL, _mouseHookProc, GetModuleHandle(null), 0);
+            if (_mouseHook == IntPtr.Zero) AppLog.Error("install mouse hook failed");
+        }
+        catch (Exception ex) { AppLog.Error($"install mouse hook failed: {ex.Message}"); }
+    }
+
+    private void UninstallMouseHook()
+    {
+        try
+        {
+            if (_mouseHook != IntPtr.Zero) { UnhookWindowsHookEx(_mouseHook); _mouseHook = IntPtr.Zero; }
+            _mouseHookProc = null;
+        }
+        catch { }
+    }
+
+    /// <summary>底层鼠标钩子回调（UI 线程）：只观察、永不吞消息；重活一律 BeginInvoke/PostMessage，钩子内不阻塞。
+    /// WM_MOUSEMOVE 只在小窗拖动候选期间才处理，平时直接放行，避免系统范围的鼠标移动都走 Win32 调用。</summary>
+    private IntPtr OnLowLevelMouse(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0 && !_closing && IsLoaded)
+        {
+            try
+            {
+                var msg = wParam.ToInt32();
+                if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK || msg == WM_LBUTTONUP
+                    || (msg == WM_MOUSEMOVE && _pipVideoDownPoint != null && !_pipDragging))
+                {
+                    var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+                    HandleLowLevelMouse(msg, new Point(data.pt.X, data.pt.Y));
+                }
+            }
+            catch { /* 钩子永不抛错 */ }
+        }
+        return CallNextHookEx(_mouseHook, nCode, wParam, lParam);
+    }
+
+    private void HandleLowLevelMouse(int msg, Point point)
+    {
+        if (msg == WM_LBUTTONUP) { _pipVideoDownPoint = null; _pipDragging = false; }
+        var fg = GetForegroundWindow();
+        var mainHwnd = new WindowInteropHelper(this).Handle;
+        // 主窗口在前台：视频区双击切换主窗口全屏（线程消息层收不到视频窗口的消息，这里是主入口）
+        if (fg == mainHwnd && mainHwnd != IntPtr.Zero)
+        {
+            if (msg == WM_LBUTTONDBLCLK)
+            {
+                // 系统已认定双击（视频窗口类带 CS_DBLCLKS 时第二下是 DBLCLK 而不是 DOWN）：直接处理
+                _lastVideoClickUtc = DateTime.MinValue;
+                if (IsPointInMainVideo(point) && !IsPointOnMainOverlayOrOsd(point))
+                    RequestToggleFullscreen();
+                return;
+            }
+            if (msg == WM_LBUTTONDOWN && TryHandleVideoDoubleClickAt(point))
+                RequestToggleFullscreen();
+            return;
+        }
+        // 小窗在前台：视频区双击切小窗全屏；按下后移动则拖动小窗
+        if (_pipWindow == null) return;
+        var pipHwnd = new WindowInteropHelper(_pipWindow).Handle;
+        if (pipHwnd == IntPtr.Zero || fg != pipHwnd) return;
+        if (msg == WM_LBUTTONDBLCLK)
+        {
+            _lastPipClickUtc = DateTime.MinValue;
+            _pipVideoDownPoint = null;
+            if (IsPointInPipVideo(point))
+            {
+                var pip = _pipWindow;
+                Dispatcher.BeginInvoke(new Action(() => pip.TogglePipFullscreen()));
+            }
+            return;
+        }
+        if (msg == WM_LBUTTONDOWN)
+        {
+            if (!IsPointInPipVideo(point)) return;
+            _pipVideoDownPoint = point;
+            if (TryHandlePipDoubleClickAt(point))
+            {
+                var pip = _pipWindow;
+                Dispatcher.BeginInvoke(new Action(() => pip.TogglePipFullscreen()));
+            }
+            return;
+        }
+        // WM_MOUSEMOVE：按下后移动超 4px 且小窗未全屏 → 发起系统拖动（PostMessage，不阻塞 vout 线程）
+        if (msg == WM_MOUSEMOVE && _pipVideoDownPoint is { } down && !_pipDragging && !_pipWindow.IsPipFullscreen)
+        {
+            if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0
+                && (Math.Abs(point.X - down.X) > 4 || Math.Abs(point.Y - down.Y) > 4))
+            {
+                _pipDragging = true;
+                PostMessage(pipHwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+            }
+        }
+    }
+
+    /// <summary>延迟切换主窗口全屏：钩子回调内不同步改窗口状态；300ms 防重入（与线程消息层共用时间戳）。</summary>
+    private void RequestToggleFullscreen()
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_closing || !IsLoaded) return;
+            if ((DateTime.UtcNow - _lastFullscreenToggleUtc).TotalMilliseconds < 300) return;
+            ToggleFullscreen();
+        }));
+    }
+
+    private bool TryHandlePipDoubleClickAt(Point point)
+    {
+        if (!IsPointInPipVideo(point)) return false;
+        var now = DateTime.UtcNow;
+        var doubleClickTime = TimeSpan.FromMilliseconds(GetDoubleClickTime());
+        var dx = Math.Abs(point.X - _lastPipClickPoint.X);
+        var dy = Math.Abs(point.Y - _lastPipClickPoint.Y);
+        var doubleClickWidth = GetSystemMetrics(36);
+        var doubleClickHeight = GetSystemMetrics(37);
+        var isDouble = _lastPipClickUtc != DateTime.MinValue
+            && (now - _lastPipClickUtc) <= doubleClickTime
+            && dx <= doubleClickWidth / 2 + 2
+            && dy <= doubleClickHeight / 2 + 2;
+        _lastPipClickUtc = now;
+        _lastPipClickPoint = point;
+        if (!isDouble) return false;
+        _lastPipClickUtc = DateTime.MinValue;
+        return true;
+    }
+
+    /// <summary>点是否落在小窗视频区：小窗矩形去掉顶部 30px 标题栏。</summary>
+    private bool IsPointInPipVideo(Point screenPoint)
+    {
+        var pip = _pipWindow;
+        if (pip == null || !pip.IsVisible) return false;
+        var rect = new Rect(pip.Left, pip.Top + 30, Math.Max(0, pip.Width), Math.Max(0, pip.Height - 30));
+        return rect.Contains(screenPoint);
     }
 
     // ---------- 启动 ----------
@@ -1022,6 +1231,11 @@ public partial class MainWindow : Window
                 // 1 秒后检查：重挂后仍未恢复播放（不含用户主动暂停），重播当前频道兜底
                 _reattachCheckTimer.Stop();
                 _reattachCheckTimer.Start();
+                // 小窗开着时按 F11 进主全屏：主播放器是停着的，别等 1 秒检查，直接重播当前频道。
+                // （退出全屏且小窗开着时，回调跑到这里之前 ApplyPipMainEffect 已把标志置回真，
+                // 上面的 _pipEffectActive 守卫会提前返回，走不到这里，不会跟小窗效果打架）
+                if (_current != null && !_isPaused && !_player.IsPlaying)
+                    _ = PlayAsync(_current);
             }
             catch (Exception ex) { AppLog.Error($"reattach video surface failed: {ex.Message}"); }
         }), DispatcherPriority.Loaded);
@@ -1959,7 +2173,16 @@ public partial class MainWindow : Window
                 return true;
             case Key.F11:
             case Key.F when Keyboard.Modifiers == ModifierKeys.None:
+                // 小窗在前台时全屏的是小窗本身：主窗口播停了、画面已断开，全屏主窗口只会看到黑屏
+                if (_pipWindow != null && _pipWindow.IsActive && !_fullscreen)
+                {
+                    _pipWindow.TogglePipFullscreen();
+                    return true;
+                }
                 ToggleFullscreen();
+                return true;
+            case Key.Escape when _pipWindow is { } pipEsc && pipEsc.IsPipFullscreen:
+                pipEsc.TogglePipFullscreen();
                 return true;
             case Key.Escape when _fullscreen:
                 ToggleFullscreen();
@@ -2126,6 +2349,7 @@ public partial class MainWindow : Window
     private void Window_Closing(object sender, CancelEventArgs e)
     {
         _closing = true;                    // 挂起回调（自动跳台/防抖/看门狗）不再操作 UI
+        UninstallMouseHook();               // 先卸底层鼠标钩子，关闭过程不再收鼠标消息
         SaveWindowPlacement();              // V1.4：记忆窗口位置/尺寸
         // F6(a)：尝试以短超时等待在途 PlayAsync 释放 _playGate；超时不无限阻塞关闭。
         // 注意：Window_Closing 在 UI 线程同步执行，PlayAsync 的释放续体也需 UI 线程，
