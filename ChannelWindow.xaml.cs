@@ -97,7 +97,10 @@ public partial class ChannelWindow : Window
             else AppLog.Error("channel window closing: play gate wait timed out, continuing close");
         }
         catch (Exception ex) { AppLog.Error($"channel window closing: play gate wait failed: {ex.Message}"); }
-        try { _player.Stop(); } catch { }
+        // Stop() 可能阻塞（等卡住的流拆掉），放后台线程，避免关窗口时 UI 卡死；
+        // Window_Closed 里仍会 Dispose 播放器，释放不受影响。
+        var playerToStop = _player;
+        _ = Task.Run(() => { try { playerToStop.Stop(); } catch { } });
     }
 
     private void Window_Closed(object sender, EventArgs e)
