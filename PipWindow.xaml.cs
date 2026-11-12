@@ -23,6 +23,8 @@ public partial class PipWindow : Window
     private Rect _pipPreBounds;       // 小窗全屏前的位置尺寸：退出时原样恢复
     private ChannelItem? _currentChannel; // 小窗当前频道：全屏切回来画面丢了时重播用
     private readonly DispatcherTimer _pipFsCheckTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
+    private readonly DispatcherTimer _pipOpenCheckTimer = new() { Interval = TimeSpan.FromMilliseconds(1000) };
+    private bool _pipOpenCheckArmed; // 开播检查是否待触发：只兜底一次，避免循环重播
     // 关闭中标志（与 ChannelWindow 的 F6(a) 同款）：Window_Closing 置位后 Play 不再启动新播放，
     // 避免主窗口异步续体在小窗关闭后继续对已释放的播放器 Play。
     private volatile bool _closing;
@@ -35,6 +37,7 @@ public partial class PipWindow : Window
         _player = new MediaPlayer(_libvlc) { Volume = volume };
         VideoView.MediaPlayer = _player;
         _pipFsCheckTimer.Tick += (_, _) => OnPipFsCheckTick();
+        _pipOpenCheckTimer.Tick += (_, _) => OnPipOpenCheckTick();
         // 标题栏拖动走 Win32 层：Loaded 后挂 WndProc，WM_NCHITTEST 对标题栏区返回 HTCAPTION，
         // 系统接管拖动，不走 WPF 鼠标事件（标题栏点按偶尔到不了 WPF 处理器时仍能拖动）。
         Loaded += (_, _) =>
@@ -114,6 +117,17 @@ public partial class PipWindow : Window
         _isPaused = false;
         _stopped = false;
         BtnPlayPause.Content = "⏸";
+        StartPlayback(ch);
+        // 开播 1 秒检查：仍未出画面时重挂视频面并重播一次兜底（见 OnPipOpenCheckTick）。
+        _pipOpenCheckArmed = true;
+        _pipOpenCheckTimer.Stop();
+        _pipOpenCheckTimer.Start();
+        AppLog.Info($"pip window play [{ch.Name}]");
+    }
+
+    /// <summary>真正启动一次播放（建 Media 并 Play）；开播检查的兜底重播也走这里，但不重设检查定时器。</summary>
+    private void StartPlayback(ChannelItem ch)
+    {
         try
         {
             var media = ch.Url.Contains("://")
@@ -129,7 +143,26 @@ public partial class PipWindow : Window
         {
             AppLog.Error($"pip window play failed [{ch.Name}]: {ex.Message}");
         }
-        AppLog.Info($"pip window play [{ch.Name}]");
+    }
+
+    /// <summary>开播 1 秒检查：小窗仍未出画面时重挂视频面并重播一次兜底（只兜底一次）。
+    /// 覆盖“小窗一打开就黑屏”的偶发面挂失败；主窗口的 1 秒重挂检查同款思路。</summary>
+    private void OnPipOpenCheckTick()
+    {
+        _pipOpenCheckTimer.Stop();
+        if (_closing || !_pipOpenCheckArmed) return;
+        _pipOpenCheckArmed = false; // 只兜底一次
+        try
+        {
+            if (!_isPaused && !_stopped && !_player.IsPlaying && _currentChannel != null)
+            {
+                VideoView.MediaPlayer = null;
+                VideoView.MediaPlayer = _player;
+                StartPlayback(_currentChannel);
+                AppLog.Info("pip open check: video surface reattached + replayed");
+            }
+        }
+        catch { }
     }
 
     /// <summary>标记为已由主窗口统一释放引擎（主窗口关闭时调用，避免重复释放）</summary>
@@ -176,9 +209,11 @@ public partial class PipWindow : Window
     public void Stop()
     {
         if (_closing) return;
+        // Stop() 可能阻塞 UI，放后台线程；状态先同步改，界面立即反映。
+        var playerToStop = _player;
+        _ = Task.Run(() => { try { playerToStop.Stop(); } catch { } });
         try
         {
-            _player.Stop();
             _isPaused = false;
             _stopped = true;
             BtnPlayPause.Content = "⏸";
@@ -219,7 +254,10 @@ public partial class PipWindow : Window
     {
         // 先置位再 Stop：关闭后到达的 Play 直接返回，不再操作已释放的播放器。
         _closing = true;
-        try { _player.Stop(); } catch { }
+        // Stop() 可能阻塞（等卡住的流拆掉），放后台线程，避免关小窗时 UI 卡死；
+        // Window_Closed 里仍会 Dispose 播放器，释放不受影响。
+        var playerToStop = _player;
+        _ = Task.Run(() => { try { playerToStop.Stop(); } catch { } });
     }
 
     private void Window_Closed(object sender, EventArgs e)
