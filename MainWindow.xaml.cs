@@ -155,6 +155,14 @@ public partial class MainWindow : Window
     private int _stallTicks;
     private int _stallRetryCount;
     private DateTime _lastStallAt = DateTime.MinValue;
+    // 意外停播自动重连（v1.4.16）：直播 HLS 的 playlist 刷新可能失败（SCF 在 200/302 间切换、
+    // 偶发相对分片地址），libvlc 播完当前窗口就停（EndReached）或停在 Stopped 态；
+    // 看门狗原来只在 IsPlaying 时才动，停播后是死角，必须手动重进。
+    // _stopTicks：意外停播持续 tick 数，连续 2 次（8 秒）仍停才重连，避开启动/切台瞬间。
+    // _autoReconnectCount：连续自动重连次数，Playing 事件里清零（播起来了就不算失败）；
+    // 连续 5 次都没播起来就停手等用户，避免死流无限循环重播。
+    private int _stopTicks;
+    private int _autoReconnectCount;
     private bool _closing;
 
     // 独立悬浮小窗（画中画）：无边框窗口，可拖到屏幕任意位置
@@ -184,6 +192,27 @@ public partial class MainWindow : Window
     /// 同源刷新不走缓存，避免缓存回滚刚刷新的列表。</summary>
     internal static bool NeedsCacheFirst(int loadedCount, string? loadedSourceUrl, string srcUrl)
         => loadedCount == 0 || loadedSourceUrl != srcUrl;
+
+    /// <summary>是否直播流（v1.4.16）：HLS（.m3u8）地址即直播；本地文件/点播文件播完是正常的，
+    /// 不自动重连。查询参数与大小写不影响判定。</summary>
+    internal static bool IsLiveStream(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        var u = url.Trim();
+        var q = u.IndexOfAny(new[] { '?', '#' });
+        if (q >= 0) u = u[..q];
+        return u.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>出错恢复决策（v1.4.16，纯逻辑，自测覆盖）：连续失败超 5 次停手；有备用先切备用；
+    /// 无备用时前 3 次重连同一频道（直播闪断常见，跳台是错误体验），再失败才跳下一个频道。</summary>
+    internal enum RecoveryAction { RetrySame, UseBackup, SkipNext, Stop }
+    internal static RecoveryAction DecideRecovery(int failCount, bool hasBackup)
+    {
+        if (failCount > 5) return RecoveryAction.Stop;
+        if (hasBackup) return RecoveryAction.UseBackup;
+        return failCount <= 3 ? RecoveryAction.RetrySame : RecoveryAction.SkipNext;
+    }
 
     // 播放列表加载并发保护：快速切换源/刷新时避免并发覆盖 _all 与 UI 竞态
     private readonly SemaphoreSlim _loadGate = new(1, 1);
@@ -596,6 +625,7 @@ public partial class MainWindow : Window
             _player.Playing += (_, _) => Dispatcher.BeginInvoke(() =>
             {
                 _failCount = 0;              // 播放成功：重置失败链
+                _autoReconnectCount = 0;     // v1.4.16：播起来了，自动重连计数清零
                 _recentFailedUrls.Clear();   // 网络已恢复，允许重试已失败线路
                 PlayState.Text = "播放中";
                 ShowOsd();
@@ -608,6 +638,9 @@ public partial class MainWindow : Window
                 ShowOsd();
             });
             _player.EncounteredError += (_, _) => Dispatcher.BeginInvoke(HandlePlayError);
+            // v1.4.16：直播流播完（EndReached）不是正常结束——HLS 窗口耗尽/playlist 刷新失败时
+            // libvlc 会停在这里；点播文件播完才是正常的，由 OnPlayerEndReached 里的 IsLiveStream 区分。
+            _player.EndReached += (_, _) => Dispatcher.BeginInvoke(OnPlayerEndReached);
             VideoView.MediaPlayer = _player;
             _engineReady = true;
             _stallWatch.Start();
@@ -929,6 +962,7 @@ public partial class MainWindow : Window
         if (!watchdogReconnect)              // 用户主动播放：看门狗计数与失败计数重新开始
         {
             _stallRetryCount = 0;
+            _autoReconnectCount = 0;         // v1.4.16：手动换台/重进，自动重连计数重新开始
             _lastStallAt = DateTime.MinValue;
             _failCount = 0;                  // 用户手动换台：重置坏源失败链，避免永久停止自动跳台
             _recentFailedUrls.Clear();
@@ -1097,6 +1131,14 @@ public partial class MainWindow : Window
         {
             var len = _player.Length;
             var t = _player.Time;
+            // v1.4.16：直播流没有总时长——libvlc 报的 Length 只是 HLS 滑动窗口（十几秒），
+            // 拿它当总时长会显示 00:18/00:16 这种“已播超总时长”；直播只显示“直播”，不驱动进度条。
+            if (_current != null && IsLiveStream(_current.Url))
+            {
+                DurationText.Text = "直播";
+                TimeText.Text = FormatTime(t);
+                return;
+            }
             if (len > 0)
             {
                 SeekBar.Maximum = len;
@@ -2317,7 +2359,34 @@ public partial class MainWindow : Window
 
     // ---------- 坏源容错 ----------
 
-    /// <summary>播放出错处理：优先切同频道备用线路；无备用则 1.2s 后自动跳下一个频道</summary>
+    /// <summary>直播流意外播完（v1.4.16）：HLS 窗口耗尽或 playlist 刷新失败时 libvlc 停在这里；
+    /// 点播文件播完是正常的，不重连；直播则自动重连同一频道，不用用户手动重进。</summary>
+    private void OnPlayerEndReached()
+    {
+        if (_closing || _isPaused || _pipEffectActive) return;
+        if (_current is not { } ch) return;
+        if (!IsLiveStream(ch.Url)) return;
+        AppLog.Error($"live stream ended unexpectedly, reconnect: [{ch.Name}]");
+        PlayState.Text = "直播中断，自动重连…";
+        TryAutoReconnect(ch);
+    }
+
+    /// <summary>自动重连同一频道（v1.4.16）：EndReached / 意外停播共用；连续 5 次都没播起来
+    /// 就停手（流可能真死了），显示文案等用户手动处理，避免无限循环重播。</summary>
+    private bool TryAutoReconnect(ChannelItem ch)
+    {
+        if (_closing || _isPaused || _pipEffectActive) return false;
+        if (++_autoReconnectCount > 5)
+        {
+            PlayState.Text = "连续失败，请手动重进";
+            AppLog.Error($"auto-reconnect stopped after limit: [{ch.Name}]");
+            return false;
+        }
+        _ = PlayAsync(ch, true);
+        return true;
+    }
+
+    /// <summary>播放出错处理：优先切同频道备用线路；无备用先重连同一频道（3 次），再失败才跳下一个频道</summary>
     private void HandlePlayError()
     {
         if (_closing || _current is not { } ch) return;
@@ -2327,25 +2396,34 @@ public partial class MainWindow : Window
         _lastPlayErrorUtc = now;
         _lastPlayErrorUrl = ch.Url;
         _recentFailedUrls.Add(ch.Url);
-        if (++_failCount > 5)
-        {
-            PlayState.Text = "连续失败，已停止自动换台";
-            AppLog.Error($"auto-skip stopped after limit: [{ch.Name}]");
-            return;
-        }
+        ++_failCount;
 
         var backup = FindBackupChannel(ch);
-        if (backup is not null && !_recentFailedUrls.Contains(backup.Url))
+        var hasBackup = backup is not null && !_recentFailedUrls.Contains(backup.Url);
+        switch (DecideRecovery(_failCount, hasBackup))
         {
-            PlayState.Text = "线路失败，切备用…";
-            AppLog.Info($"switch to backup [{backup.Name}]");
-            _ = PlayAsync(backup);
-            return;
+            case RecoveryAction.Stop:
+                PlayState.Text = "连续失败，已停止自动换台";
+                AppLog.Error($"auto-skip stopped after limit: [{ch.Name}]");
+                return;
+            case RecoveryAction.UseBackup:
+                PlayState.Text = "线路失败，切备用…";
+                AppLog.Info($"switch to backup [{backup!.Name}]");
+                _ = PlayAsync(backup);
+                return;
+            case RecoveryAction.RetrySame:
+                // v1.4.16：无备用时先重连同一频道——直播闪断常见，直接跳台是错误体验；
+                // 3 次还不行再跳台（SkipNext）。Playing 事件会清零 _failCount，长期播得住的台不会累积到跳台。
+                PlayState.Text = "播放出错，自动重连…";
+                AppLog.Error($"channel error, reconnect same: [{ch.Name}] {ch.Url}");
+                _ = PlayAsync(ch, true);
+                return;
+            default: // SkipNext
+                PlayState.Text = "播放出错，自动跳台…";
+                AppLog.Error($"channel error, auto-skip: [{ch.Name}] {ch.Url}");
+                _ = AutoSkipAsync(ch);
+                return;
         }
-
-        PlayState.Text = "播放出错，自动跳台…";
-        AppLog.Error($"channel error, auto-skip: [{ch.Name}] {ch.Url}");
-        _ = AutoSkipAsync(ch);
     }
 
     private async Task AutoSkipAsync(ChannelItem failed)
@@ -2381,11 +2459,32 @@ public partial class MainWindow : Window
         _osdTimer.Start();
     }
 
-    /// <summary>直播停滞看门狗：每 4 秒检查播放位置，IsPlaying 但连续 2 次（8 秒）不前进则自动重连（上限 3 次）</summary>
+    /// <summary>直播停滞看门狗：每 4 秒检查播放位置，IsPlaying 但连续 2 次（8 秒）不前进则自动重连（上限 3 次）；
+    /// v1.4.16 增加意外停播分支：播完/停在 Stopped/Error 态也不再是死角，直播流自动重连。</summary>
     private void OnStallWatchTick(object? sender, EventArgs e)
     {
         if (_closing) return;
-        if (_player is null || !_player.IsPlaying) { _stallTicks = 0; _lastMediaTime = -1; return; } // 未播/暂停不监控
+        if (_player is null) return;
+        // v1.4.16 意外停播：播放器停在 Stopped/Ended/Error 态、当前频道是直播流、不是暂停/
+        // 小窗效果 → 自动重连。原来 !IsPlaying 就直接 return，播完/停住只能手动重进。
+        // 连续 2 次（8 秒）仍停才动手，避开启动/切台/停止的瞬间状态；小窗效果时主播放器
+        // 是故意停着的，必须排除（_pipEffectActive）。
+        if (!_player.IsPlaying && _current != null && !_isPaused && !_pipEffectActive
+            && (_player.State == VLCState.Stopped || _player.State == VLCState.Ended || _player.State == VLCState.Error)
+            && IsLiveStream(_current.Url))
+        {
+            _stallTicks = 0; _lastMediaTime = -1;
+            if (++_stopTicks >= 2)
+            {
+                _stopTicks = 0;
+                PlayState.Text = "直播中断，自动重连…";
+                AppLog.Info($"unexpected stop detected, reconnect: [{_current.Name}]");
+                TryAutoReconnect(_current);
+            }
+            return;
+        }
+        _stopTicks = 0;
+        if (!_player.IsPlaying) { _stallTicks = 0; _lastMediaTime = -1; return; } // 未播/暂停不监控
         var t = _player.Time;
         if (t <= 0) { _stallTicks = 0; _lastMediaTime = -1; return; }   // 部分流 Time 恒 0，跳过监控防误判
 
