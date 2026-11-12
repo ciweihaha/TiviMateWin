@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:lvc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
         Title="星辰直播" Height="640" Width="1120" MinWidth="780" MinHeight="480"
-        WindowStartupLocation="CenterScreen"
+        WindowStartupLocation="CenterScreen" Icon="Assets/tivimate-icon.ico"
         Background="{DynamicResource WindowBgBrush}" Foreground="{DynamicResource FgBrush}"
         FontFamily="Microsoft YaHei UI" UseLayoutRounding="True"
         Loaded="Window_Loaded" Closing="Window_Closing" Closed="Window_Closed"
