@@ -26,5 +26,9 @@
             </DockPanel>
         </Border>
         <lvc:VideoView x:Name="VideoView" Grid.Row="1" Background="Black" Focusable="False"/>
+        <!-- 播放失败/停滞提示（v1.4.15 2-6）：断流不再静默黑屏，点击重播 -->
+        <TextBlock x:Name="PipStatusText" Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                   Foreground="#FFE2E8EF" Background="#CC000000" Padding="12,8" FontSize="12" Cursor="Hand"
+                   Visibility="Collapsed" ToolTip="点击重播" MouseLeftButtonDown="PipStatusText_MouseDown"/>
     </Grid>
 </Window>
