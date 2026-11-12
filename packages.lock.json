@@ -1,7 +1,7 @@
 {
   "version": 1,
   "dependencies": {
-    "net10.0-windows7.0": {
+    "net11.0-windows7.0": {
       "LibVLCSharp.WPF": {
         "type": "Direct",
         "requested": "[3.10.2, )",
@@ -13,9 +13,9 @@
       },
       "System.Security.Cryptography.ProtectedData": {
         "type": "Direct",
-        "requested": "[11.0.0-rc.3, )",
-        "resolved": "11.0.0-rc.3.26522.148",
-        "contentHash": "0F1SBb6/RvWg2nBVlgH6FZ0mjyPXFnPSnol8v2BANPrF302feFOAr119sQCuhbIsxhCr/hA6pEYKsOQq0lTxLA=="
+        "requested": "[11.0.0, )",
+        "resolved": "11.0.0",
+        "contentHash": "iS9iyAMwLDPFBzTdcREDkzRBYmwy7aENYl7EXxAvnNJNCbl7+UVRgJfWaVLtVjSeDmT3JIItgGODmuAPljXFww=="
       },
       "VideoLAN.LibVLC.Windows": {
         "type": "Direct",
@@ -29,6 +29,6 @@
         "contentHash": "WNLHBIK5QcOH0kNGBGupKC9Ds3hksPthHyp6ueE8zG5Hy/6EBwAU0BbMqukBCdLatCOY+V9DYHDwSVSXSmPGSA=="
       }
     },
-    "net10.0-windows7.0/win-x64": {}
+    "net11.0-windows7.0/win-x64": {}
   }
 }

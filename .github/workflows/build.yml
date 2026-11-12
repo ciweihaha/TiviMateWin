@@ -18,10 +18,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup .NET 10
+      - name: Setup .NET 11
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
 
       - name: Publish (win-x64 self-contained)
         # F9：版本注入——非 tag 构建默认硬编码 1.4.1（与 csproj 的 1.4.1 一致，见残余清单；tag 构建时取 tag 名去掉前缀 v 后的版本号）。
