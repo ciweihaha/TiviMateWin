@@ -159,6 +159,26 @@ public static class SelfTest
             lines.Add(MainWindow.NeedsCacheFirst(5, null, "http://b.m3u8")
                 ? "PASS 切源缓存判定-来源未知需缓存" : "FAIL 切源缓存判定-来源未知需缓存");
 
+            // --- 直播流判定（v1.4.16；纯逻辑） ---
+            // 播完自动重连只对直播流生效：.m3u8 即直播；点播文件播完是正常的，不重连。
+            lines.Add(MainWindow.IsLiveStream("http://x/cctv1.m3u8") ? "PASS 直播判定-m3u8" : "FAIL 直播判定-m3u8");
+            lines.Add(MainWindow.IsLiveStream("https://x/live.m3u8?token=abc&x=1") ? "PASS 直播判定-带查询参数" : "FAIL 直播判定-带查询参数");
+            lines.Add(MainWindow.IsLiveStream("HTTPS://X/LIVE.M3U8") ? "PASS 直播判定-大小写不敏感" : "FAIL 直播判定-大小写不敏感");
+            lines.Add(!MainWindow.IsLiveStream("http://x/movie.mp4") ? "PASS 直播判定-mp4不是直播" : "FAIL 直播判定-mp4不是直播");
+            lines.Add(!MainWindow.IsLiveStream("http://x/v.m3u8.ts") ? "PASS 直播判定-ts后缀不是直播" : "FAIL 直播判定-ts后缀不是直播");
+            lines.Add(!MainWindow.IsLiveStream("C:\\Videos\\a.mp4") && !MainWindow.IsLiveStream("") && !MainWindow.IsLiveStream(null)
+                ? "PASS 直播判定-本地文件与空值" : "FAIL 直播判定-本地文件与空值");
+
+            // --- 出错恢复决策（v1.4.16；纯逻辑） ---
+            // 无备用时前 3 次重连同一频道，再失败才跳台；超 5 次停手；有备用先切备用。
+            lines.Add(MainWindow.DecideRecovery(1, false) == MainWindow.RecoveryAction.RetrySame ? "PASS 恢复决策-首次失败重连同一频道" : "FAIL 恢复决策-首次失败重连同一频道");
+            lines.Add(MainWindow.DecideRecovery(3, false) == MainWindow.RecoveryAction.RetrySame ? "PASS 恢复决策-3次内仍重连" : "FAIL 恢复决策-3次内仍重连");
+            lines.Add(MainWindow.DecideRecovery(4, false) == MainWindow.RecoveryAction.SkipNext ? "PASS 恢复决策-4次跳台" : "FAIL 恢复决策-4次跳台");
+            lines.Add(MainWindow.DecideRecovery(5, false) == MainWindow.RecoveryAction.SkipNext ? "PASS 恢复决策-5次跳台" : "FAIL 恢复决策-5次跳台");
+            lines.Add(MainWindow.DecideRecovery(2, true) == MainWindow.RecoveryAction.UseBackup ? "PASS 恢复决策-有备用先切备用" : "FAIL 恢复决策-有备用先切备用");
+            lines.Add(MainWindow.DecideRecovery(6, true) == MainWindow.RecoveryAction.Stop ? "PASS 恢复决策-超5次停手" : "FAIL 恢复决策-超5次停手");
+            lines.Add(MainWindow.DecideRecovery(6, false) == MainWindow.RecoveryAction.Stop ? "PASS 恢复决策-无备用超5次停手" : "FAIL 恢复决策-无备用超5次停手");
+
             // --- 拉取限长（深查第 13 轮；纯流逻辑，不触网络） ---
             // 旧 FetchTextAsync 用 GetStringAsync 无界缓冲，失控源可撑爆内存；
             // 新实现流式限长（复用 LogoService.ReadCappedAsync），超限抛错且不重试。
@@ -542,7 +562,10 @@ public static class SelfTest
             lines.Add(OpenListService.ParentPath("/电影/动作") == "/电影" && OpenListService.ParentPath("/") == "/" && OpenListService.ParentPath("/电影") == "/"
                 ? "PASS OpenList上级路径" : "FAIL OpenList上级路径");
 
-            // --- 播放测试 ---
+            // --- 播放测试（v1.4.16：连续播 30 秒，覆盖 18 秒停播问题） ---
+            // 直播 HLS 窗口约 16 秒：旧逻辑播完一窗就停（EndReached 无人处理、看门狗只看
+            // IsPlaying），30 秒内必须一直在播、位置持续前进才算过；中途停住即 FAIL，
+            // 并记下停的时刻与最高位置，便于定位是启动失败还是播中停。
             if (playTest)
             {
                 if (string.IsNullOrEmpty(url))
@@ -560,15 +583,28 @@ public static class SelfTest
 
                     var sw = Stopwatch.StartNew();
                     var played = false;
-                    while (sw.Elapsed < TimeSpan.FromSeconds(9))
+                    long maxTime = -1;
+                    var stopAt = -1.0;
+                    while (sw.Elapsed < TimeSpan.FromSeconds(30))
                     {
-                        Thread.Sleep(300);
-                        if (mp.IsPlaying) { played = true; break; }
+                        Thread.Sleep(2000);
+                        // 缓冲中 IsPlaying 可能为 false，别误判为停播；只看是否彻底停住。
+                        var alive = mp.IsPlaying || mp.State == VLCState.Buffering;
+                        if (alive)
+                        {
+                            played = true;
+                            if (mp.Time > maxTime) maxTime = mp.Time;
+                        }
+                        else if (played)
+                        {
+                            stopAt = sw.Elapsed.TotalSeconds;
+                            break;
+                        }
                     }
-                    Thread.Sleep(2000);
-                    lines.Add(played && mp.Time >= 0
-                        ? $"PASS 播放测试 已推流 {mp.Time}ms"
-                        : $"FAIL 播放测试 IsPlaying={played} Time={mp.Time}ms");
+                    var ok = played && stopAt < 0 && maxTime >= 20000;
+                    lines.Add(ok
+                        ? $"PASS 播放测试 连续30秒未停 最高位置{maxTime}ms"
+                        : $"FAIL 播放测试 played={played} stopAt={stopAt}s maxTime={maxTime}ms");
                 }
             }
         }
