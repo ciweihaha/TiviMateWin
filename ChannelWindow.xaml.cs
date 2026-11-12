@@ -48,6 +48,9 @@ public partial class ChannelWindow : Window
                 if (_closing) return;   // 等待期间窗口已关闭：不再启动播放
                 await Task.Run(() =>
                 {
+                    // v1.4.15 迭代 3：锁内再校验一次关闭状态——等锁期间窗口已关时，
+                    // 后台释放可能正在 Dispose 同一个播放器，Play 会撞上去。
+                    if (_closing) return;
                     var media = ch.Url.Contains("://")
                         ? new Media(_libvlc, new Uri(ch.Url))
                         : new Media(_libvlc, ch.Url, FromType.FromPath);

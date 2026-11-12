@@ -958,19 +958,29 @@ public partial class MainWindow : Window
             await _playGate.WaitAsync();
             try
             {
+                // v1.4.15 迭代 3：等锁期间可能已被停止（_current 已清）或被更新的换台取代
+                // （_current 已指向另一 Url），此时不再启动本次播放——否则停止后流又自己起播。
+                // 按 Url 比对：列表刷新后 _current 会换成同 Url 的新对象，引用比对会误判。
+                if (_closing || _current?.Url != ch.Url) return;
                 await Task.Run(() =>
                 {
-                    // 创建新 Media 并播放，然后释放旧的（顺序：先播新的，再释放旧的，避免黑屏）
-                    var media = url.Contains("://")
-                        ? new Media(_libvlc!, new Uri(url))
-                        : new Media(_libvlc!, url, FromType.FromPath);
-                    media.AddOption($":network-caching={_config.NetworkCache}");
-                    _player!.Play(media);
-                    lock (_mediaLock)
+                    // 与后台 Stop 用同一把 _mainPlayerLock 串行化：锁内再校验一次，
+                    // 堵住“检查通过后、Play 之前”被停止的微秒窗口。
+                    lock (_mainPlayerLock)
                     {
-                        var old = _currentMedia;
-                        _currentMedia = media;   // 新 Media 接管播放
-                        old?.Dispose();          // 旧 Media 已停止，安全释放
+                        if (_closing || _current?.Url != ch.Url) return;
+                        // 创建新 Media 并播放，然后释放旧的（顺序：先播新的，再释放旧的，避免黑屏）
+                        var media = url.Contains("://")
+                            ? new Media(_libvlc!, new Uri(url))
+                            : new Media(_libvlc!, url, FromType.FromPath);
+                        media.AddOption($":network-caching={_config.NetworkCache}");
+                        _player!.Play(media);
+                        lock (_mediaLock)
+                        {
+                            var old = _currentMedia;
+                            _currentMedia = media;   // 新 Media 接管播放
+                            old?.Dispose();          // 旧 Media 已停止，安全释放
+                        }
                     }
                 });
             }
@@ -1170,6 +1180,15 @@ public partial class MainWindow : Window
     {
         _saveDebounce.Stop();
         _saveDebounce.Start();
+    }
+
+    /// <summary>配置保存放后台线程（v1.4.15 迭代 3）：Save 含 DPAPI 加密 + 原子换名，
+    /// 同步写盘在慢盘/杀毒扫描时会卡 UI；迭代 1 只改了防抖路径，本处补上其余 6 处直接调用。
+    /// 读盘失败待确认时仍走 UI 线程（Save 里要弹确认框）；退出时的最后一次保存见 Window_Closing。</summary>
+    private void SaveConfigAsync()
+    {
+        if (AppConfig.ReadFailurePending) _config.Save();
+        else _ = Task.Run(() => _config.Save());
     }
 
     private void ToggleFullscreen()
@@ -1790,7 +1809,7 @@ public partial class MainWindow : Window
     {
         if (name == _config.ActivePlaylist) { RefreshPlaylistCombo(); return; }
         _config.ActivePlaylist = name;
-        _config.Save();
+        SaveConfigAsync();
         // 切换源：停掉旧频道（后台 Stop，避免 VLC 阻塞 UI 导致卡死），清空播放状态。
         // v1.4.15 2-4：代号校验——切源后若已播新频道（代号变了），迟到的 Stop 直接跳过，
         // 否则会停掉新起的流；此处无 1 秒重播兜底，停掉就黑屏无声。
@@ -1817,7 +1836,7 @@ public partial class MainWindow : Window
         if (wasActive)
         {
             _config.ActivePlaylist = _config.Playlists.FirstOrDefault()?.Name;
-            _config.Save();
+            SaveConfigAsync();
             // v1.4.15 2-4：同 ActivatePlaylist，代号校验防迟到的 Stop 停掉新流。
             var p = _player;
             if (p is { IsPlaying: true })
@@ -1832,7 +1851,7 @@ public partial class MainWindow : Window
             PlayState.Text = "未播放";
             _ = LoadPlaylistAsync(false, _netCts.Token);
         }
-        else _config.Save();
+        else SaveConfigAsync();
         RefreshPlaylistCombo();
     }
 
@@ -1845,7 +1864,7 @@ public partial class MainWindow : Window
         var wasActive = _config.ActivePlaylist == s.Name;
         s.Name = newName;
         if (wasActive) _config.ActivePlaylist = newName;
-        _config.Save();
+        SaveConfigAsync();
         RefreshPlaylistCombo();
     }
 
@@ -1896,7 +1915,7 @@ public partial class MainWindow : Window
                 name = EnsureUniqueName(name, null);
                 _config.Playlists.Add(new PlaylistSource { Name = name, Url = dlg.SourceUrl });
             }
-            _config.Save();
+            SaveConfigAsync();
             ActivatePlaylist(name);   // 切到新源：停旧播、重载、刷新下拉
         }
     }
@@ -2042,7 +2061,7 @@ public partial class MainWindow : Window
                 // F7：追加前先按 Name 去重，保证 Xtream 项恰为 1。
                 _config.Playlists.RemoveAll(p => p.Name == "Xtream");
                 _config.Playlists.Add(new PlaylistSource { Name = "Xtream", Url = _loadedSourceUrl });
-                _config.Save();
+                SaveConfigAsync();
                 // 深查第 14 轮：改动播放列表的各处（增/删/改名/切换）都会 RefreshPlaylistCombo，
                 // 唯独本处漏了——Xtream 项已入库，源列表面板仍显示旧内容（空），要点开收起才刷新。
                 RefreshPlaylistCombo();
@@ -2450,7 +2469,10 @@ public partial class MainWindow : Window
         try { VideoView.MediaPlayer = null; } catch { }
         StartMainTeardown();
 
-        _config.Save();
+        // v1.4.15 迭代 3：退出时的最后一次保存仍同步（关掉进程前把本次改动落盘），
+        // 但读盘失败待确认时跳过——Save 会弹确认框挡住退出，且用默认配置覆盖好文件
+        // 正是待确认要防的事；跳过本次保存，配置以本次会话前的落盘为准。
+        if (!AppConfig.ReadFailurePending) _config.Save();
         AppLog.Info("exit");
     }
 
