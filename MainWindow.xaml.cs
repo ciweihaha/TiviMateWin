@@ -1016,10 +1016,17 @@ public partial class MainWindow : Window
         // 防抖到期会重新播起来；先清掉挂起的换台（_player 为空时同样要清）。
         _pendingPlay = null;
         _switchDebounce.Stop();
-        if (_player is null) return;
+        var playerToStop = _player;
+        if (playerToStop is null) return;
+        // MediaPlayer.Stop() 可能阻塞 UI（等卡住的直播流拆掉），放后台线程；
+        // 与 ActivatePlaylist 的后台 Stop 同款。若用户已立刻重播（_current 非空），
+        // 跳过本次 Stop，避免停掉新开的流。
+        _ = Task.Run(() =>
+        {
+            try { if (_current is null) playerToStop.Stop(); } catch { }
+        });
         try
         {
-            _player.Stop();
             _current = null;
             _isPaused = false;
             ClearPlayingChannel();          // V1.4：取消列表播放高亮
@@ -1621,8 +1628,25 @@ public partial class MainWindow : Window
         if (_fullscreen || _pipWindow == null || _closing || _pipEffectActive) return;
         _prePipState = WindowState;
         // 小窗无 Owner（见 OpenPip），最小化主窗口不会连带隐藏小窗，直接最小化即可。
-        // 主画面变黑：停主播放器（不停小窗的独立播放器）并断开视频面
-        try { _player?.Stop(); } catch { }
+        // 主画面变黑：停主播放器（不停小窗的独立播放器）并断开视频面。
+        // 注意：MediaPlayer.Stop() 可能阻塞（等输入/输出线程拆掉卡住的直播流），
+        // 必须放后台线程——UI 线程卡在这里时小窗画不出画面（黑屏）、底层鼠标钩子
+        // 也跑不了（鼠标全系统卡住），就是 v1.4.12 报的“小窗黑屏 + 卡死”。
+        // 与 ActivatePlaylist/RemovePlaylist 的后台 Stop 同款处理。
+        var mainPlayer = _player;
+        if (mainPlayer != null)
+        {
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    // 小窗已关（效果已清除、可能已重播）时不再停，避免停掉新播的流；
+                    // 1 秒后的重挂检查会兜底重播，极小概率的竞态也可自愈。
+                    if (_pipEffectActive) mainPlayer.Stop();
+                }
+                catch { }
+            });
+        }
         try { VideoView.MediaPlayer = null; } catch { }
         PlayState.Text = "小窗播放中";
         _pipEffectActive = true;
