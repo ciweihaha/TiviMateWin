@@ -48,6 +48,9 @@ public partial class PipWindow : Window
         _pipStallTimer.Tick += (_, _) => OnPipStallTick();
         // v1.4.15 2-6：播出失败有提示、可重播，不再静默黑屏；出画面后提示自动消失。
         _player.EncounteredError += (_, _) => Dispatcher.BeginInvoke(OnPipError);
+        // v1.4.16：直播流播完（EndReached）自动重播——HLS 窗口耗尽/刷新失败时 libvlc 停在这里；
+        // 点播文件播完是正常的，不重播。
+        _player.EndReached += (_, _) => Dispatcher.BeginInvoke(OnPipEndReached);
         _player.Playing += (_, _) => Dispatcher.BeginInvoke(HidePipStatus);
         // 标题栏拖动走 Win32 层：Loaded 后挂 WndProc，WM_NCHITTEST 对标题栏区返回 HTCAPTION，
         // 系统接管拖动，不走 WPF 鼠标事件（标题栏点按偶尔到不了 WPF 处理器时仍能拖动）。
@@ -193,6 +196,25 @@ public partial class PipWindow : Window
         AppLog.Error($"pip playback error [{_currentChannel?.Name}]");
     }
 
+    /// <summary>直播流意外播完（v1.4.16）：自动重播同一频道（最多 2 次，与停滞看门狗共用计数），
+    /// 仍失败则显示文案等用户点重播；点播文件播完不重播。</summary>
+    private void OnPipEndReached()
+    {
+        if (_closing || _isPaused || _stopped || _currentChannel == null) return;
+        if (!MainWindow.IsLiveStream(_currentChannel.Url)) return;
+        if (_pipStallRetries < 2)
+        {
+            _pipStallRetries++;
+            AppLog.Info($"pip stream ended, replay #{_pipStallRetries}: [{_currentChannel.Name}]");
+            StartPlayback(_currentChannel);
+        }
+        else
+        {
+            ShowPipStatus("直播中断，点击重播");
+            AppLog.Error($"pip stream ended after retries: [{_currentChannel.Name}]");
+        }
+    }
+
     private void HidePipStatus()
     {
         try { PipStatusText.Visibility = Visibility.Collapsed; } catch { }
@@ -229,6 +251,26 @@ public partial class PipWindow : Window
         }
         try
         {
+            // v1.4.16 意外停播：停在 Stopped/Ended/Error 态（非缓冲中）且是直播流 → 重播
+            // （计入 2 次上限），否则播完/停住是死角，只能手动点重播。
+            // Opening/Buffering 态不算停，不动手，避开启动瞬间。
+            if (!_player.IsPlaying && (_player.State == VLCState.Stopped || _player.State == VLCState.Ended || _player.State == VLCState.Error)
+                && MainWindow.IsLiveStream(_currentChannel.Url))
+            {
+                if (_pipStallRetries < 2)
+                {
+                    _pipStallRetries++;
+                    AppLog.Info($"pip unexpected stop, replay #{_pipStallRetries}: [{_currentChannel.Name}]");
+                    StartPlayback(_currentChannel);
+                }
+                else
+                {
+                    _pipStallTimer.Stop();
+                    ShowPipStatus("直播中断，点击重播");
+                }
+                _pipStallTicks = 0; _pipLastTime = -1;
+                return;
+            }
             if (!_player.IsPlaying) { _pipStallTicks = 0; _pipLastTime = -1; return; }
             var t = _player.Time;
             if (t <= 0) { _pipStallTicks = 0; _pipLastTime = -1; return; }
