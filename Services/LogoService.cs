@@ -43,6 +43,9 @@ public static class LogoService
         // 内存缓存键用脱敏地址：原 URL 仍用于实际请求（LoadCoreAsync 的 url 参数），
         // 但键本身不再含 username=/password=/userinfo；同图在不同凭据下共享同一缓存项。
         var key = AppConfig.StripCredentialsForCacheKey(url);
+        // 容量上限（v1.4.15 迭代 1）：长会话 + 大清单时缓存无限增长；满 500 条直接清空，
+        // 丢的只是内存图片（磁盘缓存还在，下次取回时重新解码），无功能影响。
+        if (Cache.Count >= 500) Cache.Clear();
         return Cache.GetOrAdd(key, _ => LoadCoreAsync(url));
     }
 
