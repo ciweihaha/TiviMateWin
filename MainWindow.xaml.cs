@@ -53,6 +53,9 @@ public partial class MainWindow : Window
     private bool _favOnly;
     private ChannelItem? _current;
     private bool _fullscreen;
+    private WindowState _preFullscreenState = WindowState.Normal; // 进全屏前的窗口状态：退出时原样恢复，不再写死 Normal
+    private Rect _preFullscreenBounds;                            // 进全屏前的普通窗口位置尺寸（最大化时取 RestoreBounds）
+    private readonly DispatcherTimer _reattachCheckTimer = new() { Interval = TimeSpan.FromSeconds(1) }; // 重挂视频面后 1 秒检查：仍未恢复播放则重播当前频道兜底
     private bool _sideCollapsed;   // 侧栏是否收起（缩进最左）
     private GridLength _sideWidth = new(300);
 
@@ -155,6 +158,7 @@ public partial class MainWindow : Window
         _digitTimer.Tick += (_, _) => CommitDigits();
         _osdHideTimer.Tick += (_, _) => { _osdHideTimer.Stop(); ChannelOsd.Visibility = Visibility.Collapsed; };
         _epgRefreshTimer.Tick += (_, _) => OnEpgRefreshTick();
+        _reattachCheckTimer.Tick += (_, _) => { _reattachCheckTimer.Stop(); OnReattachCheckTick(); };
 
         // 焦点守护：窗口激活/VLC原生窗口拖走焦点时，把键盘焦点还给频道列表，保证↑↓换台始终可用
         Activated += OnWindowActivated;
@@ -828,6 +832,11 @@ public partial class MainWindow : Window
     {
         if (!_fullscreen)
         {
+            // 进全屏前记住当前状态与位置：退出时原样恢复（最大化回 Maximized，普通窗口回原尺寸位置）
+            _preFullscreenState = WindowState == WindowState.Minimized ? WindowState.Normal : WindowState;
+            _preFullscreenBounds = WindowState == WindowState.Maximized
+                ? RestoreBounds
+                : new Rect(Left, Top, Width, Height);
             _sideWidth = SideCol.Width;
             SideCol.Width = new GridLength(0);
             WindowStyle = WindowStyle.None;
@@ -840,13 +849,34 @@ public partial class MainWindow : Window
             // 全屏控制浮层：鼠标移动显示，静止自动隐藏
             MouseMove += Fullscreen_MouseMove;
             ShowFullscreenOverlay();
+            ReattachVideoSurface(); // WindowStyle 改变会重建顶层 HWND，VideoView 原生视频子 HWND 随之销毁，需重挂
         }
         else
         {
             SideCol.Width = _sideWidth;
             WindowStyle = WindowStyle.SingleBorderWindow;
             ResizeMode = ResizeMode.CanResize;
-            WindowState = WindowState.Normal;
+            // 按进全屏前的状态恢复：最大化回 Maximized，普通窗口回原尺寸位置，不再写死 Normal。
+            // 写死 Normal 会让最大化窗口退出时缩成小窗，双击第二下落到任务栏上，点任务栏图标即最小化。
+            if (_preFullscreenState == WindowState.Maximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
+            else
+            {
+                WindowState = WindowState.Normal;
+                if (WindowPlacement.CanRestore(_preFullscreenBounds.Left, _preFullscreenBounds.Top,
+                        _preFullscreenBounds.Width, _preFullscreenBounds.Height))
+                {
+                    var (cl, ct, cw, ch) = WindowPlacement.ClampToVisible(
+                        _preFullscreenBounds.Left, _preFullscreenBounds.Top,
+                        _preFullscreenBounds.Width, _preFullscreenBounds.Height);
+                    Left = cl;
+                    Top = ct;
+                    Width = cw;
+                    Height = ch;
+                }
+            }
             _fullscreen = false;
             _osdTimer.Stop();
             _fsHideTimer.Stop();
@@ -855,7 +885,46 @@ public partial class MainWindow : Window
             StatusBar.Visibility = Visibility.Visible;    // 退出全屏恢复状态栏
             SideToggleBtn.Visibility = Visibility.Visible; // 恢复侧栏按钮
             if (_pipWindow != null && _pipChannel != null) _pipWindow.Visibility = Visibility.Visible; // 恢复小窗
+            ReattachVideoSurface(); // 同上：样式改完重挂视频面，否则 libvlc 往已销毁的 HWND 送帧导致黑屏
         }
+    }
+
+    /// <summary>重挂视频面：WindowStyle 改变会重建顶层 HWND，VideoView 的原生视频子 HWND
+    /// 随之销毁，libvlc 仍往已销毁的 HWND 送帧导致黑屏；把 MediaPlayer 先置 null 再挂回，
+    /// 强制 VideoView 重建视频面。Dispatcher 上执行，等样式切换完成后再挂。</summary>
+    private void ReattachVideoSurface()
+    {
+        if (_player is null || _closing) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_player is null || _closing) return;
+            try
+            {
+                VideoView.MediaPlayer = null;
+                VideoView.MediaPlayer = _player;
+                AppLog.Info("video surface reattached after fullscreen toggle");
+                // 1 秒后检查：重挂后仍未恢复播放（不含用户主动暂停），重播当前频道兜底
+                _reattachCheckTimer.Stop();
+                _reattachCheckTimer.Start();
+            }
+            catch (Exception ex) { AppLog.Error($"reattach video surface failed: {ex.Message}"); }
+        }), DispatcherPriority.Loaded);
+    }
+
+    /// <summary>重挂后 1 秒检查：播放器已停且非用户暂停时，重播当前频道兜底。</summary>
+    private void OnReattachCheckTick()
+    {
+        _reattachCheckTimer.Stop();
+        if (_closing || _player is null || _current is null || _isPaused) return;
+        try
+        {
+            if (!_player.IsPlaying)
+            {
+                AppLog.Info("video surface still not playing after reattach, replaying current channel");
+                _ = PlayAsync(_current);
+            }
+        }
+        catch (Exception ex) { AppLog.Error($"reattach check failed: {ex.Message}"); }
     }
 
     /// <summary>全屏鼠标移动：显示控制浮层并重置隐藏计时</summary>
