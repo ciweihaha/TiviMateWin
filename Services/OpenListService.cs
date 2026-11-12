@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -55,6 +57,19 @@ public sealed class OpenListService : IDisposable
         var p = path.TrimEnd('/');
         var i = p.LastIndexOf('/');
         return i <= 0 ? "/" : p[..i];
+    }
+
+    /// <summary>视频文件扩展名（网盘浏览用）</summary>
+    public static readonly string[] VideoExtensions =
+        { ".mp4", ".mkv", ".m3u8", ".ts", ".webm", ".mov", ".flv", ".avi", ".rmvb", ".mpg", ".mpeg", ".wmv", ".m4v" };
+
+    /// <summary>文件名/链接是否像视频文件（按扩展名判断，忽略 query 与 fragment）</summary>
+    public static bool IsVideoFile(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        var clean = name.Split('?')[0].Split('#')[0];
+        var ext = Path.GetExtension(clean);
+        return VideoExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>登录取 token；失败返回 false（不抛错，调用方显示提示即可）</summary>
