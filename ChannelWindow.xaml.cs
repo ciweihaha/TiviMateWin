@@ -21,6 +21,7 @@ public partial class ChannelWindow : Window
     // 避免关闭后继续操作已释放的播放器/Media。
     private volatile bool _closing;
     private bool _teardownStarted; // 后台释放只启动一次：Window_Closing 里置位，避免重复 Dispose
+    private int _endReconnects; // v1.4.16：播完自动重播计数，上限 3 次，Play 时清零
 
     public ChannelWindow(LibVLC libvlc, int volume, int networkCache)
     {
@@ -30,6 +31,21 @@ public partial class ChannelWindow : Window
         _networkCache = networkCache;
         _player = new MediaPlayer(_libvlc) { Volume = _volume };
         VideoView.MediaPlayer = _player;
+        // v1.4.16：直播流播完（EndReached）自动重播——HLS 窗口耗尽/刷新失败时 libvlc 停在这里。
+        _player.EndReached += (_, _) => Dispatcher.BeginInvoke(OnChannelEndReached);
+    }
+
+    /// <summary>直播流意外播完（v1.4.16）：自动重播同一频道（最多 3 次）；点播文件播完不重播。</summary>
+    private void OnChannelEndReached()
+    {
+        if (_closing || _channel == null) return;
+        if (!MainWindow.IsLiveStream(_channel.Url)) return;
+        if (_endReconnects < 3)
+        {
+            _endReconnects++;
+            AppLog.Info($"channel window stream ended, replay #{_endReconnects}: [{_channel.Name}]");
+            Play(_channel);
+        }
     }
 
     /// <summary>播放指定频道（串行化，避免并发调用 MediaPlayer 崩溃）</summary>
@@ -38,6 +54,7 @@ public partial class ChannelWindow : Window
         // F6(a)：关闭中不再启动新播放。
         if (_closing) return;
         _channel = ch;
+        _endReconnects = 0; // v1.4.16：新播放开始，播完重播计数清零
         Title = ch.Name;
         TitleText.Text = ch.Name;
         try
