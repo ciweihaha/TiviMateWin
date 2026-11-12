@@ -56,6 +56,7 @@ public partial class MainWindow : Window
     private bool _fullscreen;
     private WindowState _preFullscreenState = WindowState.Normal; // 进全屏前的窗口状态：退出时原样恢复，不再写死 Normal
     private Rect _preFullscreenBounds;                            // 进全屏前的普通窗口位置尺寸（最大化时取 RestoreBounds）
+    private bool _fsSideCollapsed; // 进全屏前侧栏是否已收起（小窗收起或用户手动收起）：退出时保持收起，不恢复宽度
     private readonly DispatcherTimer _reattachCheckTimer = new() { Interval = TimeSpan.FromSeconds(1) }; // 重挂视频面后 1 秒检查：仍未恢复播放则重播当前频道兜底
 
     // 视频区双击切换全屏：VideoView 是 LibVLC 原生 HWND，WPF 收不到它的鼠标事件，
@@ -923,18 +924,21 @@ public partial class MainWindow : Window
         _lastFullscreenToggleUtc = DateTime.UtcNow; // 双击识别的防重入时间戳：切完 300ms 内忽略左键按下
         if (!_fullscreen)
         {
-            // 小窗播时主窗口是黑+最小化：用户主动切全屏时先解除该效果、恢复 Owner 关系，后面正常进全屏
+            // 小窗播时主窗口是黑+最小化：用户主动切全屏时先解除该效果，后面正常进全屏
+            // （小窗不设 Owner，最小化主窗口不会连带隐藏小窗，无需恢复 Owner 关系）
             if (_pipEffectActive)
             {
                 _pipEffectActive = false;
-                if (_pipWindow != null) { try { _pipWindow.Owner = this; } catch { } }
             }
             // 进全屏前记住当前状态与位置：退出时原样恢复（最大化回 Maximized，普通窗口回原尺寸位置）
             _preFullscreenState = WindowState == WindowState.Minimized ? WindowState.Normal : WindowState;
             _preFullscreenBounds = WindowState == WindowState.Maximized
                 ? RestoreBounds
                 : new Rect(Left, Top, Width, Height);
-            _sideWidth = SideCol.Width;
+            // 侧栏宽度只在展开时保存：小窗开着或用户已手动收起时 SideCol.Width 是 0，
+            // 直接保存会把 _sideWidth 覆写为 0，退出全屏/关小窗后侧栏再也拉不出来（v1.4.8 bug）。
+            if (SideCol.Width.Value > 0) _sideWidth = SideCol.Width;
+            _fsSideCollapsed = _sideCollapsed || SideCol.Width.Value <= 0;
             SideCol.Width = new GridLength(0);
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
@@ -950,7 +954,19 @@ public partial class MainWindow : Window
         }
         else
         {
-            SideCol.Width = _sideWidth;
+            // 退出全屏恢复侧栏：小窗还开着时侧栏仍由小窗管着（保持收起，关小窗时再恢复，
+            // 小窗已关则清掉 _pipCollapsedSidebar，走下面的正常恢复）；
+            // 进全屏前用户已手动收起时保持收起；否则恢复展开宽度。
+            if (_pipCollapsedSidebar && _pipWindow != null)
+            {
+                SideCol.Width = new GridLength(0);
+            }
+            else
+            {
+                _pipCollapsedSidebar = false;
+                SideCol.Width = _fsSideCollapsed ? new GridLength(0) : ExpandedSideWidth();
+            }
+            _sideCollapsed = SideCol.Width.Value <= 0;
             WindowStyle = WindowStyle.SingleBorderWindow;
             ResizeMode = ResizeMode.CanResize;
             // 按进全屏前的状态恢复：最大化回 Maximized，普通窗口回原尺寸位置，不再写死 Normal。
@@ -981,6 +997,7 @@ public partial class MainWindow : Window
             FullscreenOverlay.Visibility = Visibility.Collapsed; // 退出全屏隐藏浮层
             StatusBar.Visibility = Visibility.Visible;    // 退出全屏恢复状态栏
             SideToggleBtn.Visibility = Visibility.Visible; // 恢复侧栏按钮
+            SideToggleBtn.SetValue(TextBlock.TextProperty, _sideCollapsed ? "▶" : "◀"); // 箭头跟随侧栏实际状态
             if (_pipWindow != null && _pipChannel != null) _pipWindow.Visibility = Visibility.Visible; // 恢复小窗
             ReattachVideoSurface(); // 同上：样式改完重挂视频面，否则 libvlc 往已销毁的 HWND 送帧导致黑屏
             ApplyPipMainEffect(); // 小窗开着：退出全屏后主窗口仍应黑+最小化（重挂的延迟回调会被效果标志拦住）
@@ -1047,6 +1064,11 @@ public partial class MainWindow : Window
 
     // ---------- 侧栏收起/展开 ----------
 
+    /// <summary>侧栏展开宽度：_sideWidth 只在展开时保存，正常是上次的展开宽度；
+    /// 一旦被覆写为 0（v1.4.8 全屏入口无条件保存的 bug），回落 300，避免侧栏再也拉不出来。</summary>
+    private GridLength ExpandedSideWidth() =>
+        _sideWidth.Value > 0 ? _sideWidth : new GridLength(300);
+
     /// <summary>侧栏边缘按钮：收起/展开侧栏</summary>
     private void SideToggle_Click(object sender, RoutedEventArgs e) => ToggleSidebar();
 
@@ -1055,15 +1077,15 @@ public partial class MainWindow : Window
     {
         if (_sideCollapsed)
         {
-            // 展开：恢复之前宽度
-            SideCol.Width = _sideWidth;
+            // 展开：恢复之前宽度（_sideWidth 被覆写为 0 时回落 300，否则再也拉不出来）
+            SideCol.Width = ExpandedSideWidth();
             _sideCollapsed = false;
             SideToggleBtn.SetValue(TextBlock.TextProperty, "◀");
         }
         else
         {
-            // 收起：记录当前宽度，缩进最左
-            _sideWidth = SideCol.Width;
+            // 收起：只在展开时记录当前宽度；小窗/全屏已把宽度压到 0 时不再保存，否则 _sideWidth 被覆写为 0
+            if (SideCol.Width.Value > 0) _sideWidth = SideCol.Width;
             SideCol.Width = new GridLength(0);
             _sideCollapsed = true;
             SideToggleBtn.SetValue(TextBlock.TextProperty, "▶");
@@ -1080,7 +1102,7 @@ public partial class MainWindow : Window
         // 展开侧栏
         if (_sideCollapsed)
         {
-            SideCol.Width = _sideWidth;
+            SideCol.Width = ExpandedSideWidth();
             _sideCollapsed = false;
             SideToggleBtn.SetValue(TextBlock.TextProperty, "◀");
         }
@@ -1288,7 +1310,10 @@ public partial class MainWindow : Window
 
         if (_pipWindow == null)
         {
-            _pipWindow = new PipWindow(_libvlc, _config.Volume, _config.NetworkCache) { Owner = this };
+            // 小窗不设 Owner：有 Owner 时最小化主窗口会连带隐藏小窗，v1.4.8 为此在可见状态下
+            // 反复改 Owner（开小窗时清掉、进全屏时恢复），小窗因此丢激活、点不动；
+            // 无 Owner 的独立顶层窗口不受主窗口最小化影响。主窗口关闭时已显式关小窗（见 Window_Closing）。
+            _pipWindow = new PipWindow(_libvlc, _config.Volume, _config.NetworkCache);
             RestorePipPlacement(_pipWindow);
             _pipWindow.Closed += (_, _) =>
             {
@@ -1300,7 +1325,9 @@ public partial class MainWindow : Window
                 // 小窗关闭后恢复侧栏：仅恢复小窗自己收起的（见 _pipCollapsedSidebar）
                 if (!_fullscreen && _pipCollapsedSidebar)
                 {
-                    SideCol.Width = _sideWidth;
+                    SideCol.Width = ExpandedSideWidth();
+                    _sideCollapsed = false;
+                    SideToggleBtn.SetValue(TextBlock.TextProperty, "◀");
                     _pipCollapsedSidebar = false;
                 }
             };
@@ -1308,12 +1335,14 @@ public partial class MainWindow : Window
             // 全屏时新建的小窗先隐藏，退出全屏再由 ToggleFullscreen 恢复显示；
             // 同一 UI 帧内 Show 后 Hidden，不会闪现。
             if (_fullscreen) _pipWindow.Visibility = Visibility.Hidden;
+            else _pipWindow.Activate(); // 主动激活：小窗要成为前台窗口才能接收鼠标，否则只见画面点不动
         }
         else if (!_pipWindow.IsVisible)
         {
             // 全屏隐藏的小窗只换台不显示，避免全屏时小窗弹出来盖住画面
             _pipWindow.Show();
             if (_fullscreen) _pipWindow.Visibility = Visibility.Hidden;
+            else _pipWindow.Activate();
         }
 
         _pipWindow.Play(ch);
@@ -1359,7 +1388,9 @@ public partial class MainWindow : Window
         // 恢复侧栏：仅恢复小窗自己收起的（Closed 回调已处理时此处的标志已清零，不会重复恢复）
         if (!_fullscreen && _pipCollapsedSidebar)
         {
-            SideCol.Width = _sideWidth;
+            SideCol.Width = ExpandedSideWidth();
+            _sideCollapsed = false;
+            SideToggleBtn.SetValue(TextBlock.TextProperty, "◀");
             _pipCollapsedSidebar = false;
         }
     }
@@ -1375,19 +1406,16 @@ public partial class MainWindow : Window
     {
         if (_fullscreen || _pipWindow == null || _closing || _pipEffectActive) return;
         _prePipState = WindowState;
-        bool ownerCleared = false;
-        try { _pipWindow.Owner = null; ownerCleared = true; }
-        catch (Exception ex) { AppLog.Error($"pip clear owner failed: {ex.Message}"); }
+        // 小窗无 Owner（见 OpenPip），最小化主窗口不会连带隐藏小窗，直接最小化即可。
         // 主画面变黑：停主播放器（不停小窗的独立播放器）并断开视频面
         try { _player?.Stop(); } catch { }
         try { VideoView.MediaPlayer = null; } catch { }
         PlayState.Text = "小窗播放中";
         _pipEffectActive = true;
-        if (ownerCleared)
-        {
-            WindowState = WindowState.Minimized;
-        }
-        AppLog.Info("pip effect applied: main black" + (ownerCleared ? " + minimized" : " (owner clear failed, not minimized)"));
+        WindowState = WindowState.Minimized;
+        // 主窗口最小化后把小窗推到前台并激活：它是唯一可见的窗口，必须拿到输入焦点，否则只见画面点不动。
+        try { _pipWindow.Activate(); } catch { }
+        AppLog.Info("pip effect applied: main black + minimized");
     }
 
     /// <summary>小窗关闭：主窗口恢复可见并恢复播放。效果未生效或应用正在关闭时为空操作。</summary>
@@ -1396,8 +1424,8 @@ public partial class MainWindow : Window
         if (!_pipEffectActive) return;
         _pipEffectActive = false;
         if (_closing) return;
-        if (_pipWindow != null) { try { _pipWindow.Owner = this; } catch { } } // 恢复 Owner 关系
         WindowState = _prePipState == WindowState.Minimized ? WindowState.Normal : _prePipState;
+        try { Activate(); } catch { } // 主窗口回到前台并拿回焦点
         ReattachVideoSurface(); // 重挂视频面（自带 1 秒检查：未播则重播当前频道）
         AppLog.Info("pip effect cleared: main restored");
     }
