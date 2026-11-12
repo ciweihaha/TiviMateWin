@@ -1,0 +1,57 @@
+<Window x:Class="TiviMateWin.Dialogs.CloudDriveWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="网盘" Width="680" Height="480" WindowStartupLocation="CenterOwner"
+        Background="#FF171C22" Foreground="#FFDDE4EB" Loaded="Window_Loaded" Closed="Window_Closed">
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 路径 + 导航 -->
+        <DockPanel Grid.Row="0">
+            <Button Content="刷新" Width="60" Height="30" DockPanel.Dock="Right" Margin="6,0,0,0"
+                    Background="#FF2A3542" Foreground="#FFDDE4EB" BorderThickness="0" Cursor="Hand"
+                    Click="Refresh_Click"/>
+            <Button Content="上级" Width="60" Height="30" DockPanel.Dock="Right"
+                    Background="#FF2A3542" Foreground="#FFDDE4EB" BorderThickness="0" Cursor="Hand"
+                    Click="Up_Click"/>
+            <TextBlock x:Name="PathText" Text="/" Foreground="#FF4FA3E3" FontSize="13"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, ElementName=PathText}"/>
+        </DockPanel>
+
+        <!-- 文件列表：文件夹双击进入，视频双击播放 -->
+        <ListBox x:Name="FileList" Grid.Row="1" Margin="0,8,0,0" Background="#FF20262E"
+                 BorderBrush="#FF3A444F" BorderThickness="1"
+                 MouseDoubleClick="FileList_DoubleClick" SelectionChanged="FileList_SelectionChanged">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <DockPanel Margin="4">
+                        <TextBlock Text="{Binding SizeText}" DockPanel.Dock="Right" Foreground="#FF7A8896"
+                                   FontSize="11" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding Display}" Foreground="#FFDDE4EB" FontSize="13"
+                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+                    </DockPanel>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <TextBlock x:Name="StatusText" Grid.Row="2" Foreground="#FF7A8896" FontSize="11"
+                   Margin="0,8,0,0" Text="正在连接 OpenList…" TextTrimming="CharacterEllipsis"/>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button x:Name="PipBtn" Content="小窗播放" Width="84" Height="30" Margin="0,0,8,0"
+                    Background="#FF2A3542" Foreground="#FFDDE4EB" BorderThickness="0" Cursor="Hand"
+                    Click="Pip_Click" IsEnabled="False"/>
+            <Button x:Name="PlayBtn" Content="播放" Width="84" Height="30" Margin="0,0,8,0" IsDefault="True"
+                    Background="#FF1F6F4A" Foreground="White" BorderThickness="0" Cursor="Hand"
+                    Click="Play_Click" IsEnabled="False"/>
+            <Button Content="关闭" Width="64" Height="30"
+                    Background="#FF2A3542" Foreground="#FFDDE4EB" BorderThickness="0" Cursor="Hand"
+                    Click="Close_Click" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

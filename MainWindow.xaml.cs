@@ -53,6 +53,9 @@ public partial class MainWindow : Window
     private bool _favOnly;
     private ChannelItem? _current;
     private bool _fullscreen;
+    private WindowState _preFullscreenState = WindowState.Normal; // 进全屏前的窗口状态：退出时原样恢复，不再写死 Normal
+    private Rect _preFullscreenBounds;                            // 进全屏前的普通窗口位置尺寸（最大化时取 RestoreBounds）
+    private readonly DispatcherTimer _reattachCheckTimer = new() { Interval = TimeSpan.FromSeconds(1) }; // 重挂视频面后 1 秒检查：仍未恢复播放则重播当前频道兜底
     private bool _sideCollapsed;   // 侧栏是否收起（缩进最左）
     private GridLength _sideWidth = new(300);
 
@@ -77,6 +80,10 @@ public partial class MainWindow : Window
     // 独立悬浮小窗（画中画）：无边框窗口，可拖到屏幕任意位置
     private PipWindow? _pipWindow;
     private ChannelItem? _pipChannel;
+    // 小窗打开序号（与 _loadSeq/_epgSeq 同款）：只采纳最新一次 OpenPip 的续体；
+    // OpenPip 是 async void，await 引擎期间用户可能已关小窗、甚至已关主窗口，
+    // 旧续体若继续执行，会在已释放的引擎上建小窗（崩溃）或把已关掉的小窗复活。
+    private int _pipSeq;
     // 深查第 12 轮：小窗是否收起了侧栏——仅它收起的才由它恢复；用户手动收起时
     // OpenPip 不动侧栏，关小窗也不得把 _sideWidth 恢复出来（否则侧栏自动弹开）。
     private bool _pipCollapsedSidebar;
@@ -161,6 +168,7 @@ public partial class MainWindow : Window
         _digitTimer.Tick += (_, _) => CommitDigits();
         _osdHideTimer.Tick += (_, _) => { _osdHideTimer.Stop(); ChannelOsd.Visibility = Visibility.Collapsed; };
         _epgRefreshTimer.Tick += (_, _) => OnEpgRefreshTick();
+        _reattachCheckTimer.Tick += (_, _) => { _reattachCheckTimer.Stop(); OnReattachCheckTick(); };
 
         // 焦点守护：窗口激活/VLC原生窗口拖走焦点时，把键盘焦点还给频道列表，保证↑↓换台始终可用
         Activated += OnWindowActivated;
@@ -891,6 +899,11 @@ public partial class MainWindow : Window
     {
         if (!_fullscreen)
         {
+            // 进全屏前记住当前状态与位置：退出时原样恢复（最大化回 Maximized，普通窗口回原尺寸位置）
+            _preFullscreenState = WindowState == WindowState.Minimized ? WindowState.Normal : WindowState;
+            _preFullscreenBounds = WindowState == WindowState.Maximized
+                ? RestoreBounds
+                : new Rect(Left, Top, Width, Height);
             _sideWidth = SideCol.Width;
             SideCol.Width = new GridLength(0);
             WindowStyle = WindowStyle.None;
@@ -903,13 +916,34 @@ public partial class MainWindow : Window
             // 全屏控制浮层：鼠标移动显示，静止自动隐藏
             MouseMove += Fullscreen_MouseMove;
             ShowFullscreenOverlay();
+            ReattachVideoSurface(); // WindowStyle 改变会重建顶层 HWND，VideoView 原生视频子 HWND 随之销毁，需重挂
         }
         else
         {
             SideCol.Width = _sideWidth;
             WindowStyle = WindowStyle.SingleBorderWindow;
             ResizeMode = ResizeMode.CanResize;
-            WindowState = WindowState.Normal;
+            // 按进全屏前的状态恢复：最大化回 Maximized，普通窗口回原尺寸位置，不再写死 Normal。
+            // 写死 Normal 会让最大化窗口退出时缩成小窗，双击第二下落到任务栏上，点任务栏图标即最小化。
+            if (_preFullscreenState == WindowState.Maximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
+            else
+            {
+                WindowState = WindowState.Normal;
+                if (WindowPlacement.CanRestore(_preFullscreenBounds.Left, _preFullscreenBounds.Top,
+                        _preFullscreenBounds.Width, _preFullscreenBounds.Height))
+                {
+                    var (cl, ct, cw, ch) = WindowPlacement.ClampToVisible(
+                        _preFullscreenBounds.Left, _preFullscreenBounds.Top,
+                        _preFullscreenBounds.Width, _preFullscreenBounds.Height);
+                    Left = cl;
+                    Top = ct;
+                    Width = cw;
+                    Height = ch;
+                }
+            }
             _fullscreen = false;
             _osdTimer.Stop();
             _fsHideTimer.Stop();
@@ -918,7 +952,46 @@ public partial class MainWindow : Window
             StatusBar.Visibility = Visibility.Visible;    // 退出全屏恢复状态栏
             SideToggleBtn.Visibility = Visibility.Visible; // 恢复侧栏按钮
             if (_pipWindow != null && _pipChannel != null) _pipWindow.Visibility = Visibility.Visible; // 恢复小窗
+            ReattachVideoSurface(); // 同上：样式改完重挂视频面，否则 libvlc 往已销毁的 HWND 送帧导致黑屏
         }
+    }
+
+    /// <summary>重挂视频面：WindowStyle 改变会重建顶层 HWND，VideoView 的原生视频子 HWND
+    /// 随之销毁，libvlc 仍往已销毁的 HWND 送帧导致黑屏；把 MediaPlayer 先置 null 再挂回，
+    /// 强制 VideoView 重建视频面。Dispatcher 上执行，等样式切换完成后再挂。</summary>
+    private void ReattachVideoSurface()
+    {
+        if (_player is null || _closing) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_player is null || _closing) return;
+            try
+            {
+                VideoView.MediaPlayer = null;
+                VideoView.MediaPlayer = _player;
+                AppLog.Info("video surface reattached after fullscreen toggle");
+                // 1 秒后检查：重挂后仍未恢复播放（不含用户主动暂停），重播当前频道兜底
+                _reattachCheckTimer.Stop();
+                _reattachCheckTimer.Start();
+            }
+            catch (Exception ex) { AppLog.Error($"reattach video surface failed: {ex.Message}"); }
+        }), DispatcherPriority.Loaded);
+    }
+
+    /// <summary>重挂后 1 秒检查：播放器已停且非用户暂停时，重播当前频道兜底。</summary>
+    private void OnReattachCheckTick()
+    {
+        _reattachCheckTimer.Stop();
+        if (_closing || _player is null || _current is null || _isPaused) return;
+        try
+        {
+            if (!_player.IsPlaying)
+            {
+                AppLog.Info("video surface still not playing after reattach, replaying current channel");
+                _ = PlayAsync(_current);
+            }
+        }
+        catch (Exception ex) { AppLog.Error($"reattach check failed: {ex.Message}"); }
     }
 
     /// <summary>全屏鼠标移动：显示控制浮层并重置隐藏计时</summary>
@@ -1133,8 +1206,9 @@ public partial class MainWindow : Window
 
     private void BtnPip_Click(object sender, RoutedEventArgs e)
     {
-        // 工具栏小窗按钮：若小窗开着则关闭，否则小窗播放当前选中/正在播放的频道
-        if (_pipWindow != null && _pipWindow.IsVisible) { ClosePip(); return; }
+        // 工具栏小窗按钮：若小窗开着则关闭，否则小窗播放当前选中/正在播放的频道。
+        // 全屏时小窗只是隐藏（IsVisible 为假），仍算开着，点按钮应关闭而不是重开。
+        if (_pipWindow != null) { ClosePip(); return; }
         var ch = ChannelList.SelectedItem as ChannelItem ?? _current;
         if (ch != null) OpenPip(ch);
     }
@@ -1163,8 +1237,11 @@ public partial class MainWindow : Window
     private async void OpenPip(ChannelItem ch)
     {
         if (_closing) return;
+        var seq = ++_pipSeq;   // 本次打开序号
         await EnsureEngineAsync();
-        if (_closing) return;   // M4：等待期间窗口可能已关闭并释放引擎，不得再用 _libvlc 建播放器
+        // M4：await 期间主窗口可能已关闭并释放引擎（_closing），或用户已关小窗又开了新的（seq 过期）：
+        // 过期续体直接返回，否则会在已释放的引擎上建小窗（崩溃）或把已关掉的小窗复活。
+        if (_closing || seq != _pipSeq) return;
         if (_libvlc is null) return;
 
         // 小窗播放时自动隐藏节目列表（侧栏收起），腾出视频区
@@ -1180,8 +1257,11 @@ public partial class MainWindow : Window
         if (_pipWindow == null)
         {
             _pipWindow = new PipWindow(_libvlc, _config.Volume, _config.NetworkCache) { Owner = this };
+            RestorePipPlacement(_pipWindow);
             _pipWindow.Closed += (_, _) =>
             {
+                ++_pipSeq;   // 小窗已关：作废挂起的旧 OpenPip 续体
+                SavePipPlacement(_pipWindow);
                 _pipWindow = null;
                 _pipChannel = null;
                 // 小窗关闭后恢复侧栏：仅恢复小窗自己收起的（见 _pipCollapsedSidebar）
@@ -1192,14 +1272,43 @@ public partial class MainWindow : Window
                 }
             };
             _pipWindow.Show();
+            // 全屏时新建的小窗先隐藏，退出全屏再由 ToggleFullscreen 恢复显示；
+            // 同一 UI 帧内 Show 后 Hidden，不会闪现。
+            if (_fullscreen) _pipWindow.Visibility = Visibility.Hidden;
         }
         else if (!_pipWindow.IsVisible)
         {
+            // 全屏隐藏的小窗只换台不显示，避免全屏时小窗弹出来盖住画面
             _pipWindow.Show();
+            if (_fullscreen) _pipWindow.Visibility = Visibility.Hidden;
         }
 
         _pipWindow.Play(ch);
         AppLog.Info($"pip play [{ch.Name}]");
+    }
+
+    /// <summary>记忆小窗位置：关闭时保存到配置，下次打开恢复</summary>
+    private void SavePipPlacement(PipWindow? win)
+    {
+        if (win == null) return;
+        _config.PipLeft = win.Left;
+        _config.PipTop = win.Top;
+        _config.PipWidth = win.Width;
+        _config.PipHeight = win.Height;
+        QueueSave();
+    }
+
+    /// <summary>恢复小窗位置：校验在屏内（副屏断开不恢复到屏幕外），部分出屏则钳制进屏内</summary>
+    private void RestorePipPlacement(PipWindow win)
+    {
+        var (l, t, w, h) = (_config.PipLeft, _config.PipTop, _config.PipWidth, _config.PipHeight);
+        if (l is null || t is null || w is null || h is null) return;
+        if (!WindowPlacement.CanRestore(l.Value, t.Value, w.Value, h.Value)) return;
+        var c = WindowPlacement.ClampToVisible(l.Value, t.Value, w.Value, h.Value);
+        win.Left = c.Left;
+        win.Top = c.Top;
+        win.Width = c.Width;
+        win.Height = c.Height;
     }
 
     private void ClosePip()
@@ -1218,6 +1327,61 @@ public partial class MainWindow : Window
             SideCol.Width = _sideWidth;
             _pipCollapsedSidebar = false;
         }
+    }
+
+    // ---------- 点播链接 / 网盘播放 ----------
+
+    /// <summary>点播按钮：直链播放（主窗口/小窗）或转到点播源导入</summary>
+    private void BtnVod_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Dialogs.PlayUrlWindow(_config.RecentVodUrls) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        if (dlg.Choice == Dialogs.PlayUrlWindow.PlayUrlChoice.ImportVod)
+        {
+            var vod = new Dialogs.VodBrowserWindow(this) { Owner = this };
+            vod.ShowDialog();
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(dlg.PlayUrl)) return;
+        var name = string.IsNullOrWhiteSpace(dlg.PlayName)
+            ? GuessChannelName(dlg.PlayUrl) : dlg.PlayName;
+        AddRecentVodUrl(dlg.PlayUrl);
+        PlayVodItem(new ChannelItem { Name = name, Url = dlg.PlayUrl, Group = "点播" },
+            dlg.Choice == Dialogs.PlayUrlWindow.PlayUrlChoice.Pip);
+    }
+
+    /// <summary>网盘按钮：未配 OpenList 时提示去设置，配好后打开网盘浏览窗</summary>
+    private void BtnCloud_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_config.OpenListServer) ||
+            string.IsNullOrWhiteSpace(_config.OpenListUsername) ||
+            string.IsNullOrWhiteSpace(_config.OpenListPassword))
+        {
+            if (MessageBox.Show("请先在设置里填写 OpenList 服务器地址和账号密码。\n现在打开设置吗？", "网盘未配置",
+                    MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
+                BtnSettings_Click(this, e);
+            return;
+        }
+        var dlg = new Dialogs.CloudDriveWindow(this, _config) { Owner = this };
+        dlg.ShowDialog();
+    }
+
+    /// <summary>供点播/网盘对话框调用：播放一个点播项（主窗口或小窗）</summary>
+    internal void PlayVodItem(ChannelItem ch, bool pip)
+    {
+        if (_closing) return;
+        if (pip) OpenPip(ch);
+        else _ = PlayAsync(ch);
+    }
+
+    /// <summary>点播直链记入最近播放（去重、新在前、最多 10 条）</summary>
+    private void AddRecentVodUrl(string url)
+    {
+        _config.RecentVodUrls.Remove(url);
+        _config.RecentVodUrls.Insert(0, url);
+        while (_config.RecentVodUrls.Count > 10)
+            _config.RecentVodUrls.RemoveAt(_config.RecentVodUrls.Count - 1);
+        QueueSave();
     }
 
     // ---------- 播放列表管理（供管理对话框调用） ----------

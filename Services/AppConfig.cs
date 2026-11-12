@@ -34,6 +34,20 @@ public class AppConfig
     public string? XtreamUsername { get; set; }        // Xtream 用户名
     public string? XtreamPassword { get; set; }        // Xtream 密码（DPAPI 加密存储，读取时解密）
 
+    // OpenList 网盘接入（可选）：服务器地址 + 账号，密码 DPAPI 加密存储（与 Xtream 同款）
+    public string? OpenListServer { get; set; }
+    public string? OpenListUsername { get; set; }
+    public string? OpenListPassword { get; set; }
+
+    // 点播直链最近播放（最多 10 条，新在前；超出时丢最旧的）
+    public List<string> RecentVodUrls { get; set; } = new();
+
+    // 小窗位置记忆：null = 未记忆；恢复前经 WindowPlacement.CanRestore 校验
+    public double? PipLeft { get; set; }
+    public double? PipTop { get; set; }
+    public double? PipWidth { get; set; }
+    public double? PipHeight { get; set; }
+
     // 窗口位置记忆（V1.4）：null = 未记忆/使用默认定位；Maximized 只存标志，
     // 恢复时位置字段仅在 IsOnAnyScreen 校验通过后应用，防止投影断开后窗口“消失”在屏幕外。
     public double? WindowLeft { get; set; }
@@ -241,6 +255,17 @@ public class AppConfig
                 LastLoadError = "Xtream 登录凭据无法解密，已清空密码，请重新输入密码后保存；配置文件本身未损坏，其余设置已正常加载。";
                 AppLog.Error("Xtream 凭据解密失败，已清空密码，需重新输入（日志中不记录密码或密文）。");
             }
+            try
+            {
+                cfg.OpenListPassword = DecryptSecret(cfg.OpenListPassword); // 解密密码（与 Xtream 同款）
+            }
+            catch (InvalidOperationException)
+            {
+                cfg.OpenListPassword = null;
+                var msg = "OpenList 登录凭据无法解密，已清空密码，请重新输入密码后保存。";
+                LastLoadError = LastLoadError == null ? msg : LastLoadError + " " + msg;
+                AppLog.Error("OpenList 凭据解密失败，已清空密码，需重新输入（日志中不记录密码或密文）。");
+            }
             // JSON 显式 null 会覆盖属性初始化器（= new()）：若配置文件里把
             // Playlists/Favorites/HiddenChannels 写成 null，反序列化后它们就是
             // null——而非缺失字段时的空集合。调用方（RefreshPlaylistCombo、
@@ -252,6 +277,7 @@ public class AppConfig
             cfg.Playlists ??= new();
             cfg.Favorites ??= new();
             cfg.HiddenChannels ??= new();
+            cfg.RecentVodUrls ??= new();
             // 深查第 8 轮：集合元素本身也可能为 null（{"Playlists": [null]}），
             // 或 Name/Url 为 null——JSON null 同样覆盖初始化器。旧代码在随后的
             // foreach (p.Url) 直接空引用，落进通用 catch 被误判为“配置文件损坏”
@@ -268,6 +294,7 @@ public class AppConfig
             }
             cfg.Favorites.RemoveAll(s => s is null);
             cfg.HiddenChannels.RemoveAll(s => s is null);
+            cfg.RecentVodUrls.RemoveAll(s => s is null);
             // 纵深防御：已落盘的旧配置若含 password= 的 URL，加载时同样剥离，
             // 避免它在下一次 Save 时重新写回明文；凭据改由 XtreamServer/Username/Password 在请求时重拼。
             foreach (var p in cfg.Playlists)
@@ -369,6 +396,7 @@ public class AppConfig
                 ReadFailurePending = false;
             }
             var plain = XtreamPassword;
+            var plainOl = OpenListPassword;
             var originalUrls = new List<string>();
             if (Playlists != null)
                 foreach (var p in Playlists) originalUrls.Add(p.Url);
@@ -380,6 +408,8 @@ public class AppConfig
                 // 保存前加密密码（若已是加密值则不重复加密）；加密失败由 EncryptSecret 抛错（fail-closed）
                 if (!string.IsNullOrEmpty(plain) && !plain.StartsWith("DPAPI:", StringComparison.Ordinal))
                     XtreamPassword = EncryptSecret(plain);
+                if (!string.IsNullOrEmpty(plainOl) && !plainOl.StartsWith("DPAPI:", StringComparison.Ordinal))
+                    OpenListPassword = EncryptSecret(plainOl);
                 // 纵深防御：序列化前剥离 Playlists[].Url 中的凭据参数，仅影响落盘内容。
                 if (Playlists != null)
                 {
@@ -415,6 +445,7 @@ public class AppConfig
             finally
             {
                 XtreamPassword = plain; // 恢复明文，供本次会话继续使用（成功、失败都执行）
+                OpenListPassword = plainOl; // 同上
                 if (Playlists != null)
                 {
                     for (var i = 0; i < Playlists.Count && i < originalUrls.Count; i++)
