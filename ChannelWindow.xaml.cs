@@ -32,11 +32,6 @@ public partial class ChannelWindow : Window
         VideoView.MediaPlayer = _player;
     }
 
-    /// <summary>标记为已由主窗口统一释放引擎（主窗口关闭时调用，避免重复释放）</summary>
-    public void DetachEngine() => _engineReleased = true;
-
-    private bool _engineReleased;
-
     /// <summary>播放指定频道（串行化，避免并发调用 MediaPlayer 崩溃）</summary>
     public async void Play(ChannelItem ch)
     {
@@ -103,7 +98,6 @@ public partial class ChannelWindow : Window
     /// <summary>后台释放播放器：Stop + Dispose 全部在后台线程做，UI 线程绝不碰播放器释放。</summary>
     private void StartTeardown()
     {
-        if (_engineReleased) return;   // 主窗口统一释放引擎时由主窗口负责，不重复释放
         if (_teardownStarted) return;  // 只在 UI 线程调用，单线程置位即可
         _teardownStarted = true;
         var playerToStop = _player;
@@ -120,7 +114,6 @@ public partial class ChannelWindow : Window
     private void Window_Closed(object sender, EventArgs e)
     {
         // 播放器释放已交给后台 StartTeardown，UI 线程在这里 Dispose 会阻塞。
-        // 主窗口统一释放引擎时（DetachEngine），播放器由主窗口负责释放。
         AppLog.Info($"channel window closed [{_channel?.Name}]");
     }
 }
