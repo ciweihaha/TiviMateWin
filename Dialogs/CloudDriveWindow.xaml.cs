@@ -19,7 +19,7 @@ public partial class CloudDriveWindow : Window
         public required OpenListService.Entry Entry { get; init; }
         public string Name => Entry.Name;
         public bool IsDir => Entry.IsDir;
-        public bool IsVideo => !Entry.IsDir && VodSource.IsVideoFile(Entry.Name);
+        public bool IsVideo => !Entry.IsDir && OpenListService.IsVideoFile(Entry.Name);
         public string Display => Entry.IsDir ? "📁 " + Entry.Name : "🎬 " + Entry.Name;
         public string SizeText => Entry.IsDir ? "" : FormatSize(Entry.Size);
 
@@ -77,7 +77,7 @@ public partial class CloudDriveWindow : Window
             _path = path;
             PathText.Text = path;
             FileList.ItemsSource = entries
-                .Where(e => e.IsDir || VodSource.IsVideoFile(e.Name))
+                .Where(e => e.IsDir || OpenListService.IsVideoFile(e.Name))
                 .OrderByDescending(e => e.IsDir)
                 .ThenBy(e => e.Name, StringComparer.CurrentCulture)
                 .Select(e => new FileRow { Entry = e })
@@ -120,7 +120,7 @@ public partial class CloudDriveWindow : Window
                 StatusText.Text = $"“{row.Name}”取直链失败，请检查 OpenList 登录与该文件权限。";
                 return;
             }
-            _owner.PlayVodItem(new ChannelItem
+            _owner.PlayCloudItem(new ChannelItem
             {
                 Name = Path.GetFileNameWithoutExtension(row.Name),
                 Url = url,
