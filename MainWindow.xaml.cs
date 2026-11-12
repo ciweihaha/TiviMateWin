@@ -63,6 +63,10 @@ public partial class MainWindow : Window
     // 在线程消息层按两次左键按下自己识别双击（不依赖窗口类有没有 CS_DBLCLKS）。
     private DateTime _lastVideoClickUtc = DateTime.MinValue;  // 上一次落在视频区的左键按下
     private Point _lastVideoClickPoint;                        // 上一次按下的屏幕坐标
+    // 同一次物理按下去重（v1.4.15 2-1）：钩子与线程消息层都会看到同一按下的消息，
+    // 视频面不存在时（未开播/停播）两路各记一次会误算双击；50ms 内同点按下只计一次。
+    private DateTime _lastClickDedupeUtc = DateTime.MinValue;
+    private Point _lastClickDedupePoint;
     private DateTime _lastFullscreenToggleUtc = DateTime.MinValue; // 上一次切换全屏：300ms 内忽略按下，防止双击“退出全屏”按钮后第二下又切回来
 
     // 线程消息层双击识别用的 Win32 API（本仓第一处 P/Invoke）
@@ -141,6 +145,10 @@ public partial class MainWindow : Window
     // 坏源容错：连续失败计数 + 本轮已失败线路（防主备来回死循环）
     private int _failCount;
     private readonly HashSet<string> _recentFailedUrls = new();
+    // 同一次失败去重（v1.4.15 迭代 1）：libvlc 对同一次失败可能多次触发 EncounteredError，
+    // 800ms 内同一 URL 只处理一次，避免 _failCount 连加、备用切换与自动跳台并行触发。
+    private DateTime _lastPlayErrorUtc = DateTime.MinValue;
+    private string? _lastPlayErrorUrl;
     // 直播停滞看门狗：IsPlaying 但 8 秒播放位置不前进 → 自动重连（上限 3 次）
     private readonly DispatcherTimer _stallWatch = new() { Interval = TimeSpan.FromSeconds(4) };
     private long _lastMediaTime = -1;
@@ -187,6 +195,14 @@ public partial class MainWindow : Window
     // 播放串行化：libVLC MediaPlayer 非线程安全，快速换台时多个 Play 需串行执行，避免并发崩溃
     private readonly SemaphoreSlim _playGate = new(1, 1);
 
+    // 播放代号（v1.4.15）：每次 PlayAsync 启动新播放时递增；后台 Stop 执行前校验代号，
+    // 避免迟到的 Stop 停掉新起的流（2-2 停止竞态、2-3 小窗竞态、2-4 切源竞态同款）。
+    private int _playSeq;
+    // 主播放器释放锁：后台 Stop（停止/切源/小窗效果）与退出时后台释放串行化，
+    // 避免 Stop 与 Dispose 在同一个 native 播放器上竞态；UI 线程永不拿这把锁。
+    private readonly object _mainPlayerLock = new();
+    private bool _mainTeardownStarted; // 主播放器后台释放只启动一次
+
     // 播放控制状态：暂停标志 + 进度条拖动标志 + 进度刷新定时器
     private bool _isPaused;
     private bool _seekDragging;
@@ -215,7 +231,15 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _searchDebounce.Tick += (_, _) => { _searchDebounce.Stop(); ApplyFilter(); };
-        _saveDebounce.Tick += (_, _) => { _saveDebounce.Stop(); _config.Save(); };
+        _saveDebounce.Tick += (_, _) =>
+        {
+            _saveDebounce.Stop();
+            // v1.4.15 迭代 1：配置写盘（DPAPI 加密 + 原子换名）放后台线程，避免慢盘/
+            // 杀毒软件扫描时卡 UI；读盘失败待确认时仍走 UI 线程（Save 里要弹确认框）。
+            // SaveGate 已串行化并发保存，后台写失败只记日志、下次再存，不影响运行。
+            if (AppConfig.ReadFailurePending) _config.Save();
+            else _ = Task.Run(() => _config.Save());
+        };
         _switchDebounce.Tick += (_, _) =>
         {
             _switchDebounce.Stop();
@@ -313,13 +337,21 @@ public partial class MainWindow : Window
 
     /// <summary>视频区双击配对（供线程消息层与底层鼠标钩子共用）：两次按下都在双击时间与
     /// 矩形内即为双击。注意：只做配对判断，不切换全屏，切换由调用方做（钩子侧用 BeginInvoke
-    /// 延迟切，避免与线程消息层的同步切换重复触发——两者共用配对状态，先触发的一方
-    /// 会把 _lastVideoClickUtc 清掉，另一方就不再算双击）。</summary>
+    /// 延迟切，避免与线程消息层的同步切换重复触发）。同一次物理按下只计一次（50ms 去重，
+    /// v1.4.15 2-1）：钩子与消息层都会看到同一按下，视频面不存在时两路各记一次会误算双击。</summary>
     private bool TryHandleVideoDoubleClickAt(Point point)
     {
+        var now = DateTime.UtcNow;
+        // 同一次物理按下只计一次：钩子与线程消息层先后看到同一按下时，第二路直接返回，
+        // 否则未开播时单击会被两路各记一次、误算成双击（2-1）。50ms 窗口远小于人手双击间隔。
+        if ((now - _lastClickDedupeUtc).TotalMilliseconds <= 50
+            && Math.Abs(point.X - _lastClickDedupePoint.X) <= 4
+            && Math.Abs(point.Y - _lastClickDedupePoint.Y) <= 4)
+            return false;
+        _lastClickDedupeUtc = now;
+        _lastClickDedupePoint = point;
         if (!IsPointInMainVideo(point)) return false;
         if (IsPointOnMainOverlayOrOsd(point)) return false;
-        var now = DateTime.UtcNow;
         var doubleClickTime = TimeSpan.FromMilliseconds(GetDoubleClickTime());
         var dx = Math.Abs(point.X - _lastVideoClickPoint.X);
         var dy = Math.Abs(point.Y - _lastVideoClickPoint.Y);
@@ -587,8 +619,10 @@ public partial class MainWindow : Window
             _engineFailed = true;            // 标记失败，后续不再反复初始化/弹窗
             PlayState.Text = "引擎初始化失败";
             AppLog.Error("engine init failed: " + ex.Message);
-            MessageBox.Show(this, "VLC 引擎初始化失败：" + ex.Message, "错误",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            // v1.4.15 迭代 1：关闭期间不弹窗，否则弹窗会挡住关闭流程。
+            if (!_closing)
+                MessageBox.Show(this, "VLC 引擎初始化失败：" + ex.Message, "错误",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally { _engineGate.Release(); }
     }
@@ -903,6 +937,7 @@ public partial class MainWindow : Window
         _stallTicks = 0;
 
         _current = ch;
+        _playSeq++;   // v1.4.15：新播放提交，代号递增，作废此前挂起的后台 Stop（2-2/2-3/2-4）
         NowPlaying.Text = ch.Name;
         PlayState.Text = "连接中…";
         EmptyState.Visibility = Visibility.Collapsed;
@@ -923,19 +958,29 @@ public partial class MainWindow : Window
             await _playGate.WaitAsync();
             try
             {
+                // v1.4.15 迭代 3：等锁期间可能已被停止（_current 已清）或被更新的换台取代
+                // （_current 已指向另一 Url），此时不再启动本次播放——否则停止后流又自己起播。
+                // 按 Url 比对：列表刷新后 _current 会换成同 Url 的新对象，引用比对会误判。
+                if (_closing || _current?.Url != ch.Url) return;
                 await Task.Run(() =>
                 {
-                    // 创建新 Media 并播放，然后释放旧的（顺序：先播新的，再释放旧的，避免黑屏）
-                    var media = url.Contains("://")
-                        ? new Media(_libvlc!, new Uri(url))
-                        : new Media(_libvlc!, url, FromType.FromPath);
-                    media.AddOption($":network-caching={_config.NetworkCache}");
-                    _player!.Play(media);
-                    lock (_mediaLock)
+                    // 与后台 Stop 用同一把 _mainPlayerLock 串行化：锁内再校验一次，
+                    // 堵住“检查通过后、Play 之前”被停止的微秒窗口。
+                    lock (_mainPlayerLock)
                     {
-                        var old = _currentMedia;
-                        _currentMedia = media;   // 新 Media 接管播放
-                        old?.Dispose();          // 旧 Media 已停止，安全释放
+                        if (_closing || _current?.Url != ch.Url) return;
+                        // 创建新 Media 并播放，然后释放旧的（顺序：先播新的，再释放旧的，避免黑屏）
+                        var media = url.Contains("://")
+                            ? new Media(_libvlc!, new Uri(url))
+                            : new Media(_libvlc!, url, FromType.FromPath);
+                        media.AddOption($":network-caching={_config.NetworkCache}");
+                        _player!.Play(media);
+                        lock (_mediaLock)
+                        {
+                            var old = _currentMedia;
+                            _currentMedia = media;   // 新 Media 接管播放
+                            old?.Dispose();          // 旧 Media 已停止，安全释放
+                        }
                     }
                 });
             }
@@ -1018,16 +1063,18 @@ public partial class MainWindow : Window
         _switchDebounce.Stop();
         var playerToStop = _player;
         if (playerToStop is null) return;
-        // MediaPlayer.Stop() 可能阻塞 UI（等卡住的直播流拆掉），放后台线程；
-        // 与 ActivatePlaylist 的后台 Stop 同款。若用户已立刻重播（_current 非空），
-        // 跳过本次 Stop，避免停掉新开的流。
+        // v1.4.15 2-2：代号与 _current 都在 UI 线程同步定好再排后台 Stop——
+        // 旧代码把“_current 是否为空”的判断放在后台线程里，后台若抢在 UI 线程
+        // 清 _current 之前跑，就会误判为“已重播”而跳过 Stop，声音继续播。
+        // 代号校验：之后若有新播放提交（_playSeq 递增），迟到的 Stop 直接跳过。
+        var seqAtStop = _playSeq;
+        _current = null;
         _ = Task.Run(() =>
         {
-            try { if (_current is null) playerToStop.Stop(); } catch { }
+            try { lock (_mainPlayerLock) { if (seqAtStop == _playSeq) playerToStop.Stop(); } } catch { }
         });
         try
         {
-            _current = null;
             _isPaused = false;
             ClearPlayingChannel();          // V1.4：取消列表播放高亮
             Title = "星辰直播";             // V1.4：标题栏恢复
@@ -1133,6 +1180,15 @@ public partial class MainWindow : Window
     {
         _saveDebounce.Stop();
         _saveDebounce.Start();
+    }
+
+    /// <summary>配置保存放后台线程（v1.4.15 迭代 3）：Save 含 DPAPI 加密 + 原子换名，
+    /// 同步写盘在慢盘/杀毒扫描时会卡 UI；迭代 1 只改了防抖路径，本处补上其余 6 处直接调用。
+    /// 读盘失败待确认时仍走 UI 线程（Save 里要弹确认框）；退出时的最后一次保存见 Window_Closing。</summary>
+    private void SaveConfigAsync()
+    {
+        if (AppConfig.ReadFailurePending) _config.Save();
+        else _ = Task.Run(() => _config.Save());
     }
 
     private void ToggleFullscreen()
@@ -1256,7 +1312,9 @@ public partial class MainWindow : Window
         if (_closing || _player is null || _current is null || _isPaused) return;
         try
         {
-            if (!_player.IsPlaying)
+            // v1.4.15 迭代 1：缓冲中（Buffering）时 IsPlaying 为 false，慢启动流会被误判
+            // 未恢复而多播一次；缓冲态也视为“正在播”，不重播。
+            if (!_player.IsPlaying && _player.State != VLCState.Buffering)
             {
                 AppLog.Info("video surface still not playing after reattach, replaying current channel");
                 _ = PlayAsync(_current);
@@ -1575,6 +1633,9 @@ public partial class MainWindow : Window
     private void SavePipPlacement(PipWindow? win)
     {
         if (win == null) return;
+        // v1.4.15 2-5：全屏时 Left/Top/Width/Height 就是满屏尺寸，存下它下次开小窗
+        // 会变成满屏巨窗；全屏关闭时跳过保存，保留上次正常尺寸。
+        if (win.IsPipFullscreen) return;
         _config.PipLeft = win.Left;
         _config.PipTop = win.Top;
         _config.PipWidth = win.Width;
@@ -1599,8 +1660,8 @@ public partial class MainWindow : Window
     {
         if (_pipWindow != null)
         {
-            // F6(b)：不调 PipWindow.DetachEngine，直接 Close()，让 PipWindow.Window_Closed 正常释放 _media/_player。
-            // 主窗口关闭路径仍先 DetachEngine 再 Close（见 Window_Closing），与本路径分离，避免重复释放。
+            // 直接 Close()，让 PipWindow 自己后台释放 _media/_player；
+            // 主窗口关闭路径同款（见 Window_Closing），不再先 DetachEngine。
             try { _pipWindow.Close(); } catch { }
             _pipWindow = null;
         }
@@ -1633,23 +1694,28 @@ public partial class MainWindow : Window
         // 必须放后台线程——UI 线程卡在这里时小窗画不出画面（黑屏）、底层鼠标钩子
         // 也跑不了（鼠标全系统卡住），就是 v1.4.12 报的“小窗黑屏 + 卡死”。
         // 与 ActivatePlaylist/RemovePlaylist 的后台 Stop 同款处理。
+        // v1.4.15 2-3：标志先同步置位再排后台 Stop（旧代码先排队后置位，后台若抢跑
+        // 会误判效果未生效而跳过 Stop）；执行前在锁内再校验代号与标志——
+        // 关小窗后若已重播（代号变了），迟到的 Stop 直接跳过，避免停掉新起的流。
+        _pipEffectActive = true;
         var mainPlayer = _player;
         if (mainPlayer != null)
         {
+            var seqAtEffect = _playSeq;
             _ = Task.Run(() =>
             {
                 try
                 {
-                    // 小窗已关（效果已清除、可能已重播）时不再停，避免停掉新播的流；
-                    // 1 秒后的重挂检查会兜底重播，极小概率的竞态也可自愈。
-                    if (_pipEffectActive) mainPlayer.Stop();
+                    lock (_mainPlayerLock)
+                    {
+                        if (seqAtEffect == _playSeq && _pipEffectActive) mainPlayer.Stop();
+                    }
                 }
                 catch { }
             });
         }
         try { VideoView.MediaPlayer = null; } catch { }
         PlayState.Text = "小窗播放中";
-        _pipEffectActive = true;
         WindowState = WindowState.Minimized;
         // 主窗口最小化后把小窗推到前台并激活：它是唯一可见的窗口，必须拿到输入焦点，否则只见画面点不动。
         try { _pipWindow.Activate(); } catch { }
@@ -1743,10 +1809,16 @@ public partial class MainWindow : Window
     {
         if (name == _config.ActivePlaylist) { RefreshPlaylistCombo(); return; }
         _config.ActivePlaylist = name;
-        _config.Save();
-        // 切换源：停掉旧频道（后台 Stop，避免 VLC 阻塞 UI 导致卡死），清空播放状态
+        SaveConfigAsync();
+        // 切换源：停掉旧频道（后台 Stop，避免 VLC 阻塞 UI 导致卡死），清空播放状态。
+        // v1.4.15 2-4：代号校验——切源后若已播新频道（代号变了），迟到的 Stop 直接跳过，
+        // 否则会停掉新起的流；此处无 1 秒重播兜底，停掉就黑屏无声。
         var p = _player;
-        if (p is { IsPlaying: true }) _ = Task.Run(() => { try { p.Stop(); } catch { } });
+        if (p is { IsPlaying: true })
+        {
+            var seq = _playSeq;
+            _ = Task.Run(() => { try { lock (_mainPlayerLock) { if (seq == _playSeq) p.Stop(); } } catch { } });
+        }
         _current = null;
         ClearPlayingChannel();
         Title = "星辰直播";
@@ -1764,9 +1836,14 @@ public partial class MainWindow : Window
         if (wasActive)
         {
             _config.ActivePlaylist = _config.Playlists.FirstOrDefault()?.Name;
-            _config.Save();
+            SaveConfigAsync();
+            // v1.4.15 2-4：同 ActivatePlaylist，代号校验防迟到的 Stop 停掉新流。
             var p = _player;
-            if (p is { IsPlaying: true }) _ = Task.Run(() => { try { p.Stop(); } catch { } });
+            if (p is { IsPlaying: true })
+            {
+                var seq = _playSeq;
+                _ = Task.Run(() => { try { lock (_mainPlayerLock) { if (seq == _playSeq) p.Stop(); } } catch { } });
+            }
             _current = null;
             ClearPlayingChannel();
             Title = "星辰直播";
@@ -1774,7 +1851,7 @@ public partial class MainWindow : Window
             PlayState.Text = "未播放";
             _ = LoadPlaylistAsync(false, _netCts.Token);
         }
-        else _config.Save();
+        else SaveConfigAsync();
         RefreshPlaylistCombo();
     }
 
@@ -1787,7 +1864,7 @@ public partial class MainWindow : Window
         var wasActive = _config.ActivePlaylist == s.Name;
         s.Name = newName;
         if (wasActive) _config.ActivePlaylist = newName;
-        _config.Save();
+        SaveConfigAsync();
         RefreshPlaylistCombo();
     }
 
@@ -1838,7 +1915,7 @@ public partial class MainWindow : Window
                 name = EnsureUniqueName(name, null);
                 _config.Playlists.Add(new PlaylistSource { Name = name, Url = dlg.SourceUrl });
             }
-            _config.Save();
+            SaveConfigAsync();
             ActivatePlaylist(name);   // 切到新源：停旧播、重载、刷新下拉
         }
     }
@@ -1984,7 +2061,7 @@ public partial class MainWindow : Window
                 // F7：追加前先按 Name 去重，保证 Xtream 项恰为 1。
                 _config.Playlists.RemoveAll(p => p.Name == "Xtream");
                 _config.Playlists.Add(new PlaylistSource { Name = "Xtream", Url = _loadedSourceUrl });
-                _config.Save();
+                SaveConfigAsync();
                 // 深查第 14 轮：改动播放列表的各处（增/删/改名/切换）都会 RefreshPlaylistCombo，
                 // 唯独本处漏了——Xtream 项已入库，源列表面板仍显示旧内容（空），要点开收起才刷新。
                 RefreshPlaylistCombo();
@@ -2244,6 +2321,11 @@ public partial class MainWindow : Window
     private void HandlePlayError()
     {
         if (_closing || _current is not { } ch) return;
+        // 同一次失败去重：800ms 内同一 URL 的重复 EncounteredError 直接丢弃。
+        var now = DateTime.UtcNow;
+        if (_lastPlayErrorUrl == ch.Url && (now - _lastPlayErrorUtc).TotalMilliseconds < 800) return;
+        _lastPlayErrorUtc = now;
+        _lastPlayErrorUrl = ch.Url;
         _recentFailedUrls.Add(ch.Url);
         if (++_failCount > 5)
         {
@@ -2343,18 +2425,14 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object sender, CancelEventArgs e)
     {
+        App.IsShuttingDown = true;          // v1.4.15 迭代 2：退出期间全局异常不再弹窗挡关闭
         _closing = true;                    // 挂起回调（自动跳台/防抖/看门狗）不再操作 UI
         UninstallMouseHook();               // 先卸底层鼠标钩子，关闭过程不再收鼠标消息
         SaveWindowPlacement();              // V1.4：记忆窗口位置/尺寸
-        // F6(a)：尝试以短超时等待在途 PlayAsync 释放 _playGate；超时不无限阻塞关闭。
-        // 注意：Window_Closing 在 UI 线程同步执行，PlayAsync 的释放续体也需 UI 线程，
-        // 因此等待可能超时；超时仅记日志并继续关闭，_closing 守卫会阻止关闭后的后续 UI 操作。
-        try
-        {
-            if (_playGate.Wait(TimeSpan.FromSeconds(2))) _playGate.Release();
-            else AppLog.Error("window closing: play gate wait timed out, continuing close");
-        }
-        catch (Exception ex) { AppLog.Error($"window closing: play gate wait failed: {ex.Message}"); }
+        // v1.4.15 1-2：删掉 _playGate.Wait(2s)——PlayAsync 的释放续体需回 UI 线程执行，
+        // Window_Closing 正阻塞 UI 线程等这把锁，换台进行中关 App 必冻满 2 秒才超时；
+        // _closing 守卫已能拦住关闭后的后续 UI 操作（PlayAsync 释放锁后有 if (_closing) return），
+        // 等待本身没有任何保护作用。
         _netCts.Cancel();                  // 取消挂起的网络拉取（播放列表/EPG/Xtream）
         _stallWatch.Stop();
         _switchDebounce.Stop();
@@ -2369,30 +2447,71 @@ public partial class MainWindow : Window
         ComponentDispatcher.ThreadFilterMessage -= OnThreadFilterMessage;
         Activated -= OnWindowActivated;
 
-        // 先关闭所有独立频道窗口：它们共享主窗口的 LibVLC 引擎，
-        // 若主窗口先释放引擎再关闭子窗口，子窗口 Dispose 会崩溃
+        // 先关闭所有独立频道窗口：它们在自己的 Window_Closing 里后台释放播放器；
+        // 主窗口不再释放 LibVLC 引擎（随进程退出回收），不存在“先释引擎后关子窗口崩溃”的问题。
         foreach (var win in _channelWindows.ToList())
         {
-            try { win.DetachEngine(); win.Close(); } catch { }
+            try { win.Close(); } catch { }
         }
         _channelWindows.Clear();
 
-        // 关闭独立悬浮小窗（同样共享引擎，需先 DetachEngine 避免重复释放）
+        // 关闭独立悬浮小窗（同款：自己后台释放播放器）
         if (_pipWindow != null)
         {
-            try { _pipWindow.DetachEngine(); _pipWindow.Close(); } catch { }
+            try { _pipWindow.Close(); } catch { }
             _pipWindow = null;
         }
 
-        _config.Save();
+        // v1.4.15 1-1：主播放器释放放后台——先在 UI 线程断开视频面（快操作），
+        // 再由 StartMainTeardown 在后台做 Stop → Dispose Media → Dispose Player；
+        // Window_Closed 里同步 Dispose 会等卡住的直播流拆掉（和 v1.4.12/1.4.13 关小窗
+        // 卡死同一根因），进程退出时后台释放不用等，系统回收。
+        try { VideoView.MediaPlayer = null; } catch { }
+        StartMainTeardown();
+
+        // v1.4.15 迭代 3：退出时的最后一次保存仍同步（关掉进程前把本次改动落盘），
+        // 但读盘失败待确认时跳过——Save 会弹确认框挡住退出，且用默认配置覆盖好文件
+        // 正是待确认要防的事；跳过本次保存，配置以本次会话前的落盘为准。
+        if (!AppConfig.ReadFailurePending) _config.Save();
         AppLog.Info("exit");
+    }
+
+    /// <summary>
+    /// 后台释放主播放器：Stop → Dispose Media → Dispose Player 全部在后台线程做，
+    /// UI 线程绝不碰播放器释放（v1.4.15 1-1）。与后台 Stop（停止/切源/小窗效果）
+    /// 用同一把 _mainPlayerLock 串行化，避免 Stop 与 Dispose 在同一个 native 播放器上竞态。
+    /// LibVLC 不在这里释放：子窗口播放器共享同一引擎，进程退出时由系统回收；
+    /// 在后台释放引擎可能与子窗口的释放竞态导致退出崩溃。
+    /// </summary>
+    private void StartMainTeardown()
+    {
+        if (_mainTeardownStarted) return;  // 只启动一次
+        _mainTeardownStarted = true;
+        var playerToStop = _player;
+        if (playerToStop is null) return;
+        Media? mediaToDispose;
+        lock (_mediaLock) { mediaToDispose = _currentMedia; }
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                lock (_mainPlayerLock)
+                {
+                    try { playerToStop.Stop(); } catch { }
+                    try { mediaToDispose?.Dispose(); } catch { }
+                    try { playerToStop.Dispose(); } catch { }
+                }
+                AppLog.Info("main player released on background thread");
+            }
+            catch (Exception ex) { AppLog.Error($"main player release failed: {ex.Message}"); }
+        });
     }
 
     private void Window_Closed(object sender, EventArgs e)
     {
-        try { _currentMedia?.Dispose(); } catch { }
-        try { _player?.Dispose(); } catch { }
-        try { _libvlc?.Dispose(); } catch { }
+        // 主播放器释放已交给后台 StartMainTeardown：UI 线程在这里 Dispose 会阻塞
+        // （等卡住的流拆掉），就是 v1.4.12/1.4.13 关小窗卡死的同款根因；
+        // LibVLC 随进程退出由系统回收，不再同步释放。
         _http.Dispose();
     }
 }

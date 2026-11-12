@@ -6,6 +6,10 @@ namespace TiviMateWin;
 
 public partial class App : Application
 {
+    /// <summary>应用是否正在退出（v1.4.15 迭代 2）：主窗口关闭时置位，全局异常处理
+    /// 在此期间不再弹窗——关闭过程中弹模态框会挡住退出流程，只能记日志。</summary>
+    public static bool IsShuttingDown { get; set; }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         // 全局异常捕获：任何未处理异常都记录日志并提示，避免静默崩溃。
@@ -27,12 +31,16 @@ public partial class App : Application
             else
             {
                 AppLog.Error($"unhandled UI exception: {detail}");
-                try
+                // v1.4.15 迭代 2：退出期间不弹窗（见 IsShuttingDown），只记日志。
+                if (!IsShuttingDown)
                 {
-                    MessageBox.Show($"发生未处理异常，已记录日志。建议重启应用以恢复到干净状态：\n{TruncateForMessage(detail)}", "错误",
-                        MessageBoxButton.OK, MessageBoxImage.Error);
+                    try
+                    {
+                        MessageBox.Show($"发生未处理异常，已记录日志。建议重启应用以恢复到干净状态：\n{TruncateForMessage(detail)}", "错误",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+                    }
+                    catch { }
                 }
-                catch { }
             }
             args.Handled = true;   // 标记已处理，避免进程崩溃
         };

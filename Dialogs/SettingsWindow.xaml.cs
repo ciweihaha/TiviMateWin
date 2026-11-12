@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using TiviMateWin.Services;
@@ -132,7 +133,10 @@ public partial class SettingsWindow : Window
         _config.OpenListUsername = OpenListUserBox.Text.Trim();
         _config.OpenListPassword = OpenListPassBox.Password;
 
-        _config.Save();
+        // v1.4.15 迭代 3：配置保存放后台线程（DPAPI 加密 + 原子换名，慢盘会卡 UI）；
+        // 读盘失败待确认时仍走 UI 线程（Save 里要弹确认框）。
+        if (AppConfig.ReadFailurePending) _config.Save();
+        else _ = Task.Run(() => _config.Save());
         DialogResult = true;
     }
 }

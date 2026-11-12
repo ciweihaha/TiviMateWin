@@ -32,11 +32,6 @@ public partial class ChannelWindow : Window
         VideoView.MediaPlayer = _player;
     }
 
-    /// <summary>标记为已由主窗口统一释放引擎（主窗口关闭时调用，避免重复释放）</summary>
-    public void DetachEngine() => _engineReleased = true;
-
-    private bool _engineReleased;
-
     /// <summary>播放指定频道（串行化，避免并发调用 MediaPlayer 崩溃）</summary>
     public async void Play(ChannelItem ch)
     {
@@ -53,6 +48,9 @@ public partial class ChannelWindow : Window
                 if (_closing) return;   // 等待期间窗口已关闭：不再启动播放
                 await Task.Run(() =>
                 {
+                    // v1.4.15 迭代 3：锁内再校验一次关闭状态——等锁期间窗口已关时，
+                    // 后台释放可能正在 Dispose 同一个播放器，Play 会撞上去。
+                    if (_closing) return;
                     var media = ch.Url.Contains("://")
                         ? new Media(_libvlc, new Uri(ch.Url))
                         : new Media(_libvlc, ch.Url, FromType.FromPath);
@@ -88,16 +86,9 @@ public partial class ChannelWindow : Window
     {
         // F6(a)：先置位再 Stop，使关闭后到达的 Play 直接返回。
         _closing = true;
-        // 与主窗口同款：短超时等待在途 Play 释放 _playGate，避免关闭后 Task.Run
-        // 在已释放的播放器上 Play（抛错进日志）或新建 Media 泄漏；注意 Window_Closing
-        // 在 UI 线程同步执行，Play 的释放续体也需 UI 线程，等待可能超时——超时仅记日志
-        // 并继续关闭，_closing 守卫会阻止关闭后的后续播放操作。
-        try
-        {
-            if (_playGate.Wait(TimeSpan.FromSeconds(2))) _playGate.Release();
-            else AppLog.Error("channel window closing: play gate wait timed out, continuing close");
-        }
-        catch (Exception ex) { AppLog.Error($"channel window closing: play gate wait failed: {ex.Message}"); }
+        // v1.4.15 1-3：删掉 _playGate.Wait(2s)——与主窗口同款，Play 的释放续体需回 UI 线程，
+        // Window_Closing 正阻塞 UI 线程等这把锁，刚换台就关窗口必冻满 2 秒；
+        // _closing 守卫已能拦住关闭后的后续播放操作（Play 里已有两处 _closing 检查）。
         // Stop() 可能阻塞（等卡住的流拆掉），连同 Dispose 一起放后台线程，
         // 避免关窗口时 UI 卡死；不要在 Window_Closed 里同步 Dispose 播放器——
         // Dispose → libvlc_media_player_release() → 销毁时 input_Stop + input_Close
@@ -110,7 +101,6 @@ public partial class ChannelWindow : Window
     /// <summary>后台释放播放器：Stop + Dispose 全部在后台线程做，UI 线程绝不碰播放器释放。</summary>
     private void StartTeardown()
     {
-        if (_engineReleased) return;   // 主窗口统一释放引擎时由主窗口负责，不重复释放
         if (_teardownStarted) return;  // 只在 UI 线程调用，单线程置位即可
         _teardownStarted = true;
         var playerToStop = _player;
@@ -127,7 +117,6 @@ public partial class ChannelWindow : Window
     private void Window_Closed(object sender, EventArgs e)
     {
         // 播放器释放已交给后台 StartTeardown，UI 线程在这里 Dispose 会阻塞。
-        // 主窗口统一释放引擎时（DetachEngine），播放器由主窗口负责释放。
         AppLog.Info($"channel window closed [{_channel?.Name}]");
     }
 }
