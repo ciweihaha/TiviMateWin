@@ -84,6 +84,15 @@ public partial class MainWindow : Window
     // 多窗口播放：跟踪所有打开的独立频道窗口，主窗口关闭时统一关闭，避免引擎释放后子窗口崩溃
     private readonly List<ChannelWindow> _channelWindows = new();
 
+    // 当前列表所属源地址：切源时据此判断缓存是否可用、失败时列表是否已错源。
+    // 深查第 21 轮：旧代码只在 _all 为空时读缓存，切源后网络失败仍显示旧源频道。
+    private string? _loadedSourceUrl;
+
+    /// <summary>是否需要先上缓存：列表为空，或当前列表属于另一源（切源时）。
+    /// 同源刷新不走缓存，避免缓存回滚刚刷新的列表。</summary>
+    internal static bool NeedsCacheFirst(int loadedCount, string? loadedSourceUrl, string srcUrl)
+        => loadedCount == 0 || loadedSourceUrl != srcUrl;
+
     // 播放列表加载并发保护：快速切换源/刷新时避免并发覆盖 _all 与 UI 竞态
     private readonly SemaphoreSlim _loadGate = new(1, 1);
     private int _loadSeq;   // 加载序号：只采纳最后一次请求的结果，防止旧结果覆盖新结果
@@ -129,7 +138,11 @@ public partial class MainWindow : Window
             if (_closing) return;
             if (_pendingPlay is not { } ch) return;
             _pendingPlay = null;
-            _ = PlayAsync(ch);
+            // 深查第 21 轮：切源/刷新期间列表已换，按 Url 在新列表中找对应频道；
+            // 找不到说明该频道已不在当前源，不再播放旧对象。
+            var fresh = _all.FirstOrDefault(c => c.Url == ch.Url);
+            if (fresh is null) return;
+            _ = PlayAsync(fresh);
         };
         _osdTimer.Tick += (_, _) => { _osdTimer.Stop(); if (_fullscreen) StatusBar.Visibility = Visibility.Collapsed; };
         _fsHideTimer.Tick += (_, _) => { _fsHideTimer.Stop(); FullscreenOverlay.Visibility = Visibility.Collapsed; };
@@ -309,7 +322,10 @@ public partial class MainWindow : Window
         _config.ActivePlaylist = src.Name;
 
         // 1) 磁盘缓存：秒开
-        if (!forceRefresh && _all.Count == 0)
+        // 深查第 21 轮：旧条件只在 _all 为空时读缓存，切源（forceRefresh）永远跳过，
+        // 新源网络一失败就只能显示旧源的频道。改为列表为空或当前列表属于另一源时
+        // 都先上缓存；同源刷新仍只走网络，避免缓存回滚刚刷新的列表。
+        if (NeedsCacheFirst(_all.Count, _loadedSourceUrl, src.Url))
         {
             var cached = await Task.Run(() => ChannelCache.Load(src.Url));
             // F6(c)：缓存采纳（AdoptChannels 触 UI）前再检查取消/关闭。
@@ -317,6 +333,7 @@ public partial class MainWindow : Window
             if (cached.Count > 0)
             {
                 AdoptChannels(cached);
+                _loadedSourceUrl = src.Url;
                 PlayState.Text = $"已载入 {cached.Count} 个频道（缓存）";
                 await ResumeLastAsync();
             }
@@ -342,6 +359,7 @@ public partial class MainWindow : Window
             if (list.Count > 0)
             {
                 AdoptChannels(list);
+                _loadedSourceUrl = src.Url;
                 _ = Task.Run(() => ChannelCache.Save(src.Url, list));   // 后台写盘，大清单不卡 UI
                 PlayState.Text = $"已载入 {list.Count} 个频道";
                 await ResumeLastAsync();
@@ -366,6 +384,14 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             if (_all.Count == 0) PlayState.Text = "加载失败: " + ex.Message;
+            else if (_loadedSourceUrl != src.Url)
+            {
+                // 深查第 21 轮：切源后网络失败且新源无缓存——当前列表属于旧源，
+                // 继续显示会误导用户以为是新源内容，清空并明确报错。
+                AdoptChannels(new List<ChannelItem>());
+                _loadedSourceUrl = null;
+                PlayState.Text = "加载失败: " + ex.Message;
+            }
             else PlayState.Text = "刷新失败，使用缓存";
         }
     }
@@ -678,6 +704,10 @@ public partial class MainWindow : Window
     /// <summary>停止播放：停止当前流并清空进度</summary>
     private void StopPlayback()
     {
+        // 深查第 21 轮：150ms 防抖窗口内按下的 ↑/↓ 仍挂着 _pendingPlay，停止后
+        // 防抖到期会重新播起来；先清掉挂起的换台（_player 为空时同样要清）。
+        _pendingPlay = null;
+        _switchDebounce.Stop();
         if (_player is null) return;
         try
         {
@@ -1396,10 +1426,11 @@ public partial class MainWindow : Window
             if (list.Count > 0)
             {
                 AdoptChannels(list);
+                _loadedSourceUrl = $"{server}/get.php?type=live&output=m3u8";
                 _config.ActivePlaylist = "Xtream";
                 // F7：追加前先按 Name 去重，保证 Xtream 项恰为 1。
                 _config.Playlists.RemoveAll(p => p.Name == "Xtream");
-                _config.Playlists.Add(new PlaylistSource { Name = "Xtream", Url = $"{server}/get.php?type=live&output=m3u8" });
+                _config.Playlists.Add(new PlaylistSource { Name = "Xtream", Url = _loadedSourceUrl });
                 _config.Save();
                 // 深查第 14 轮：改动播放列表的各处（增/删/改名/切换）都会 RefreshPlaylistCombo，
                 // 唯独本处漏了——Xtream 项已入库，源列表面板仍显示旧内容（空），要点开收起才刷新。

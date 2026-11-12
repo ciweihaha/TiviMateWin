@@ -140,6 +140,18 @@ public static class SelfTest
             lines.Add(MainWindow.ExtractEpgUrl("") == null && MainWindow.ExtractEpgUrl("\n\n") == null
                 ? "PASS EPG源提取-空输入返回空" : "FAIL EPG源提取-空输入返回空");
 
+            // --- 切源缓存判定（深查第 21 轮；纯逻辑） ---
+            // 旧 LoadCoreAsync 只在 _all 为空时读缓存，切源后网络失败仍显示旧源频道。
+            // NeedsCacheFirst：列表为空、或当前列表属于另一源时先上缓存；同源刷新不走缓存。
+            lines.Add(MainWindow.NeedsCacheFirst(0, null, "http://a.m3u8")
+                ? "PASS 切源缓存判定-空列表需缓存" : "FAIL 切源缓存判定-空列表需缓存");
+            lines.Add(!MainWindow.NeedsCacheFirst(5, "http://a.m3u8", "http://a.m3u8")
+                ? "PASS 切源缓存判定-同源刷新不走缓存" : "FAIL 切源缓存判定-同源刷新不走缓存");
+            lines.Add(MainWindow.NeedsCacheFirst(5, "http://a.m3u8", "http://b.m3u8")
+                ? "PASS 切源缓存判定-切源需缓存" : "FAIL 切源缓存判定-切源需缓存");
+            lines.Add(MainWindow.NeedsCacheFirst(5, null, "http://b.m3u8")
+                ? "PASS 切源缓存判定-来源未知需缓存" : "FAIL 切源缓存判定-来源未知需缓存");
+
             // --- 拉取限长（深查第 13 轮；纯流逻辑，不触网络） ---
             // 旧 FetchTextAsync 用 GetStringAsync 无界缓冲，失控源可撑爆内存；
             // 新实现流式限长（复用 LogoService.ReadCappedAsync），超限抛错且不重试。
