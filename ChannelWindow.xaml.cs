@@ -17,6 +17,9 @@ public partial class ChannelWindow : Window
     private readonly int _networkCache;   // 深查第 22 轮：旧代码写死 800，用户设置的网络缓存不生效
     // 播放串行化：libVLC MediaPlayer 非线程安全，快速换台时多个 Play 需串行执行
     private readonly SemaphoreSlim _playGate = new(1, 1);
+    // 在途播放的后台任务（Play 内 Task.Run 的 Play 调用本身）：Window_Closing 等它而非只等
+    // _playGate，同主窗口 M1——释放续体需 UI 线程，关闭时 UI 线程正被阻塞，等门必然超时。
+    private Task? _inFlightPlay;
     // F6(a)：窗口关闭中标志。Window_Closing 置位后，Play 不再启动新的播放，
     // 避免关闭后继续操作已释放的播放器/Media。
     private volatile bool _closing;
@@ -50,18 +53,26 @@ public partial class ChannelWindow : Window
             try
             {
                 if (_closing) return;   // 等待期间窗口已关闭：不再启动播放
-                await Task.Run(() =>
+                var playTask = Task.Run(() =>
                 {
                     var media = ch.Url.Contains("://")
                         ? new Media(_libvlc, new Uri(ch.Url))
                         : new Media(_libvlc, ch.Url, FromType.FromPath);
                     media.AddOption($":network-caching={_networkCache}");
+                    if (_closing)
+                    {
+                        // M1：关闭已开始，不再触碰可能正在释放的播放器，丢弃新建的 Media。
+                        media.Dispose();
+                        return;
+                    }
                     _player.Play(media);
                     var old = _media;
                     _media = media;   // 新 Media 接管
                     old?.Dispose();
                 });
-                AppLog.Info($"channel window play [{ch.Name}]");
+                _inFlightPlay = playTask;   // M1：供 Window_Closing 等待
+                await playTask;
+                if (!_closing) AppLog.Info($"channel window play [{ch.Name}]");
             }
             finally { _playGate.Release(); }
         }
@@ -87,16 +98,19 @@ public partial class ChannelWindow : Window
     {
         // F6(a)：先置位再 Stop，使关闭后到达的 Play 直接返回。
         _closing = true;
-        // 与主窗口同款：短超时等待在途 Play 释放 _playGate，避免关闭后 Task.Run
-        // 在已释放的播放器上 Play（抛错进日志）或新建 Media 泄漏；注意 Window_Closing
-        // 在 UI 线程同步执行，Play 的释放续体也需 UI 线程，等待可能超时——超时仅记日志
-        // 并继续关闭，_closing 守卫会阻止关闭后的后续播放操作。
+        // M1：等待在途播放的后台任务完成，而非等 _playGate（同主窗口：等门必然超时，
+        // 释放续体需 UI 线程而关闭正阻塞 UI 线程；该任务在线程池完成，等它不会死锁）。
         try
         {
-            if (_playGate.Wait(TimeSpan.FromSeconds(2))) _playGate.Release();
-            else AppLog.Error("channel window closing: play gate wait timed out, continuing close");
+            var inFlight = _inFlightPlay;
+            if (inFlight != null && !inFlight.IsCompleted && !inFlight.Wait(TimeSpan.FromSeconds(2)))
+                AppLog.Error("channel window closing: in-flight play wait timed out, continuing close");
         }
-        catch (Exception ex) { AppLog.Error($"channel window closing: play gate wait failed: {ex.Message}"); }
+        catch (AggregateException)
+        {
+            // 在途播放任务本身已失败（异常由 Play 的 catch 处理），等待目标已达成。
+        }
+        catch (Exception ex) { AppLog.Error($"channel window closing: in-flight play wait failed: {ex.Message}"); }
         try { _player.Stop(); } catch { }
     }
 

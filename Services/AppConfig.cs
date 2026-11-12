@@ -276,6 +276,10 @@ public class AppConfig
                     p.Url.Contains("password=", StringComparison.OrdinalIgnoreCase))
                     p.Url = StripCredentialQuery(p.Url);
             }
+            // L5：数值钳制——手改 config.json 的越界值不得直接传入 libVLC；
+            // 与 SettingsWindow 滑条/UI 约束一致：Volume 0–125，NetworkCache 200–5000ms。
+            cfg.Volume = Math.Clamp(cfg.Volume, 0, 125);
+            cfg.NetworkCache = Math.Clamp(cfg.NetworkCache, 200, 5000);
             return cfg;
         }
         catch (JsonException ex)

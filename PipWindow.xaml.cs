@@ -43,12 +43,13 @@ public partial class PipWindow : Window
             var old = _media;
             _media = media;   // 新 Media 接管
             old?.Dispose();
+            // L2：成功日志放 try 内，播放抛错时不再先记 Error 紧接着又记 Info 成功。
+            AppLog.Info($"pip window play [{ch.Name}]");
         }
         catch (Exception ex)
         {
             AppLog.Error($"pip window play failed [{ch.Name}]: {ex.Message}");
         }
-        AppLog.Info($"pip window play [{ch.Name}]");
     }
 
     /// <summary>标记为已由主窗口统一释放引擎（主窗口关闭时调用，避免重复释放）</summary>

@@ -3,12 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:TiviMateWin"
              StartupUri="MainWindow.xaml">
-    <Application.Resources>
-        <ResourceDictionary>
-            <ResourceDictionary.MergedDictionaries>
-                <!-- 默认深色主题：ApplyTheme 会切换为 Light.xaml -->
-                <ResourceDictionary Source="Themes/Dark.xaml"/>
-            </ResourceDictionary.MergedDictionaries>
-        </ResourceDictionary>
-    </Application.Resources>
+    <!-- L11：主题不在此处静态合并——Themes/*.xaml 是松散 Content 文件，缺失时 XAML 解析
+         直接导致启动崩溃。改由 MainWindow 在 Window_Loaded 中经 ApplyTheme 加载（带缺失容错：
+         加载失败记日志并保持 WPF 默认配色）。 -->
 </Application>

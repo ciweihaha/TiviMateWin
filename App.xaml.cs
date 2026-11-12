@@ -13,7 +13,9 @@ public partial class App : Application
         // （全仓 grep 均为 0），本文件也没有网络 fetch 逻辑，故无法按原文逐字改动，也未引入
         // JS 语义的超时错误类型。本次按实际存在的全局异常处理做同类意图适配：
         // （1）区分取消与真实异常：取消类异常（含内层）视为良性，只记日志、不弹窗；
-        // （2）真实异常不再“静默标记已处理后继续运行”，而是记脱敏日志并弹窗提示；
+        // （2）真实异常记脱敏日志并弹窗提示“建议重启”，但仍置 args.Handled = true 继续运行——
+        // 这是有意识的设计选择（避免一次未处理异常直接杀掉进程、丢失播放状态），不是 fail-fast；
+        // 如需改为 fail-fast，应在弹窗后调用 Shutdown()，而非仅改此处注释。
         // （3）日志侧对异常文本做与 F1 相同的 URL 脱敏（AppConfig.RedactUrlsInText）。
         // 局限：全局处理拿不到调用方的 CancellationToken，无法区分“调用方取消”与
         // “HttpClient 超时”（两者在 .NET 中均为 TaskCanceledException 语义），故统一按取消类处理。
