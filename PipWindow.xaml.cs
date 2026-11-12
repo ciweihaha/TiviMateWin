@@ -28,6 +28,7 @@ public partial class PipWindow : Window
     // 关闭中标志（与 ChannelWindow 的 F6(a) 同款）：Window_Closing 置位后 Play 不再启动新播放，
     // 避免主窗口异步续体在小窗关闭后继续对已释放的播放器 Play。
     private volatile bool _closing;
+    private bool _teardownStarted; // 后台释放只启动一次：Window_Closing 里置位，避免重复 Dispose
 
     public PipWindow(LibVLC libvlc, int volume, int networkCache)
     {
@@ -254,19 +255,46 @@ public partial class PipWindow : Window
     {
         // 先置位再 Stop：关闭后到达的 Play 直接返回，不再操作已释放的播放器。
         _closing = true;
-        // Stop() 可能阻塞（等卡住的流拆掉），放后台线程，避免关小窗时 UI 卡死；
-        // Window_Closed 里仍会 Dispose 播放器，释放不受影响。
+        // 两个检查定时器都停掉：否则 DispatcherTimer 会一直持有窗口引用（泄漏），
+        // 且关闭后触发的 Tick 还会去碰已释放的播放器/视频面。
+        try { _pipOpenCheckTimer.Stop(); } catch { }
+        try { _pipFsCheckTimer.Stop(); } catch { }
+        // 先在 UI 线程断开视频面（快操作，只改 HWND 挂接），再在后台释放播放器。
+        try { VideoView.MediaPlayer = null; } catch { }
+        StartTeardown();
+    }
+
+    /// <summary>
+    /// 后台释放播放器：Stop + Dispose 全部在后台线程做，UI 线程绝不碰播放器释放。
+    /// 根因（v1.4.13 关小窗卡死）：MediaPlayer.Dispose() → libvlc_media_player_release()
+    /// → 销毁时 input_Stop + input_Close（join 输入线程），要等卡住的直播流拆掉，
+    /// 和同步 Stop() 是同一处等待；v1.4.13 只把 Stop 移到了后台，Window_Closed 里
+    /// 的 Dispose 仍在 UI 线程同步执行，Close() 在 Window_Closed 里就堵死了——
+    /// 底层鼠标钩子也跑在 UI 线程上，所以整机鼠标都像死机。另：后台 Stop 和 UI 线程
+    /// Dispose 还会在同一个 native 播放器对象上竞态。上游 VLC 3.0.12 的说明也明确讲：
+    /// release 会等析构线程结束，UI 销毁时不应直接 release（应放后台或程序退出时才释放）。
+    /// </summary>
+    private void StartTeardown()
+    {
+        if (_engineReleased) return;   // 主窗口统一释放引擎时由主窗口负责，不重复释放
+        if (_teardownStarted) return;  // 只在 UI 线程调用，单线程置位即可
+        _teardownStarted = true;
         var playerToStop = _player;
-        _ = Task.Run(() => { try { playerToStop.Stop(); } catch { } });
+        var mediaToDispose = _media;
+        _ = Task.Run(() =>
+        {
+            try { playerToStop.Stop(); } catch { }
+            try { mediaToDispose?.Dispose(); } catch { }
+            try { playerToStop.Dispose(); } catch { }
+            AppLog.Info("pip player released on background thread");
+        });
     }
 
     private void Window_Closed(object sender, EventArgs e)
     {
-        if (!_engineReleased)
-        {
-            try { _media?.Dispose(); } catch { }
-            try { _player.Dispose(); } catch { }
-        }
+        // 播放器释放已交给后台 StartTeardown：UI 线程在这里 Dispose 会阻塞
+        // （等卡住的流拆掉），就是 v1.4.13 关小窗卡死的根因。
+        // 主窗口统一释放引擎时（DetachEngine），播放器由主窗口负责释放。
         AppLog.Info("pip window closed");
     }
 }
