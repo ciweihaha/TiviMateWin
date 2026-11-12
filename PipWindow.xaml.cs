@@ -12,15 +12,17 @@ public partial class PipWindow : Window
     private readonly LibVLC _libvlc;
     private readonly MediaPlayer _player;
     private Media? _media;   // 当前 Media：Play 后需保持存活直到换台/关闭
+    private readonly int _networkCache;   // 深查第 22 轮：旧代码写死 800，用户设置的网络缓存不生效
     private bool _dragging;
     private Point _dragStart;
     private Point _winOrigin;
     private bool _isPaused;
 
-    public PipWindow(LibVLC libvlc, int volume)
+    public PipWindow(LibVLC libvlc, int volume, int networkCache)
     {
         InitializeComponent();
         _libvlc = libvlc;
+        _networkCache = networkCache;
         _player = new MediaPlayer(_libvlc) { Volume = volume };
         VideoView.MediaPlayer = _player;
     }
@@ -36,7 +38,7 @@ public partial class PipWindow : Window
             var media = ch.Url.Contains("://")
                 ? new Media(_libvlc, new Uri(ch.Url))
                 : new Media(_libvlc, ch.Url, FromType.FromPath);
-            media.AddOption(":network-caching=800");
+            media.AddOption($":network-caching={_networkCache}");
             _player.Play(media);
             var old = _media;
             _media = media;   // 新 Media 接管

@@ -14,17 +14,19 @@ public partial class ChannelWindow : Window
     private Media? _media;   // 当前 Media：Play 后需保持存活直到换台/关闭
     private ChannelItem? _channel;
     private int _volume;
+    private readonly int _networkCache;   // 深查第 22 轮：旧代码写死 800，用户设置的网络缓存不生效
     // 播放串行化：libVLC MediaPlayer 非线程安全，快速换台时多个 Play 需串行执行
     private readonly SemaphoreSlim _playGate = new(1, 1);
     // F6(a)：窗口关闭中标志。Window_Closing 置位后，Play 不再启动新的播放，
     // 避免关闭后继续操作已释放的播放器/Media。
     private volatile bool _closing;
 
-    public ChannelWindow(LibVLC libvlc, int volume)
+    public ChannelWindow(LibVLC libvlc, int volume, int networkCache)
     {
         InitializeComponent();
         _libvlc = libvlc;
         _volume = volume;
+        _networkCache = networkCache;
         _player = new MediaPlayer(_libvlc) { Volume = _volume };
         VideoView.MediaPlayer = _player;
     }
@@ -53,7 +55,7 @@ public partial class ChannelWindow : Window
                     var media = ch.Url.Contains("://")
                         ? new Media(_libvlc, new Uri(ch.Url))
                         : new Media(_libvlc, ch.Url, FromType.FromPath);
-                    media.AddOption(":network-caching=800");
+                    media.AddOption($":network-caching={_networkCache}");
                     _player.Play(media);
                     var old = _media;
                     _media = media;   // 新 Media 接管

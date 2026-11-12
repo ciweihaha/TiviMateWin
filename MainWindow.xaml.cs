@@ -1084,7 +1084,7 @@ public partial class MainWindow : Window
         if (ChannelList.SelectedItem is not ChannelItem ch) return;
         await EnsureEngineAsync();
         if (_libvlc is null) return;
-        var win = new ChannelWindow(_libvlc, _config.Volume) { Owner = this };
+        var win = new ChannelWindow(_libvlc, _config.Volume, _config.NetworkCache) { Owner = this };
         _channelWindows.Add(win);
         win.Closed += (_, _) => _channelWindows.Remove(win);
         win.Show();
@@ -1110,7 +1110,7 @@ public partial class MainWindow : Window
 
         if (_pipWindow == null)
         {
-            _pipWindow = new PipWindow(_libvlc, _config.Volume) { Owner = this };
+            _pipWindow = new PipWindow(_libvlc, _config.Volume, _config.NetworkCache) { Owner = this };
             _pipWindow.Closed += (_, _) =>
             {
                 _pipWindow = null;
@@ -1343,9 +1343,19 @@ public partial class MainWindow : Window
             var idx = firstLine.IndexOf("url-tvg=", StringComparison.OrdinalIgnoreCase);
             if (idx < 0) return null;
             var rest = firstLine[(idx + 8)..].Trim();
-            if (rest.StartsWith('"')) rest = rest.TrimStart('"');
-            var end = rest.IndexOf('"');
-            if (end >= 0) rest = rest[..end];
+            if (rest.StartsWith('"'))
+            {
+                rest = rest[1..];
+                var end = rest.IndexOf('"');
+                if (end >= 0) rest = rest[..end];
+            }
+            else
+            {
+                // 深查第 22 轮：无引号写法（如 url-tvg=http://epg.xml x-tvg-url="..."）
+                // 旧代码把后随属性一并当成地址，拉取必失败；以空白截断。
+                var sp = rest.IndexOfAny(new[] { ' ', '\t' });
+                if (sp >= 0) rest = rest[..sp];
+            }
             return rest.Trim().Length > 0 ? rest.Trim() : null;
         }
         catch { return null; }

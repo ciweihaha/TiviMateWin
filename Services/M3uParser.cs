@@ -39,21 +39,21 @@ public static class M3uParser
                 pendingGroup = "未分组";
                 pendingLogo = null;
                 pendingTvgId = null;
-                if (commaIdx > 0)
+                // 深查第 22 轮：无逗号时（如 #EXTINF:-1 tvg-name="CCTV-1"）名称段不存在，
+                // 但属性仍在整行里；旧代码只在有逗号时解析属性，tvg-name/分组/logo 全丢、
+                // 频道回落为 URL 名。属性段改为有逗号取逗号前、无逗号取整行。
+                var attrs = commaIdx >= 0 ? line[..commaIdx] : line;
+                var m = GroupRx.Match(attrs);
+                if (m.Success) pendingGroup = m.Groups["g"].Value.Trim();
+                if (string.IsNullOrEmpty(pendingGroup)) pendingGroup = "未分组";
+                m = LogoRx.Match(attrs);
+                if (m.Success) pendingLogo = m.Groups["l"].Value;
+                m = TvgIdRx.Match(attrs);
+                if (m.Success) pendingTvgId = m.Groups["i"].Value.Trim();
+                if (string.IsNullOrEmpty(pendingName))
                 {
-                    var attrs = line[..commaIdx];
-                    var m = GroupRx.Match(attrs);
-                    if (m.Success) pendingGroup = m.Groups["g"].Value.Trim();
-                    if (string.IsNullOrEmpty(pendingGroup)) pendingGroup = "未分组";
-                    m = LogoRx.Match(attrs);
-                    if (m.Success) pendingLogo = m.Groups["l"].Value;
-                    m = TvgIdRx.Match(attrs);
-                    if (m.Success) pendingTvgId = m.Groups["i"].Value.Trim();
-                    if (string.IsNullOrEmpty(pendingName))
-                    {
-                        m = TvgNameRx.Match(attrs);
-                        if (m.Success) pendingName = m.Groups["n"].Value.Trim();
-                    }
+                    m = TvgNameRx.Match(attrs);
+                    if (m.Success) pendingName = m.Groups["n"].Value.Trim();
                 }
             }
             else if (line.StartsWith('#'))

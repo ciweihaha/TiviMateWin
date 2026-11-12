@@ -68,6 +68,11 @@ public static class SelfTest
             // --- M3U tvg-id 解析 ---
             var tvg = M3uParser.Parse("#EXTM3U\n#EXTINF:-1 tvg-id=\"cctv1\" group-title=\"央视\",CCTV-1\nhttp://c.m3u8");
             lines.Add(tvg.Count == 1 && tvg[0].TvgId == "cctv1" ? "PASS tvg-id解析" : $"FAIL tvg-id 实际={tvg.FirstOrDefault()?.TvgId}");
+            // 深查第 22 轮：EXTINF 无逗号时属性仍在整行里，旧实现只在有逗号时解析，
+            // tvg-name/分组/tvg-id 全丢、频道名回落为 URL。
+            var noComma = M3uParser.Parse("#EXTM3U\n#EXTINF:-1 tvg-id=\"cctv1\" tvg-name=\"CCTV-1\" group-title=\"央视\"\nhttp://c.m3u8");
+            lines.Add(noComma.Count == 1 && noComma[0].Name == "CCTV-1" && noComma[0].Group == "央视" && noComma[0].TvgId == "cctv1"
+                ? "PASS M3U解析-无逗号仍取属性" : "FAIL M3U解析-无逗号仍取属性");
 
             // --- EPG XMLTV 解析 ---
             var epgXml = """
@@ -137,6 +142,8 @@ public static class SelfTest
                 ? "PASS EPG源提取-前导CRLF空行仍取到" : "FAIL EPG源提取-前导CRLF空行仍取到");
             lines.Add(MainWindow.ExtractEpgUrl("#EXTM3U\n#EXTINF:-1,A\nhttp://a.m3u8") == null
                 ? "PASS EPG源提取-无url-tvg返回空" : "FAIL EPG源提取-无url-tvg返回空");
+            lines.Add(MainWindow.ExtractEpgUrl("#EXTM3U url-tvg=http://epg.example.com/epg.xml x-tvg-url=\"http://x\"\n#EXTINF:-1,A\nhttp://a.m3u8") == "http://epg.example.com/epg.xml"
+                ? "PASS EPG源提取-无引号截断后随属性" : "FAIL EPG源提取-无引号截断后随属性");
             lines.Add(MainWindow.ExtractEpgUrl("") == null && MainWindow.ExtractEpgUrl("\n\n") == null
                 ? "PASS EPG源提取-空输入返回空" : "FAIL EPG源提取-空输入返回空");
 
