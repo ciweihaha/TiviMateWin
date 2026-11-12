@@ -26,7 +26,16 @@ public static class VodSource
         public string Name { get; set; } = "";
         public string? Pic { get; set; }
         public string? PlayUrl { get; set; }   // 原始 vod_play_url（多源/多集格式，播前经 ExtractPlayUrl 提取）
+        public string? PlayFrom { get; set; }  // 原始 vod_play_from：$$$ 分隔的线路名，与 vod_play_url 的线路一一对应
         public string? Remarks { get; set; }   // 备注（如“更新至 12 集”）
+    }
+
+    /// <summary>一条候选播放地址：线路名 + 集名 + 直链 m3u8/mp4</summary>
+    public sealed class PlayCandidate
+    {
+        public required string Source { get; init; }   // 线路名（如“光速”）
+        public required string Episode { get; init; }  // 集名（如“正片”“第1集”）
+        public required string Url { get; init; }
     }
 
     /// <summary>视频文件扩展名（点播直链与网盘浏览共用）</summary>
@@ -95,6 +104,7 @@ public static class VodSource
                     Name = name,
                     Pic = GetString(item, "vod_pic"),
                     PlayUrl = GetString(item, "vod_play_url"),
+                    PlayFrom = GetString(item, "vod_play_from"),
                     Remarks = GetString(item, "vod_remarks"),
                 });
             }
@@ -117,6 +127,40 @@ public static class VodSource
         var dollar = firstEp.IndexOf('$');
         var url = dollar >= 0 ? firstEp[(dollar + 1)..] : firstEp;
         return string.IsNullOrWhiteSpace(url) ? null : url.Trim();
+    }
+
+    /// <summary>
+    /// 展开全部候选播放地址：每条线路 × 每一集。线路名取 vod_play_from（$$$ 分隔，
+    /// 与 vod_play_url 的线路按序一一对应；缺失时用“线路1/线路2…”），集名取每集 $ 之前
+    /// 的部分（无 $ 时为“正片”）。顺序与 ExtractPlayUrl 一致：首个候选即其返回值。
+    /// </summary>
+    public static List<PlayCandidate> ExtractAllPlayUrls(string? vodPlayUrl, string? playFrom)
+    {
+        var result = new List<PlayCandidate>();
+        if (string.IsNullOrWhiteSpace(vodPlayUrl)) return result;
+        var froms = (playFrom ?? "").Split("$$$", StringSplitOptions.None);
+        var sources = vodPlayUrl.Split("$$$", StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < sources.Length; i++)
+        {
+            var sourceName = i < froms.Length && !string.IsNullOrWhiteSpace(froms[i])
+                ? froms[i].Trim()
+                : $"线路{i + 1}";
+            var eps = sources[i].Split('#', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var ep in eps)
+            {
+                var dollar = ep.IndexOf('$');
+                var epName = dollar >= 0 ? ep[..dollar].Trim() : "";
+                var url = dollar >= 0 ? ep[(dollar + 1)..].Trim() : ep.Trim();
+                if (string.IsNullOrWhiteSpace(url)) continue;
+                result.Add(new PlayCandidate
+                {
+                    Source = sourceName,
+                    Episode = string.IsNullOrWhiteSpace(epName) ? "正片" : epName,
+                    Url = url,
+                });
+            }
+        }
+        return result;
     }
 
     /// <summary>最新影片列表地址（CMS videolist，pg 从 1 开始）</summary>
