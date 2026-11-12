@@ -39,9 +39,6 @@ public class AppConfig
     public string? OpenListUsername { get; set; }
     public string? OpenListPassword { get; set; }
 
-    // 点播直链最近播放（最多 10 条，新在前；超出时丢最旧的）
-    public List<string> RecentVodUrls { get; set; } = new();
-
     // 小窗位置记忆：null = 未记忆；恢复前经 WindowPlacement.CanRestore 校验
     public double? PipLeft { get; set; }
     public double? PipTop { get; set; }
@@ -277,7 +274,6 @@ public class AppConfig
             cfg.Playlists ??= new();
             cfg.Favorites ??= new();
             cfg.HiddenChannels ??= new();
-            cfg.RecentVodUrls ??= new();
             // 深查第 8 轮：集合元素本身也可能为 null（{"Playlists": [null]}），
             // 或 Name/Url 为 null——JSON null 同样覆盖初始化器。旧代码在随后的
             // foreach (p.Url) 直接空引用，落进通用 catch 被误判为“配置文件损坏”
@@ -294,7 +290,6 @@ public class AppConfig
             }
             cfg.Favorites.RemoveAll(s => s is null);
             cfg.HiddenChannels.RemoveAll(s => s is null);
-            cfg.RecentVodUrls.RemoveAll(s => s is null);
             // 纵深防御：已落盘的旧配置若含 password= 的 URL，加载时同样剥离，
             // 避免它在下一次 Save 时重新写回明文；凭据改由 XtreamServer/Username/Password 在请求时重拼。
             foreach (var p in cfg.Playlists)
