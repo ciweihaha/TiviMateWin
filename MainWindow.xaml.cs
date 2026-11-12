@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -56,6 +57,29 @@ public partial class MainWindow : Window
     private WindowState _preFullscreenState = WindowState.Normal; // 进全屏前的窗口状态：退出时原样恢复，不再写死 Normal
     private Rect _preFullscreenBounds;                            // 进全屏前的普通窗口位置尺寸（最大化时取 RestoreBounds）
     private readonly DispatcherTimer _reattachCheckTimer = new() { Interval = TimeSpan.FromSeconds(1) }; // 重挂视频面后 1 秒检查：仍未恢复播放则重播当前频道兜底
+
+    // 视频区双击切换全屏：VideoView 是 LibVLC 原生 HWND，WPF 收不到它的鼠标事件，
+    // 在线程消息层按两次左键按下自己识别双击（不依赖窗口类有没有 CS_DBLCLKS）。
+    private DateTime _lastVideoClickUtc = DateTime.MinValue;  // 上一次落在视频区的左键按下
+    private Point _lastVideoClickPoint;                        // 上一次按下的屏幕坐标
+    private DateTime _lastFullscreenToggleUtc = DateTime.MinValue; // 上一次切换全屏：300ms 内忽略按下，防止双击“退出全屏”按钮后第二下又切回来
+
+    // 线程消息层双击识别用的 Win32 API（本仓第一处 P/Invoke）
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+    [DllImport("user32.dll")]
+    private static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern uint GetDoubleClickTime();
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int nIndex);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
     private bool _sideCollapsed;   // 侧栏是否收起（缩进最左）
     private GridLength _sideWidth = new(300);
 
@@ -87,6 +111,11 @@ public partial class MainWindow : Window
     // 深查第 12 轮：小窗是否收起了侧栏——仅它收起的才由它恢复；用户手动收起时
     // OpenPip 不动侧栏，关小窗也不得把 _sideWidth 恢复出来（否则侧栏自动弹开）。
     private bool _pipCollapsedSidebar;
+
+    // 小窗播放时主窗口的效果（用户要的效果）：主窗口变黑并最小化，小窗浮在桌面上。
+    // 1.4.7 的重挂/重播会把主窗口画面拉回来，与该效果冲突，故小窗开着时跳过重挂/重播。
+    private WindowState _prePipState = WindowState.Normal; // 开小窗前的主窗口状态：关小窗时还原
+    private bool _pipEffectActive;                          // 小窗效果是否生效中（主窗口黑+最小化）
 
     // 多窗口播放：跟踪所有打开的独立频道窗口，主窗口关闭时统一关闭，避免引擎释放后子窗口崩溃
     private readonly List<ChannelWindow> _channelWindows = new();
@@ -182,7 +211,16 @@ public partial class MainWindow : Window
     private void OnThreadFilterMessage(ref MSG msg, ref bool handled)
     {
         const int WM_KEYDOWN = 0x0100;
-        if (msg.message != WM_KEYDOWN || handled) return;
+        const int WM_LBUTTONDOWN = 0x0201;
+        if (handled) return;
+        // 视频区双击切换全屏：VideoView 是原生 HWND，WPF 收不到它的鼠标事件，
+        // 在此按两次左键按下识别双击。单击、拖动不受影响（只在第二次按下时切换）。
+        if (msg.message == WM_LBUTTONDOWN)
+        {
+            if (TryHandleVideoDoubleClick(msg.hwnd)) handled = true;
+            return;
+        }
+        if (msg.message != WM_KEYDOWN) return;
         // 模态对话框打开时不拦截：对话框均为 ShowDialog，打开时它就是活动窗口；
         // 否则对话框内的方向键/空格等会同时触发主窗口换台/暂停/全屏（对话框焦点在
         // 按钮等非 TextBox 控件上时，现有的 FocusedElement 守卫拦不住）。
@@ -194,6 +232,58 @@ public partial class MainWindow : Window
         // ThreadFilterMessage 只会收到本线程窗口的消息，天然不会拦截其他应用的按键
         var key = KeyInterop.KeyFromVirtualKey((int)msg.wParam);
         if (HandleGlobalKey(key)) handled = true;
+    }
+
+    /// <summary>视频区双击切换全屏：全屏时双击退出，窗口化时双击进入（与 F11 一致）。
+    /// 只认落到主窗口（含 VLC 原生视频子窗口）且落在视频区内的按下；小窗/独立频道窗口/
+    /// 对话框、侧栏/状态栏/全屏浮层上的按下不算。返回 true 表示已消费本次按下。</summary>
+    private bool TryHandleVideoDoubleClick(IntPtr hwnd)
+    {
+        if (_closing || !IsLoaded) return false;
+        // 刚切过全屏 300ms 内忽略：双击“退出全屏”按钮时，第一下退出全屏，第二下不能再切回来
+        if ((DateTime.UtcNow - _lastFullscreenToggleUtc).TotalMilliseconds < 300) return false;
+        // 模态对话框打开时不拦截
+        foreach (Window w in OwnedWindows)
+        {
+            if (w.IsActive) return false;
+        }
+        // 只处理主窗口（含 VLC 原生视频子窗口）的消息：小窗/独立频道窗口是顶层窗口（Owner 不是父子关系），不在此列
+        var source = PresentationSource.FromVisual(this) as HwndSource;
+        if (source == null) return false;
+        var mainHwnd = source.Handle;
+        if (hwnd != mainHwnd && !IsChild(mainHwnd, hwnd)) return false;
+        // 只认落在视频区内的按下：用光标屏幕坐标比对 VideoView 的屏幕矩形；
+        // 全屏浮层、换台 OSD 盖在视频区上时，它们那块不算视频区
+        if (!GetCursorPos(out var pt)) return false;
+        var videoTopLeft = VideoView.PointToScreen(new Point(0, 0));
+        var videoRect = new Rect(videoTopLeft, new Size(VideoView.ActualWidth, VideoView.ActualHeight));
+        var point = new Point(pt.X, pt.Y);
+        if (!videoRect.Contains(point)) return false;
+        if (FullscreenOverlay.Visibility == Visibility.Visible && IsPointInElement(FullscreenOverlay, point)) return false;
+        if (ChannelOsd.Visibility == Visibility.Visible && IsPointInElement(ChannelOsd, point)) return false;
+        // 两次按下都在双击时间与双击矩形内即为双击
+        var now = DateTime.UtcNow;
+        var doubleClickTime = TimeSpan.FromMilliseconds(GetDoubleClickTime());
+        var dx = Math.Abs(point.X - _lastVideoClickPoint.X);
+        var dy = Math.Abs(point.Y - _lastVideoClickPoint.Y);
+        var doubleClickWidth = GetSystemMetrics(36);  // SM_CXDOUBLECLK
+        var doubleClickHeight = GetSystemMetrics(37); // SM_CYDOUBLECLK
+        var isDouble = _lastVideoClickUtc != DateTime.MinValue
+            && (now - _lastVideoClickUtc) <= doubleClickTime
+            && dx <= doubleClickWidth / 2 + 2
+            && dy <= doubleClickHeight / 2 + 2;
+        _lastVideoClickUtc = now;
+        _lastVideoClickPoint = point;
+        if (!isDouble) return false;
+        _lastVideoClickUtc = DateTime.MinValue; // 本次双击已消费，避免三连击又算一次
+        ToggleFullscreen();
+        return true;
+    }
+
+    private static bool IsPointInElement(FrameworkElement element, Point screenPoint)
+    {
+        var topLeft = element.PointToScreen(new Point(0, 0));
+        return new Rect(topLeft, new Size(element.ActualWidth, element.ActualHeight)).Contains(screenPoint);
     }
 
     // ---------- 启动 ----------
@@ -830,8 +920,15 @@ public partial class MainWindow : Window
 
     private void ToggleFullscreen()
     {
+        _lastFullscreenToggleUtc = DateTime.UtcNow; // 双击识别的防重入时间戳：切完 300ms 内忽略左键按下
         if (!_fullscreen)
         {
+            // 小窗播时主窗口是黑+最小化：用户主动切全屏时先解除该效果、恢复 Owner 关系，后面正常进全屏
+            if (_pipEffectActive)
+            {
+                _pipEffectActive = false;
+                if (_pipWindow != null) { try { _pipWindow.Owner = this; } catch { } }
+            }
             // 进全屏前记住当前状态与位置：退出时原样恢复（最大化回 Maximized，普通窗口回原尺寸位置）
             _preFullscreenState = WindowState == WindowState.Minimized ? WindowState.Normal : WindowState;
             _preFullscreenBounds = WindowState == WindowState.Maximized
@@ -886,6 +983,7 @@ public partial class MainWindow : Window
             SideToggleBtn.Visibility = Visibility.Visible; // 恢复侧栏按钮
             if (_pipWindow != null && _pipChannel != null) _pipWindow.Visibility = Visibility.Visible; // 恢复小窗
             ReattachVideoSurface(); // 同上：样式改完重挂视频面，否则 libvlc 往已销毁的 HWND 送帧导致黑屏
+            ApplyPipMainEffect(); // 小窗开着：退出全屏后主窗口仍应黑+最小化（重挂的延迟回调会被效果标志拦住）
         }
     }
 
@@ -898,6 +996,7 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(new Action(() =>
         {
             if (_player is null || _closing) return;
+            if (_pipEffectActive) return; // 小窗播时主窗口应保持黑屏，不重挂
             try
             {
                 VideoView.MediaPlayer = null;
@@ -915,6 +1014,7 @@ public partial class MainWindow : Window
     private void OnReattachCheckTick()
     {
         _reattachCheckTimer.Stop();
+        if (_pipEffectActive) return; // 小窗播时主窗口应保持黑屏，不重播
         if (_closing || _player is null || _current is null || _isPaused) return;
         try
         {
@@ -1194,6 +1294,7 @@ public partial class MainWindow : Window
             {
                 ++_pipSeq;   // 小窗已关：作废挂起的旧 OpenPip 续体
                 SavePipPlacement(_pipWindow);
+                RestoreMainAfterPip(); // 小窗关闭：主窗口恢复可见并恢复播放
                 _pipWindow = null;
                 _pipChannel = null;
                 // 小窗关闭后恢复侧栏：仅恢复小窗自己收起的（见 _pipCollapsedSidebar）
@@ -1216,6 +1317,7 @@ public partial class MainWindow : Window
         }
 
         _pipWindow.Play(ch);
+        ApplyPipMainEffect(); // 小窗开播：主窗口变黑并最小化（用户要的效果）
         AppLog.Info($"pip play [{ch.Name}]");
     }
 
@@ -1252,6 +1354,7 @@ public partial class MainWindow : Window
             try { _pipWindow.Close(); } catch { }
             _pipWindow = null;
         }
+        RestoreMainAfterPip(); // 兜底：Closed 回调里已恢复时为空操作
         _pipChannel = null;
         // 恢复侧栏：仅恢复小窗自己收起的（Closed 回调已处理时此处的标志已清零，不会重复恢复）
         if (!_fullscreen && _pipCollapsedSidebar)
@@ -1259,6 +1362,44 @@ public partial class MainWindow : Window
             SideCol.Width = _sideWidth;
             _pipCollapsedSidebar = false;
         }
+    }
+
+    /// <summary>
+    /// 小窗开播时主窗口的效果（用户要的效果）：主窗口变黑并最小化，小窗浮在桌面上。
+    /// 注意：不能用 StopPlayback()——它会清 _current，关小窗后就不知道播哪个频道了；
+    /// 这里直接 _player.Stop()（只停流、不清频道），再断开视频面保证黑屏。
+    /// 另：先断开小窗的 Owner，否则最小化主窗口会连带隐藏小窗（Win32 owned window 规则）。
+    /// 全屏时小窗先隐藏，不做该效果；退出全屏时由 ToggleFullscreen 退出分支补做。
+    /// </summary>
+    private void ApplyPipMainEffect()
+    {
+        if (_fullscreen || _pipWindow == null || _closing || _pipEffectActive) return;
+        _prePipState = WindowState;
+        bool ownerCleared = false;
+        try { _pipWindow.Owner = null; ownerCleared = true; }
+        catch (Exception ex) { AppLog.Error($"pip clear owner failed: {ex.Message}"); }
+        // 主画面变黑：停主播放器（不停小窗的独立播放器）并断开视频面
+        try { _player?.Stop(); } catch { }
+        try { VideoView.MediaPlayer = null; } catch { }
+        PlayState.Text = "小窗播放中";
+        _pipEffectActive = true;
+        if (ownerCleared)
+        {
+            WindowState = WindowState.Minimized;
+        }
+        AppLog.Info("pip effect applied: main black" + (ownerCleared ? " + minimized" : " (owner clear failed, not minimized)"));
+    }
+
+    /// <summary>小窗关闭：主窗口恢复可见并恢复播放。效果未生效或应用正在关闭时为空操作。</summary>
+    private void RestoreMainAfterPip()
+    {
+        if (!_pipEffectActive) return;
+        _pipEffectActive = false;
+        if (_closing) return;
+        if (_pipWindow != null) { try { _pipWindow.Owner = this; } catch { } } // 恢复 Owner 关系
+        WindowState = _prePipState == WindowState.Minimized ? WindowState.Normal : _prePipState;
+        ReattachVideoSurface(); // 重挂视频面（自带 1 秒检查：未播则重播当前频道）
+        AppLog.Info("pip effect cleared: main restored");
     }
 
     // ---------- 点播链接 / 网盘播放 ----------
