@@ -2406,6 +2406,7 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object sender, CancelEventArgs e)
     {
+        App.IsShuttingDown = true;          // v1.4.15 迭代 2：退出期间全局异常不再弹窗挡关闭
         _closing = true;                    // 挂起回调（自动跳台/防抖/看门狗）不再操作 UI
         UninstallMouseHook();               // 先卸底层鼠标钩子，关闭过程不再收鼠标消息
         SaveWindowPlacement();              // V1.4：记忆窗口位置/尺寸
