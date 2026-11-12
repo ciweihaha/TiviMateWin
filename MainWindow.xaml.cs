@@ -1644,26 +1644,7 @@ public partial class MainWindow : Window
         AppLog.Info("pip effect cleared: main restored");
     }
 
-    // ---------- 点播链接 / 网盘播放 ----------
-
-    /// <summary>点播按钮：直链播放（主窗口/小窗）或转到点播源导入</summary>
-    private void BtnVod_Click(object sender, RoutedEventArgs e)
-    {
-        var dlg = new Dialogs.PlayUrlWindow(_config.RecentVodUrls) { Owner = this };
-        if (dlg.ShowDialog() != true) return;
-        if (dlg.Choice == Dialogs.PlayUrlWindow.PlayUrlChoice.ImportVod)
-        {
-            var vod = new Dialogs.VodBrowserWindow(this) { Owner = this };
-            vod.ShowDialog();
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(dlg.PlayUrl)) return;
-        var name = string.IsNullOrWhiteSpace(dlg.PlayName)
-            ? GuessChannelName(dlg.PlayUrl) : dlg.PlayName;
-        AddRecentVodUrl(dlg.PlayUrl);
-        PlayVodItem(new ChannelItem { Name = name, Url = dlg.PlayUrl, Group = "点播" },
-            dlg.Choice == Dialogs.PlayUrlWindow.PlayUrlChoice.Pip);
-    }
+    // ---------- 网盘播放 ----------
 
     /// <summary>网盘按钮：未配 OpenList 时提示去设置，配好后打开网盘浏览窗</summary>
     private void BtnCloud_Click(object sender, RoutedEventArgs e)
@@ -1681,22 +1662,12 @@ public partial class MainWindow : Window
         dlg.ShowDialog();
     }
 
-    /// <summary>供点播/网盘对话框调用：播放一个点播项（主窗口或小窗）</summary>
-    internal void PlayVodItem(ChannelItem ch, bool pip)
+    /// <summary>供网盘对话框调用：播放一个网盘项（主窗口或小窗）</summary>
+    internal void PlayCloudItem(ChannelItem ch, bool pip)
     {
         if (_closing) return;
         if (pip) OpenPip(ch);
         else _ = PlayAsync(ch);
-    }
-
-    /// <summary>点播直链记入最近播放（去重、新在前、最多 10 条）</summary>
-    private void AddRecentVodUrl(string url)
-    {
-        _config.RecentVodUrls.Remove(url);
-        _config.RecentVodUrls.Insert(0, url);
-        while (_config.RecentVodUrls.Count > 10)
-            _config.RecentVodUrls.RemoveAt(_config.RecentVodUrls.Count - 1);
-        QueueSave();
     }
 
     // ---------- 播放列表管理（供管理对话框调用） ----------
