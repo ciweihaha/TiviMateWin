@@ -25,6 +25,12 @@ public partial class PipWindow : Window
     private readonly DispatcherTimer _pipFsCheckTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private readonly DispatcherTimer _pipOpenCheckTimer = new() { Interval = TimeSpan.FromMilliseconds(1000) };
     private bool _pipOpenCheckArmed; // 开播检查是否待触发：只兜底一次，避免循环重播
+    // 停滞看门狗（v1.4.15 2-6）：主窗口同款思路的简化版——播出中断流/黑屏后不再静默，
+    // 4 秒一查，位置连续 2 次不前进则重播一次（最多 2 次），仍失败则显示文案等用户点重播。
+    private readonly DispatcherTimer _pipStallTimer = new() { Interval = TimeSpan.FromSeconds(4) };
+    private long _pipLastTime = -1;
+    private int _pipStallTicks;
+    private int _pipStallRetries;
     // 关闭中标志（与 ChannelWindow 的 F6(a) 同款）：Window_Closing 置位后 Play 不再启动新播放，
     // 避免主窗口异步续体在小窗关闭后继续对已释放的播放器 Play。
     private volatile bool _closing;
@@ -39,6 +45,10 @@ public partial class PipWindow : Window
         VideoView.MediaPlayer = _player;
         _pipFsCheckTimer.Tick += (_, _) => OnPipFsCheckTick();
         _pipOpenCheckTimer.Tick += (_, _) => OnPipOpenCheckTick();
+        _pipStallTimer.Tick += (_, _) => OnPipStallTick();
+        // v1.4.15 2-6：播出失败有提示、可重播，不再静默黑屏；出画面后提示自动消失。
+        _player.EncounteredError += (_, _) => Dispatcher.BeginInvoke(OnPipError);
+        _player.Playing += (_, _) => Dispatcher.BeginInvoke(HidePipStatus);
         // 标题栏拖动走 Win32 层：Loaded 后挂 WndProc，WM_NCHITTEST 对标题栏区返回 HTCAPTION，
         // 系统接管拖动，不走 WPF 鼠标事件（标题栏点按偶尔到不了 WPF 处理器时仍能拖动）。
         Loaded += (_, _) =>
@@ -118,6 +128,12 @@ public partial class PipWindow : Window
         _isPaused = false;
         _stopped = false;
         BtnPlayPause.Content = "⏸";
+        HidePipStatus(); // 新播放开始：清掉上次的失败文案
+        _pipLastTime = -1;
+        _pipStallTicks = 0;
+        _pipStallRetries = 0;
+        _pipStallTimer.Stop();
+        _pipStallTimer.Start(); // 停滞看门狗开始计时
         StartPlayback(ch);
         // 开播 1 秒检查：仍未出画面时重挂视频面并重播一次兜底（见 OnPipOpenCheckTick）。
         _pipOpenCheckArmed = true;
@@ -162,6 +178,83 @@ public partial class PipWindow : Window
                 StartPlayback(_currentChannel);
                 AppLog.Info("pip open check: video surface reattached + replayed");
             }
+        }
+        catch { }
+    }
+
+    /// <summary>播放失败：显示文案、停看门狗，等用户点重播（v1.4.15 2-6）。</summary>
+    private void OnPipError()
+    {
+        if (_closing) return;
+        _pipStallTimer.Stop();
+        ShowPipStatus("播放失败，点击重播");
+        AppLog.Error($"pip playback error [{_currentChannel?.Name}]");
+    }
+
+    private void HidePipStatus()
+    {
+        try { PipStatusText.Visibility = Visibility.Collapsed; } catch { }
+    }
+
+    private void ShowPipStatus(string text)
+    {
+        try
+        {
+            PipStatusText.Text = text;
+            PipStatusText.Visibility = Visibility.Visible;
+        }
+        catch { }
+    }
+
+    /// <summary>失败文案点击重播（Handled=true，不触发根网格的拖动）。</summary>
+    private void PipStatusText_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        if (_closing || _currentChannel == null) return;
+        HidePipStatus();
+        Play(_currentChannel);
+    }
+
+    /// <summary>停滞看门狗：IsPlaying 但位置连续 2 次（8 秒）不前进则重播一次（最多 2 次），
+    /// 仍失败则显示文案等用户点重播；暂停/停止/未播/部分 Time 恒 0 的流不监控。</summary>
+    private void OnPipStallTick()
+    {
+        if (_closing || _isPaused || _stopped || _currentChannel == null)
+        {
+            _pipStallTicks = 0;
+            _pipLastTime = -1;
+            return;
+        }
+        try
+        {
+            if (!_player.IsPlaying) { _pipStallTicks = 0; _pipLastTime = -1; return; }
+            var t = _player.Time;
+            if (t <= 0) { _pipStallTicks = 0; _pipLastTime = -1; return; }
+            if (t == _pipLastTime)
+            {
+                if (++_pipStallTicks >= 2)
+                {
+                    _pipStallTicks = 0;
+                    if (_pipStallRetries < 2)
+                    {
+                        _pipStallRetries++;
+                        AppLog.Info($"pip stall detected, replay #{_pipStallRetries}: [{_currentChannel.Name}]");
+                        StartPlayback(_currentChannel);
+                    }
+                    else
+                    {
+                        _pipStallTimer.Stop();
+                        ShowPipStatus("直播停滞，点击重播");
+                        AppLog.Error($"pip stall persists after retries: [{_currentChannel.Name}]");
+                    }
+                }
+            }
+            else
+            {
+                _pipStallTicks = 0;
+                if (_pipStallRetries > 0) _pipStallRetries = 0; // 恢复后计数清零
+            }
+            _pipLastTime = t;
         }
         catch { }
     }
@@ -259,6 +352,7 @@ public partial class PipWindow : Window
         // 且关闭后触发的 Tick 还会去碰已释放的播放器/视频面。
         try { _pipOpenCheckTimer.Stop(); } catch { }
         try { _pipFsCheckTimer.Stop(); } catch { }
+        try { _pipStallTimer.Stop(); } catch { } // v1.4.15 2-6：停滞看门狗也停掉
         // 先在 UI 线程断开视频面（快操作，只改 HWND 挂接），再在后台释放播放器。
         try { VideoView.MediaPlayer = null; } catch { }
         StartTeardown();
