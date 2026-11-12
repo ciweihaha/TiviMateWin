@@ -1,6 +1,8 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using LibVLCSharp.Shared;
 using TiviMateWin.Models;
 using TiviMateWin.Services;
@@ -14,9 +16,6 @@ public partial class PipWindow : Window
     private readonly MediaPlayer _player;
     private Media? _media;   // 当前 Media：Play 后需保持存活直到换台/关闭
     private readonly int _networkCache;   // 深查第 22 轮：旧代码写死 800，用户设置的网络缓存不生效
-    private bool _dragging;
-    private Point _dragStart;
-    private Point _winOrigin;
     private bool _isPaused;
     private bool _stopped;   // 停止后：再次按播放应重播当前媒体，而不是先走一次无意义的 Pause
     // 关闭中标志（与 ChannelWindow 的 F6(a) 同款）：Window_Closing 置位后 Play 不再启动新播放，
@@ -30,9 +29,6 @@ public partial class PipWindow : Window
         _networkCache = networkCache;
         _player = new MediaPlayer(_libvlc) { Volume = volume };
         VideoView.MediaPlayer = _player;
-        // 捕获丢失（如拖动中 Alt+Tab 切走）时 MouseUp 收不到，_dragging 会一直为真，
-        // 之后鼠标划过小窗都会拖动窗口；捕获丢失即结束拖动。
-        LostMouseCapture += (_, _) => _dragging = false;
     }
 
     /// <summary>播放指定频道</summary>
@@ -117,40 +113,33 @@ public partial class PipWindow : Window
         catch { }
     }
 
-    // 标题栏/窗口背景可拖动：手动计算坐标（DragMove 在无边框+HwndHost 下不稳定）
+    // 无边框窗口拖动：Win32 方式（ReleaseCapture + WM_NCLBUTTONDOWN/HTCAPTION），
+    // 由系统接管移动，不依赖 WPF 鼠标捕获——窗口未激活时 CaptureMouse 可能失败，
+    // 导致标题栏拖不动。按钮上的按下不拖动（Click 正常走按钮）。
+    [DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    private const int WM_NCLBUTTONDOWN = 0x00A1;
+    private const int HTCAPTION = 2;
+
     private void Root_MouseDown(object sender, MouseButtonEventArgs e)
     {
         if (e.LeftButton != MouseButtonState.Pressed) return;
         if (e.OriginalSource is System.Windows.Controls.Button) return; // 点按钮不拖动
-        _dragging = true;
-        _dragStart = e.GetPosition(this);
-        _winOrigin = new Point(Left, Top);
-        CaptureMouse();
-        e.Handled = true;
-        AppLog.Info("pip drag start");
-    }
-
-    private void Root_MouseMove(object sender, MouseEventArgs e)
-    {
-        if (!_dragging) return;
-        // 捕获丢失时 MouseUp 收不到，仅靠 _dragging 判断会在左键已松开后
-        // 仍跟随鼠标拖动；左键松开即结束拖动。
-        if (e.LeftButton != MouseButtonState.Pressed)
+        try
         {
-            _dragging = false;
-            return;
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero) return;
+            ReleaseCapture();
+            SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+            e.Handled = true;
+            AppLog.Info("pip drag start");
         }
-        var cur = e.GetPosition(this);
-        Left = _winOrigin.X + (cur.X - _dragStart.X);
-        Top = _winOrigin.Y + (cur.Y - _dragStart.Y);
-    }
-
-    private void Root_MouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (!_dragging) return;
-        _dragging = false;
-        ReleaseMouseCapture();
-        AppLog.Info("pip drag end");
+        catch (Exception ex)
+        {
+            AppLog.Error($"pip drag failed: {ex.Message}");
+        }
     }
 
     private void Window_Closing(object sender, CancelEventArgs e)
