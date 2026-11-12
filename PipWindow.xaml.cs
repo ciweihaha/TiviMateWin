@@ -90,7 +90,8 @@ public partial class PipWindow : Window
         if (_closing) return;
         try
         {
-            if (!_isPaused && !_stopped && !_player.IsPlaying && _currentChannel != null)
+            // v1.4.15 迭代 1：缓冲中 IsPlaying 为 false，慢启动流会被误判未出画面而多播一次。
+            if (!_isPaused && !_stopped && !_player.IsPlaying && _player.State != VLCState.Buffering && _currentChannel != null)
             {
                 VideoView.MediaPlayer = null;
                 VideoView.MediaPlayer = _player;
@@ -171,7 +172,8 @@ public partial class PipWindow : Window
         _pipOpenCheckArmed = false; // 只兜底一次
         try
         {
-            if (!_isPaused && !_stopped && !_player.IsPlaying && _currentChannel != null)
+            // v1.4.15 迭代 1：缓冲中 IsPlaying 为 false，慢启动流会被误判未出画面而多播一次。
+            if (!_isPaused && !_stopped && !_player.IsPlaying && _player.State != VLCState.Buffering && _currentChannel != null)
             {
                 VideoView.MediaPlayer = null;
                 VideoView.MediaPlayer = _player;
@@ -259,11 +261,6 @@ public partial class PipWindow : Window
         catch { }
     }
 
-    /// <summary>标记为已由主窗口统一释放引擎（主窗口关闭时调用，避免重复释放）</summary>
-    public void DetachEngine() => _engineReleased = true;
-
-    private bool _engineReleased;
-
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
     private void PlayPause_Click(object sender, RoutedEventArgs e) => TogglePlayPause();
@@ -295,22 +292,6 @@ public partial class PipWindow : Window
                 _isPaused = true;
                 BtnPlayPause.Content = "▶";
             }
-        }
-        catch { }
-    }
-
-    /// <summary>小窗停止播放</summary>
-    public void Stop()
-    {
-        if (_closing) return;
-        // Stop() 可能阻塞 UI，放后台线程；状态先同步改，界面立即反映。
-        var playerToStop = _player;
-        _ = Task.Run(() => { try { playerToStop.Stop(); } catch { } });
-        try
-        {
-            _isPaused = false;
-            _stopped = true;
-            BtnPlayPause.Content = "⏸";
         }
         catch { }
     }
@@ -370,7 +351,6 @@ public partial class PipWindow : Window
     /// </summary>
     private void StartTeardown()
     {
-        if (_engineReleased) return;   // 主窗口统一释放引擎时由主窗口负责，不重复释放
         if (_teardownStarted) return;  // 只在 UI 线程调用，单线程置位即可
         _teardownStarted = true;
         var playerToStop = _player;
@@ -388,7 +368,6 @@ public partial class PipWindow : Window
     {
         // 播放器释放已交给后台 StartTeardown：UI 线程在这里 Dispose 会阻塞
         // （等卡住的流拆掉），就是 v1.4.13 关小窗卡死的根因。
-        // 主窗口统一释放引擎时（DetachEngine），播放器由主窗口负责释放。
         AppLog.Info("pip window closed");
     }
 }
