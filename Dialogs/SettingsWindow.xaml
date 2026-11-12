@@ -69,6 +69,20 @@
                 <PasswordBox x:Name="XtreamPassBox" Height="28" Background="#FF20262E" Foreground="#FFDDE4EB"
                              BorderBrush="#FF2D3540" Padding="6,3"/>
                 <TextBlock Text="保存后自动加载 Xtream 频道列表" Foreground="#FF7A8896" FontSize="11" Margin="0,6,0,0"/>
+
+                <!-- OpenList 网盘 -->
+                <TextBlock Text="OpenList 网盘（可选）" FontSize="14" FontWeight="Bold" Foreground="#FF4FA3E3"
+                           Margin="0,20,0,4"/>
+                <TextBlock Text="服务器地址（如 https://openlist.example.com）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,2,0,2"/>
+                <TextBox x:Name="OpenListServerBox" Height="28" Background="#FF20262E" Foreground="#FFDDE4EB"
+                         BorderBrush="#FF2D3540" Padding="6,3"/>
+                <TextBlock Text="用户名" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
+                <TextBox x:Name="OpenListUserBox" Height="28" Background="#FF20262E" Foreground="#FFDDE4EB"
+                         BorderBrush="#FF2D3540" Padding="6,3"/>
+                <TextBlock Text="密码" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
+                <PasswordBox x:Name="OpenListPassBox" Height="28" Background="#FF20262E" Foreground="#FFDDE4EB"
+                             BorderBrush="#FF2D3540" Padding="6,3"/>
+                <TextBlock Text="用于“网盘”浏览播放网盘里的视频；密码 DPAPI 加密存储" Foreground="#FF7A8896" FontSize="11" Margin="0,6,0,0"/>
             </StackPanel>
         </ScrollViewer>
 

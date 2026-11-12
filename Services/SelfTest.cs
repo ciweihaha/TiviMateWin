@@ -532,6 +532,39 @@ public static class SelfTest
             try { if (Directory.Exists(cfgNullDir)) Directory.Delete(cfgNullDir, true); } catch { }
             AppConfig.OverrideDir = null;
 
+            // --- 点播源解析（vod.json / CMS） ---
+            var vodSites = VodSource.ParseSites("{\"sites\":[{\"key\":\"s1\",\"name\":\"测试源\",\"type\":1,\"api\":\"http://api.example.com/provide/vod/\"},{\"key\":\"s2\",\"name\":\"XML源\",\"type\":0,\"api\":\"http://xml.example.com/\"}]}");
+            lines.Add(vodSites.Count == 2 && vodSites[0].Supported && !vodSites[1].Supported
+                ? "PASS 点播源解析 sites（JSON可用/XML标不支持）" : "FAIL 点播源解析 sites");
+            lines.Add(VodSource.ParseSites("not json").Count == 0
+                ? "PASS 点播源解析-非法JSON为空" : "FAIL 点播源解析-非法JSON");
+            lines.Add(VodSource.ParseSites("{\"sites\":[{\"key\":\"x\",\"name\":\"无接口\"}]}").Count == 0
+                ? "PASS 点播源解析-无api跳过" : "FAIL 点播源解析-无api");
+            var (vodVideos, vodPages) = VodSource.ParseVideoList("{\"pagecount\":5,\"list\":[{\"vod_id\":123,\"vod_name\":\"测试片\",\"vod_pic\":\"http://p.jpg\",\"vod_play_url\":\"第1集$http://v.m3u8#第2集$http://v2.m3u8\",\"vod_remarks\":\"更新至2集\"}]}");
+            lines.Add(vodVideos.Count == 1 && vodVideos[0].Id == "123" && vodVideos[0].Name == "测试片" && vodPages == 5
+                ? "PASS 点播列表解析（含数字id与总页数）" : "FAIL 点播列表解析");
+            lines.Add(VodSource.ExtractPlayUrl("第1集$http://v.m3u8#第2集$http://v2.m3u8") == "http://v.m3u8"
+                ? "PASS 播放地址提取-多集取首集" : "FAIL 播放地址提取-多集");
+            lines.Add(VodSource.ExtractPlayUrl("源A$http://a.m3u8$$$源B$http://b.m3u8") == "http://a.m3u8"
+                ? "PASS 播放地址提取-多源取首源" : "FAIL 播放地址提取-多源");
+            lines.Add(VodSource.ExtractPlayUrl("http://plain.m3u8") == "http://plain.m3u8"
+                ? "PASS 播放地址提取-纯地址" : "FAIL 播放地址提取-纯地址");
+            lines.Add(VodSource.ExtractPlayUrl(null) is null && VodSource.ExtractPlayUrl("") is null
+                ? "PASS 播放地址提取-空输入" : "FAIL 播放地址提取-空输入");
+            lines.Add(VodSource.BuildListUrl("http://api.example.com/vod/", 2) == "http://api.example.com/vod/?ac=videolist&pg=2"
+                ? "PASS CMS地址拼接-列表" : "FAIL CMS地址拼接-列表");
+            lines.Add(VodSource.BuildSearchUrl("http://api.example.com/vod?x=1", "a b", 1) == "http://api.example.com/vod?x=1&ac=videolist&wd=a%20b&pg=1"
+                ? "PASS CMS地址拼接-搜索（已有query用&）" : "FAIL CMS地址拼接-搜索");
+            lines.Add(VodSource.IsVideoFile("电影.mkv") && VodSource.IsVideoFile("http://x/v.m3u8?sign=1") && !VodSource.IsVideoFile("图片.jpg")
+                ? "PASS 视频文件判断" : "FAIL 视频文件判断");
+            // --- OpenList 纯逻辑 ---
+            lines.Add(OpenListService.NormalizeServerUrl("https://openlist.example.com/") == "https://openlist.example.com"
+                ? "PASS OpenList地址规范化" : "FAIL OpenList地址规范化");
+            lines.Add(OpenListService.JoinPath("/电影", "a.mp4") == "/电影/a.mp4" && OpenListService.JoinPath("/", "a.mp4") == "/a.mp4"
+                ? "PASS OpenList路径拼接" : "FAIL OpenList路径拼接");
+            lines.Add(OpenListService.ParentPath("/电影/动作") == "/电影" && OpenListService.ParentPath("/") == "/" && OpenListService.ParentPath("/电影") == "/"
+                ? "PASS OpenList上级路径" : "FAIL OpenList上级路径");
+
             // --- 播放测试 ---
             if (playTest)
             {

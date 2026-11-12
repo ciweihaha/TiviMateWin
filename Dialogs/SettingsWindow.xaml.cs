@@ -4,7 +4,7 @@ using TiviMateWin.Services;
 
 namespace TiviMateWin.Dialogs;
 
-/// <summary>设置对话框：网络缓存、硬件解码、画面比例、倍速、主题、Xtream 接入</summary>
+/// <summary>设置对话框：网络缓存、硬件解码、画面比例、倍速、主题、Xtream 接入、OpenList 网盘</summary>
 public partial class SettingsWindow : Window
 {
     private readonly AppConfig _config;
@@ -52,6 +52,11 @@ public partial class SettingsWindow : Window
         XtreamServerBox.Text = config.XtreamServer ?? "";
         XtreamUserBox.Text = config.XtreamUsername ?? "";
         XtreamPassBox.Password = config.XtreamPassword ?? "";
+
+        // OpenList 网盘
+        OpenListServerBox.Text = config.OpenListServer ?? "";
+        OpenListUserBox.Text = config.OpenListUsername ?? "";
+        OpenListPassBox.Password = config.OpenListPassword ?? "";
 
         _initializing = false;
     }
@@ -122,6 +127,10 @@ public partial class SettingsWindow : Window
         _config.XtreamServer = XtreamServerBox.Text.Trim();
         _config.XtreamUsername = XtreamUserBox.Text.Trim();
         _config.XtreamPassword = XtreamPassBox.Password;
+
+        _config.OpenListServer = OpenListServerBox.Text.Trim();
+        _config.OpenListUsername = OpenListUserBox.Text.Trim();
+        _config.OpenListPassword = OpenListPassBox.Password;
 
         _config.Save();
         DialogResult = true;
