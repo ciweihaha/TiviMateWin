@@ -185,8 +185,21 @@
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <DockPanel Margin="6,3">
+                                    <!-- 深查第 24 轮：旧模板给每行都画 ●，当前源标记失去意义；
+                                         改为仅选中行（即当前激活源，见 RefreshPlaylistCombo）显示。 -->
                                     <TextBlock Text="●" Foreground="{DynamicResource AccentBrush}" FontSize="10"
-                                               VerticalAlignment="Center" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+                                               VerticalAlignment="Center" DockPanel.Dock="Left" Margin="0,0,8,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ItemFgBrush}" FontSize="12"
                                                TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
                                 </DockPanel>
