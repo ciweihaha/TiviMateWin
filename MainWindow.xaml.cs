@@ -145,6 +145,10 @@ public partial class MainWindow : Window
     // 坏源容错：连续失败计数 + 本轮已失败线路（防主备来回死循环）
     private int _failCount;
     private readonly HashSet<string> _recentFailedUrls = new();
+    // 同一次失败去重（v1.4.15 迭代 1）：libvlc 对同一次失败可能多次触发 EncounteredError，
+    // 800ms 内同一 URL 只处理一次，避免 _failCount 连加、备用切换与自动跳台并行触发。
+    private DateTime _lastPlayErrorUtc = DateTime.MinValue;
+    private string? _lastPlayErrorUrl;
     // 直播停滞看门狗：IsPlaying 但 8 秒播放位置不前进 → 自动重连（上限 3 次）
     private readonly DispatcherTimer _stallWatch = new() { Interval = TimeSpan.FromSeconds(4) };
     private long _lastMediaTime = -1;
@@ -227,7 +231,15 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _searchDebounce.Tick += (_, _) => { _searchDebounce.Stop(); ApplyFilter(); };
-        _saveDebounce.Tick += (_, _) => { _saveDebounce.Stop(); _config.Save(); };
+        _saveDebounce.Tick += (_, _) =>
+        {
+            _saveDebounce.Stop();
+            // v1.4.15 迭代 1：配置写盘（DPAPI 加密 + 原子换名）放后台线程，避免慢盘/
+            // 杀毒软件扫描时卡 UI；读盘失败待确认时仍走 UI 线程（Save 里要弹确认框）。
+            // SaveGate 已串行化并发保存，后台写失败只记日志、下次再存，不影响运行。
+            if (AppConfig.ReadFailurePending) _config.Save();
+            else _ = Task.Run(() => _config.Save());
+        };
         _switchDebounce.Tick += (_, _) =>
         {
             _switchDebounce.Stop();
@@ -607,8 +619,10 @@ public partial class MainWindow : Window
             _engineFailed = true;            // 标记失败，后续不再反复初始化/弹窗
             PlayState.Text = "引擎初始化失败";
             AppLog.Error("engine init failed: " + ex.Message);
-            MessageBox.Show(this, "VLC 引擎初始化失败：" + ex.Message, "错误",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            // v1.4.15 迭代 1：关闭期间不弹窗，否则弹窗会挡住关闭流程。
+            if (!_closing)
+                MessageBox.Show(this, "VLC 引擎初始化失败：" + ex.Message, "错误",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally { _engineGate.Release(); }
     }
@@ -1279,7 +1293,9 @@ public partial class MainWindow : Window
         if (_closing || _player is null || _current is null || _isPaused) return;
         try
         {
-            if (!_player.IsPlaying)
+            // v1.4.15 迭代 1：缓冲中（Buffering）时 IsPlaying 为 false，慢启动流会被误判
+            // 未恢复而多播一次；缓冲态也视为“正在播”，不重播。
+            if (!_player.IsPlaying && _player.State != VLCState.Buffering)
             {
                 AppLog.Info("video surface still not playing after reattach, replaying current channel");
                 _ = PlayAsync(_current);
@@ -1625,8 +1641,8 @@ public partial class MainWindow : Window
     {
         if (_pipWindow != null)
         {
-            // F6(b)：不调 PipWindow.DetachEngine，直接 Close()，让 PipWindow.Window_Closed 正常释放 _media/_player。
-            // 主窗口关闭路径仍先 DetachEngine 再 Close（见 Window_Closing），与本路径分离，避免重复释放。
+            // 直接 Close()，让 PipWindow 自己后台释放 _media/_player；
+            // 主窗口关闭路径同款（见 Window_Closing），不再先 DetachEngine。
             try { _pipWindow.Close(); } catch { }
             _pipWindow = null;
         }
@@ -2286,6 +2302,11 @@ public partial class MainWindow : Window
     private void HandlePlayError()
     {
         if (_closing || _current is not { } ch) return;
+        // 同一次失败去重：800ms 内同一 URL 的重复 EncounteredError 直接丢弃。
+        var now = DateTime.UtcNow;
+        if (_lastPlayErrorUrl == ch.Url && (now - _lastPlayErrorUtc).TotalMilliseconds < 800) return;
+        _lastPlayErrorUtc = now;
+        _lastPlayErrorUrl = ch.Url;
         _recentFailedUrls.Add(ch.Url);
         if (++_failCount > 5)
         {
@@ -2406,18 +2427,18 @@ public partial class MainWindow : Window
         ComponentDispatcher.ThreadFilterMessage -= OnThreadFilterMessage;
         Activated -= OnWindowActivated;
 
-        // 先关闭所有独立频道窗口：它们共享主窗口的 LibVLC 引擎，
-        // 若主窗口先释放引擎再关闭子窗口，子窗口 Dispose 会崩溃
+        // 先关闭所有独立频道窗口：它们在自己的 Window_Closing 里后台释放播放器；
+        // 主窗口不再释放 LibVLC 引擎（随进程退出回收），不存在“先释引擎后关子窗口崩溃”的问题。
         foreach (var win in _channelWindows.ToList())
         {
-            try { win.DetachEngine(); win.Close(); } catch { }
+            try { win.Close(); } catch { }
         }
         _channelWindows.Clear();
 
-        // 关闭独立悬浮小窗（同样共享引擎，需先 DetachEngine 避免重复释放）
+        // 关闭独立悬浮小窗（同款：自己后台释放播放器）
         if (_pipWindow != null)
         {
-            try { _pipWindow.DetachEngine(); _pipWindow.Close(); } catch { }
+            try { _pipWindow.Close(); } catch { }
             _pipWindow = null;
         }
 
