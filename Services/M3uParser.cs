@@ -7,10 +7,11 @@ namespace TiviMateWin.Services;
 /// <summary>M3U / M3U8 播放列表解析器（支持扩展属性与简单格式）</summary>
 public static class M3uParser
 {
-    private static readonly Regex GroupRx = new("group-title\\s*=\\s*\"(?<g>[^\"]*)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex LogoRx = new("tvg-logo\\s*=\\s*\"(?<l>[^\"]*)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex TvgNameRx = new("tvg-name\\s*=\\s*\"(?<n>[^\"]*)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex TvgIdRx = new("tvg-id\\s*=\\s*\"(?<i>[^\"]*)\"", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // P5：4 个属性正则合并为 1 个，一次 Matches 扫出全部属性；
+    // 逐个 Match 每行要跑 4 遍正则。命名组按属性区分，匹配顺序不影响结果。
+    private static readonly Regex AttrRx = new(
+        "(?:group-title\\s*=\\s*\"(?<g>[^\"]*)\"|tvg-logo\\s*=\\s*\"(?<l>[^\"]*)\"|tvg-name\\s*=\\s*\"(?<n>[^\"]*)\"|tvg-id\\s*=\\s*\"(?<i>[^\"]*)\"",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public static List<ChannelItem> Parse(string text)
     {
@@ -29,7 +30,10 @@ public static class M3uParser
         string? raw;
         while ((raw = reader.ReadLine()) != null)
         {
-            var line = raw.Trim();
+            // P5：无首尾空白时跳过 Trim 分配；有空白才 Trim（与旧口径一致，
+            // 前导空白的 #EXTINF 行仍能命中 StartsWith）。
+            var line = raw.Length > 0 && (char.IsWhiteSpace(raw[0]) || char.IsWhiteSpace(raw[^1]))
+                ? raw.Trim() : raw;
             if (line.Length == 0) continue;
 
             if (line.StartsWith("#EXTINF", StringComparison.OrdinalIgnoreCase))
@@ -45,18 +49,21 @@ public static class M3uParser
                 // 但属性仍在整行里；旧代码只在有逗号时解析属性，tvg-name/分组/logo 全丢、
                 // 频道回落为 URL 名。属性段改为有逗号取逗号前、无逗号取整行。
                 var attrs = commaIdx >= 0 ? line[..commaIdx] : line;
-                var m = GroupRx.Match(attrs);
-                if (m.Success) pendingGroup = m.Groups["g"].Value.Trim();
-                if (string.IsNullOrEmpty(pendingGroup)) pendingGroup = "未分组";
-                m = LogoRx.Match(attrs);
-                if (m.Success) pendingLogo = m.Groups["l"].Value;
-                m = TvgIdRx.Match(attrs);
-                if (m.Success) pendingTvgId = m.Groups["i"].Value.Trim();
-                if (string.IsNullOrEmpty(pendingName))
+                // P5：一次 Matches 扫出全部属性（原 4 次 Match）；各属性语义与原来逐个
+                // Match 一致（group 为空回落“未分组”；名称仅在逗号后无名时取 tvg-name；
+                // 同名属性重复时只取第一次出现，与 Match 口径一致）。
+                var hasGroup = false;
+                var hasLogo = false;
+                var hasTvgId = false;
+                foreach (Match am in AttrRx.Matches(attrs))
                 {
-                    m = TvgNameRx.Match(attrs);
-                    if (m.Success) pendingName = m.Groups["n"].Value.Trim();
+                    if (!hasGroup && am.Groups["g"].Success) { pendingGroup = am.Groups["g"].Value.Trim(); hasGroup = true; }
+                    else if (!hasLogo && am.Groups["l"].Success) { pendingLogo = am.Groups["l"].Value; hasLogo = true; }
+                    else if (!hasTvgId && am.Groups["i"].Success) { pendingTvgId = am.Groups["i"].Value.Trim(); hasTvgId = true; }
+                    else if (am.Groups["n"].Success && string.IsNullOrEmpty(pendingName))
+                        pendingName = am.Groups["n"].Value.Trim();
                 }
+                if (string.IsNullOrEmpty(pendingGroup)) pendingGroup = "未分组";
             }
             else if (line.StartsWith('#'))
             {
@@ -64,7 +71,7 @@ public static class M3uParser
             }
             else
             {
-                var url = line.Trim();
+                var url = line;   // P5：line 已在循环头 Trim 过，此处不再重复 Trim 分配
                 if (url.Contains("://") || Path.IsPathRooted(url))
                 {
                     var name = pendingName.Length > 0 ? pendingName : url;
