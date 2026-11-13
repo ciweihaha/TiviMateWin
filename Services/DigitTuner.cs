@@ -38,7 +38,26 @@ public static class DigitTuner
             && c.Number.ToString().Length > buf.Length);
     }
 
-    /// <summary>是否可立即提交（存在精确匹配且不存在更长号码）。</summary>
+    /// <summary>是否可立即提交（存在精确匹配且不存在更长号码）。
+    /// P2：单次扫描同时算出精确匹配与更长前缀，旧实现 Match + HasLongerNumber
+    /// 各扫一遍、HasLongerNumber 内每个号码还 ToString 两次。</summary>
     public static bool ShouldCommit(IEnumerable<ChannelItem> list, string buf)
-        => Match(list, buf) != null && !HasLongerNumber(list, buf);
+    {
+        if (buf.Length == 0 || !int.TryParse(buf, out var n)) return false;
+        var exact = false;
+        foreach (var c in list)
+        {
+            if (c.Number == n)
+            {
+                // 与 n 相等的号码不可能更长（其文本长度 <= buf 长度，见 HasLongerNumber 的前缀判定）
+                exact = true;
+            }
+            else
+            {
+                var s = c.Number.ToString();
+                if (s.Length > buf.Length && s.StartsWith(buf, StringComparison.Ordinal)) return false;
+            }
+        }
+        return exact;
+    }
 }
