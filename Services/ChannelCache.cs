@@ -33,7 +33,9 @@ public static class ChannelCache
         {
             if (File.Exists(path))
             {
-                var list = JsonSerializer.Deserialize<List<ChannelItem>>(File.ReadAllText(path));
+                // P7：流式反序列化，不再 File.ReadAllText 整串进内存（峰值内存约减半）。
+                using var stream = File.OpenRead(path);
+                var list = JsonSerializer.Deserialize<List<ChannelItem>>(stream);
                 if (list != null) return Sanitize(list);
                 // JSON 为 null（如文件内容就是 null）：与损坏同处理，记日志并移为 .corrupt。
                 AppLog.Error($"频道缓存加载失败（{path}，反序列化结果为空），已移为损坏缓存（不含缓存内容）。");
@@ -107,8 +109,14 @@ public static class ChannelCache
             try
             {
                 Directory.CreateDirectory(CacheDir);
+                // P7：Utf8JsonWriter 流式写盘，不再 Serialize 整串进内存；
+                // 写完关流后再原子替换正式文件（替换窗口与原来一致）。
+                using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    using var writer = new Utf8JsonWriter(stream);
+                    JsonSerializer.Serialize(writer, channels);
+                }
                 // 先把完整内容写到同目录（同卷）临时文件，再原子替换正式文件
-                File.WriteAllText(tmp, JsonSerializer.Serialize(channels));
                 if (File.Exists(path))
                 {
                     var bak = path + ".bak";
