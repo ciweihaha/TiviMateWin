@@ -87,12 +87,15 @@ public static class EpgParser
 
         try
         {
-            var y = int.Parse(s[..4]);
-            var mo = int.Parse(s.Substring(4, 2));
-            var d = int.Parse(s.Substring(6, 2));
-            var h = int.Parse(s.Substring(8, 2));
-            var mi = int.Parse(s.Substring(10, 2));
-            var se = int.Parse(s.Substring(12, 2));
+            // P6：用 ReadOnlySpan 切片 + int.Parse(span) 零分配解析，
+            // 原 6 次 int.Parse(Substring) + 2 次偏移 Substring 全是短命字符串。
+            ReadOnlySpan<char> span = s.AsSpan();
+            var y = int.Parse(span[..4]);
+            var mo = int.Parse(span.Slice(4, 2));
+            var d = int.Parse(span.Slice(6, 2));
+            var h = int.Parse(span.Slice(8, 2));
+            var mi = int.Parse(span.Slice(10, 2));
+            var se = int.Parse(span.Slice(12, 2));
 
             var dt = new DateTime(y, mo, d, h, mi, se, DateTimeKind.Unspecified);
 
@@ -102,26 +105,26 @@ public static class EpgParser
             // 又把结果换算成 UTC，与调用方的本地时间比较口径不一。
             // 现统一跳过可选空格再读偏移，并换算为本地时间返回。
             var off = 14;
-            if (off < s.Length && s[off] == ' ') off++;
+            if (off < span.Length && span[off] == ' ') off++;
             // Z 后缀（ISO 8601 的 UTC 标志，XMLTV DTD 称时间格式“loosely based on
             // ISO 8601”）：与 +0000 同义，须换算为本地时间。旧实现把 Z 当作无偏移
             // 墙钟处理，同一时刻与 +0000 写法相差一个本地时区偏移（上海差 8 小时），
             // “正在播放”判断随之错位。无偏移（既无 Z 也无 +/-）仍原样返回墙钟时间，
             // 该口径是第 2–3 轮既定约定，本轮不动。
-            if (off < s.Length && s[off] == 'Z')
+            if (off < span.Length && span[off] == 'Z')
             {
                 return new DateTimeOffset(dt, TimeSpan.Zero).LocalDateTime;
             }
-            if (off + 5 <= s.Length && (s[off] == '+' || s[off] == '-'))
+            if (off + 5 <= span.Length && (span[off] == '+' || span[off] == '-'))
             {
-                var sign = s[off] == '+' ? 1 : -1;
-                var oh = int.Parse(s.Substring(off + 1, 2));
+                var sign = span[off] == '+' ? 1 : -1;
+                var oh = int.Parse(span.Slice(off + 1, 2));
                 // 冒号偏移 +08:00（ISO 8601 写法，XMLTV DTD 称时间格式“loosely based on
                 // ISO 8601”）：冒号后有两位数字时跳过冒号再读分钟；否则不跳过、
                 // 仍走原有解析路径，截断偏移的行为与改前一致。
                 var miOff = off + 3;
-                if (miOff < s.Length && s[miOff] == ':' && miOff + 3 <= s.Length) miOff++;
-                var om = int.Parse(s.Substring(miOff, 2));
+                if (miOff < span.Length && span[miOff] == ':' && miOff + 3 <= span.Length) miOff++;
+                var om = int.Parse(span.Slice(miOff, 2));
                 var offset = new TimeSpan(sign * oh, sign * om, 0);
                 return new DateTimeOffset(dt, offset).LocalDateTime;
             }
