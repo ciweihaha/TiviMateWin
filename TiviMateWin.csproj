@@ -36,9 +36,9 @@
 
   <!-- 性能优化：删除非本机架构的 VLC 原生库与无用的 Web 远程接口 -->
   <!-- 播放专用裁剪（2026-11-14）：本应用只做播放，不用 sout/转码/录制/可视化/服务发现/元数据抓取，
-       也不用字幕叠加滤镜与语音朗读。经代码核查，无任何 :sout、录制、Media.Parse、发现相关调用，
-       LibVLC 仅传 --no-osd 与 --avcodec-hw。以下插件目录在播放路径上永不加载，删除只减小体积；
-       字幕仍由 text_renderer/freetype 渲染。另删除链接期 .lib（运行时无用）。改动后须经 --playtest
+       也不用字幕叠加滤镜与语音朗读。经代码核查，无任何 sout、录制、Media.Parse、发现相关调用，
+       LibVLC 仅传 no-osd 与 avcodec-hw 两个参数。以下插件目录在播放路径上永不加载，删除只减小体积；
+       字幕仍由 text_renderer/freetype 渲染。另删除链接期 .lib（运行时无用）。改动后须经 playtest
        真流验证，并在真机上抽查字幕显示。 -->
   <Target Name="TrimVlcArchitectures" AfterTargets="Build">
     <ItemGroup>
