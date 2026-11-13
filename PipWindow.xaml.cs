@@ -159,6 +159,8 @@ public partial class PipWindow : Window
             var old = _media;
             _media = media;   // 新 Media 接管
             old?.Dispose();
+            // L2：成功日志放 try 内，播放抛错时不再先记 Error 紧接着又记 Info 成功。
+            AppLog.Info($"pip window play [{ch.Name}]");
         }
         catch (Exception ex)
         {

@@ -245,6 +245,9 @@ public partial class MainWindow : Window
     private Dictionary<string, List<EpgProgram>> _epg = new();
     private string? _epgUrl;
     private int _epgSeq;   // F7：EPG 加载序号：只采纳最后一次请求的结果，防止旧结果覆盖新结果
+    private string? _epgLoadingUrl;   // M3：正在加载的 EPG 地址（与 _epgUrl 分离：失败时 _epgUrl 不动，下次刷新可重试；加载中不重复发起）
+    // EPG 频道名 → 节目列表索引：GetPrograms 的名称回退查索引，不再线性扫整个 EPG 字典；与 _epg 同步重建。
+    private Dictionary<string, List<EpgProgram>> _epgByName = new(StringComparer.OrdinalIgnoreCase);
 
     // 数字键换台（V1.4）：输入缓冲 + 超时确认；匹配规则在 DigitTuner（纯逻辑可自测）
     private string _digitBuf = "";
@@ -563,6 +566,7 @@ public partial class MainWindow : Window
     {
         AppLog.Info($"start v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
         _config = AppConfig.Load();
+        ApplyTheme(_config.Theme);      // L11：启动时加载保存的主题（带缺失容错，见 ApplyTheme）
         RestoreWindowPlacement();   // V1.4：恢复上次窗口位置/尺寸（边界校验通过才应用）
         // F2：仅在 Window_Loaded 检查一次 LastLoadError（每次 Load() 后不弹）。
         // 三种语义严格区分，文案约束见 AppConfig.LastLoadError 注释。
@@ -608,7 +612,14 @@ public partial class MainWindow : Window
     private async Task EnsureEngineAsync()
     {
         if (_engineReady || _engineFailed) return;   // 已就绪或已确认失败，不再重试
-        await _engineGate.WaitAsync();
+        try
+        {
+            await _engineGate.WaitAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+            return;   // L10：关闭时信号量已释放，属正常关闭
+        }
         try
         {
             if (_engineReady || _engineFailed) return;
@@ -649,6 +660,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            // L10：关闭中不弹框、不写 UI 状态（关闭时信号量释放会使等待中的调用以 ObjectDisposedException 到此）。
+            if (_closing) return;
             _engineFailed = true;            // 标记失败，后续不再反复初始化/弹窗
             PlayState.Text = "引擎初始化失败";
             AppLog.Error("engine init failed: " + ex.Message);
@@ -657,7 +670,8 @@ public partial class MainWindow : Window
                 MessageBox.Show(this, "VLC 引擎初始化失败：" + ex.Message, "错误",
                     MessageBoxButton.OK, MessageBoxImage.Error);
         }
-        finally { _engineGate.Release(); }
+        // L10：关闭时信号量可能已释放，Release 抛 ObjectDisposedException 属正常关闭。
+        finally { try { _engineGate.Release(); } catch (ObjectDisposedException) { } }
     }
 
     // ---------- 频道数据 ----------
@@ -674,11 +688,16 @@ public partial class MainWindow : Window
                 if (seq != _loadSeq) return;
                 await LoadCoreAsync(forceRefresh, ct);
             }
-            finally { _loadGate.Release(); }
+            // L10：关闭时信号量可能已释放，Release 抛 ObjectDisposedException 属正常关闭。
+            finally { try { _loadGate.Release(); } catch (ObjectDisposedException) { } }
         }
         catch (OperationCanceledException)
         {
             // F6(c)：取消属正常关闭/切换，不上抛到 async void 的 Window_Loaded。
+        }
+        catch (ObjectDisposedException)
+        {
+            // L10：关闭时信号量已释放，等待中的调用到此属正常关闭，不上抛。
         }
     }
 
@@ -739,10 +758,12 @@ public partial class MainWindow : Window
                 PlayState.Text = $"已载入 {list.Count} 个频道";
                 await ResumeLastAsync();
                 // 尝试从 M3U 头部解析 EPG 源并加载节目单
+                // M3：_epgUrl 只在 LoadEpgAsync 成功后才更新（失败时保持旧值，下次刷新可重试）；
+                // _epgLoadingUrl 防止同一地址在加载中被重复发起。
                 var epgUrl = ExtractEpgUrl(text);
-                if (epgUrl != null && epgUrl != _epgUrl)
+                if (epgUrl != null && epgUrl != _epgUrl && epgUrl != _epgLoadingUrl)
                 {
-                    _epgUrl = epgUrl;
+                    _epgLoadingUrl = epgUrl;
                     _ = LoadEpgAsync(epgUrl, ct);
                 }
             }
@@ -931,9 +952,12 @@ public partial class MainWindow : Window
                 _sortMode == "名称" ? "Name" : "Number", ListSortDirection.Ascending));
         }
 
-        CountText.Text = $"{_view.Cast<ChannelItem>().Count()} 个频道";
+        // L7：一次枚举同时算出过滤后的数量与是否为空，避免 Count()/Any() 各扫一次过滤视图。
+        var filteredCount = 0;
+        foreach (var _ in _view) filteredCount++;
+        CountText.Text = $"{filteredCount} 个频道";
         // V1.4：有频道但被过滤得一个不剩时，给出明确反馈而不是空白列表
-        NoMatchText.Visibility = _all.Count > 0 && !_view.Cast<ChannelItem>().Any()
+        NoMatchText.Visibility = _all.Count > 0 && filteredCount == 0
             ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -1018,10 +1042,13 @@ public partial class MainWindow : Window
                     }
                 });
             }
-            finally { _playGate.Release(); }
+            // L10：关闭时信号量可能已释放，Release 抛 ObjectDisposedException 属正常关闭。
+            finally { try { _playGate.Release(); } catch (ObjectDisposedException) { } }
         }
         catch (Exception ex)
         {
+            // L10：关闭中不写 UI、不记日志（关闭时信号量释放会使等待中的调用以 ObjectDisposedException 到此）。
+            if (_closing) return;
             PlayState.Text = "播放失败";
             AppLog.Error($"play failed [{ch.Name}] {AppConfig.RedactUrlForLog(url)}: {ex.Message}");
             return;                            // 失败不写断点、不抢焦点
@@ -1600,6 +1627,7 @@ public partial class MainWindow : Window
         if (_closing) return;
         if (ChannelList.SelectedItem is not ChannelItem ch) return;
         await EnsureEngineAsync();
+        if (_closing) return;   // M4：等待期间窗口可能已关闭并释放引擎，不得再用 _libvlc 建播放器
         if (_libvlc is null) return;
         var win = new ChannelWindow(_libvlc, _config.Volume, _config.NetworkCache) { Owner = this };
         _channelWindows.Add(win);
@@ -2000,7 +2028,18 @@ public partial class MainWindow : Window
             // 深查第 10 轮：旧实现只看 Split('\n')[0]，清单首行是空行时
             // （部分采集器输出带前导空行）url-tvg 永远取不到，EPG 静默缺失。
             // 改为取首个非空行；M3uParser 同样跳过空行，口径一致。
-            var firstLine = m3uText.Split('\n').FirstOrDefault(l => !string.IsNullOrWhiteSpace(l));
+            // L6：用 IndexOf 逐行找首个非空行，不再对整个清单 Split（20MB 清单只为
+            // 取首行就切成行数组，M3uParser 还要再 Split 一次，纯属重复分配）。
+            string? firstLine = null;
+            var start = 0;
+            while (start <= m3uText.Length)
+            {
+                var nl = m3uText.IndexOf('\n', start);
+                var line = nl < 0 ? m3uText[start..] : m3uText[start..nl];
+                if (!string.IsNullOrWhiteSpace(line)) { firstLine = line; break; }
+                if (nl < 0) break;
+                start = nl + 1;
+            }
             if (firstLine is null) return null;
             var idx = firstLine.IndexOf("url-tvg=", StringComparison.OrdinalIgnoreCase);
             if (idx < 0) return null;
@@ -2032,8 +2071,12 @@ public partial class MainWindow : Window
         {
             var xml = await FetchTextAsync(url, ct, MaxEpgBytes);
             var epg = await Task.Run(() => EpgParser.Parse(xml), ct);
-            if (seq != _epgSeq || url != _epgUrl) return;   // 已有更新的 EPG 请求，丢弃旧结果，不覆盖 _epg、不刷新当前频道节目
+            if (seq != _epgSeq) return;   // 已有更新的 EPG 请求，丢弃旧结果，不覆盖 _epg、不刷新当前频道节目
+            _epgUrl = url;   // M3：仅成功后才更新 _epgUrl，失败时保持旧值，下次刷新仍会重试
             _epg = epg;
+            // L7：同步重建名称索引（TryAdd：仅大小写不同的 id 碰撞时先到先得，与旧线性扫描的首个匹配一致）。
+            _epgByName = new Dictionary<string, List<EpgProgram>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in epg) _epgByName.TryAdd(kv.Key, kv.Value);
             AppLog.Info($"epg loaded {epg.Count} channels from {AppConfig.RedactUrlForLog(url)}");
             // 刷新当前频道节目显示
             if (_current != null) ShowEpgForChannel(_current);
@@ -2047,6 +2090,12 @@ public partial class MainWindow : Window
             // F7：失败不清空已有 _epg，仅记日志，当前节目显示保持旧数据。
             AppLog.Error($"epg load failed: {ex.Message}");
         }
+        finally
+        {
+            // M3：加载结束（成功/失败/取消/被新请求取代）后清除在途标记；若已有更新的
+            // 加载启动（标记已被覆写为新地址），不清除他人的标记。
+            if (_epgLoadingUrl == url) _epgLoadingUrl = null;
+        }
     }
 
     /// <summary>获取频道当前/即将播出的节目</summary>
@@ -2055,11 +2104,8 @@ public partial class MainWindow : Window
         var id = ch.TvgId;
         if (string.IsNullOrEmpty(id)) return new List<EpgProgram>();
         if (_epg.TryGetValue(id, out var list)) return list;
-        // 尝试用频道名匹配
-        foreach (var kv in _epg)
-        {
-            if (kv.Key.Equals(ch.Name, StringComparison.OrdinalIgnoreCase)) return kv.Value;
-        }
+        // 名称回退：查预建的索引，不再线性扫整个 EPG 字典（每次换台都触发，见 L7）。
+        if (_epgByName.TryGetValue(ch.Name, out var byName)) return byName;
         return new List<EpgProgram>();
     }
 
@@ -2119,18 +2165,29 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>应用主题（深色/浅色）：遍历主窗口关键控件调整配色</summary>
+    /// <summary>应用主题（深色/浅色）：加载 Themes/*.xaml 资源字典。
+    /// L11：主题是松散 Content 文件，缺失/损坏时加载抛错——先加载成功再替换旧字典，
+    /// 失败时保持当前主题（启动时即 WPF 默认配色）并记日志，不崩溃。</summary>
     private void ApplyTheme(string theme)
     {
         var isDark = theme != "浅色";
         var merged = Application.Current.Resources.MergedDictionaries;
-        // 移除旧的主题字典（App.xaml 默认合并的 Dark.xaml 也在其中），再加载目标主题
         var old = merged.Where(d => d.Source != null && d.Source.OriginalString.Contains("Themes/")).ToList();
-        foreach (var d in old) merged.Remove(d);
-        merged.Add(new ResourceDictionary
+        try
         {
-            Source = new Uri(isDark ? "Themes/Dark.xaml" : "Themes/Light.xaml", UriKind.Relative)
-        });
+            // 先加载：ResourceDictionary 的 Source 在设置时立即解析文件，缺失即抛错。
+            var dict = new ResourceDictionary
+            {
+                Source = new Uri(isDark ? "Themes/Dark.xaml" : "Themes/Light.xaml", UriKind.Relative)
+            };
+            // 加载成功后再替换旧字典，失败时旧主题保持生效。
+            foreach (var d in old) merged.Remove(d);
+            merged.Add(dict);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"apply theme failed ({theme}): {ex.Message}，保持当前主题");
+        }
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -2339,8 +2396,9 @@ public partial class MainWindow : Window
 
     private void MoveChannel(int delta)
     {
-        if (_view.Cast<ChannelItem>().Count() == 0) return;
+        // L7：直接 ToList 后用 Count，不再先 Count() 扫一次。
         var items = _view.Cast<ChannelItem>().ToList();
+        if (items.Count == 0) return;
         int idx;
         if (ChannelList.SelectedIndex < 0)
             idx = delta > 0 ? 0 : items.Count - 1;  // 无选中：↓从第1个开始，↑从最后1个开始
@@ -2415,12 +2473,12 @@ public partial class MainWindow : Window
                 // v1.4.16：无备用时先重连同一频道——直播闪断常见，直接跳台是错误体验；
                 // 3 次还不行再跳台（SkipNext）。Playing 事件会清零 _failCount，长期播得住的台不会累积到跳台。
                 PlayState.Text = "播放出错，自动重连…";
-                AppLog.Error($"channel error, reconnect same: [{ch.Name}] {ch.Url}");
+                AppLog.Error($"channel error, reconnect same: [{ch.Name}] {AppConfig.RedactUrlForLog(ch.Url)}");
                 _ = PlayAsync(ch, true);
                 return;
             default: // SkipNext
                 PlayState.Text = "播放出错，自动跳台…";
-                AppLog.Error($"channel error, auto-skip: [{ch.Name}] {ch.Url}");
+                AppLog.Error($"channel error, auto-skip: [{ch.Name}] {AppConfig.RedactUrlForLog(ch.Url)}");
                 _ = AutoSkipAsync(ch);
                 return;
         }
@@ -2534,6 +2592,7 @@ public partial class MainWindow : Window
         // 等待本身没有任何保护作用。
         _netCts.Cancel();                  // 取消挂起的网络拉取（播放列表/EPG/Xtream）
         _stallWatch.Stop();
+        _progressTimer.Stop();              // L1：此前漏停，关闭后仍每 500ms 读已释放播放器的 Length/Time
         _switchDebounce.Stop();
         _osdTimer.Stop();
         _fsHideTimer.Stop();
@@ -2612,5 +2671,11 @@ public partial class MainWindow : Window
         // （等卡住的流拆掉），就是 v1.4.12/1.4.13 关小窗卡死的同款根因；
         // LibVLC 随进程退出由系统回收，不再同步释放。
         _http.Dispose();
+        // L10：释放其余可释放资源（_netCts 已在 Window_Closing 中 Cancel，此处释放安全；
+        // 信号量释放会使仍在等待的调用以 ObjectDisposedException 醒来，各调用方已按关闭处理）。
+        try { _netCts.Dispose(); } catch { }
+        try { _engineGate.Dispose(); } catch { }
+        try { _loadGate.Dispose(); } catch { }
+        try { _playGate.Dispose(); } catch { }
     }
 }

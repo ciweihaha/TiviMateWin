@@ -125,13 +125,23 @@ public partial class SettingsWindow : Window
 
         _config.Theme = (ThemeCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "深色";
 
-        _config.XtreamServer = XtreamServerBox.Text.Trim();
+        var server = XtreamServerBox.Text.Trim();
+        _config.XtreamServer = server;
         _config.XtreamUsername = XtreamUserBox.Text.Trim();
         _config.XtreamPassword = XtreamPassBox.Password;
 
         _config.OpenListServer = OpenListServerBox.Text.Trim();
         _config.OpenListUsername = OpenListUserBox.Text.Trim();
         _config.OpenListPassword = OpenListPassBox.Password;
+
+        // L13：Xtream 凭据放 query 参数是协议要求，无法避免；但服务器是 http:// 时凭据明文传输，
+        // 在保存时一次性提示风险（不拦截保存），让用户有意识地选择。
+        if (server.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show(this,
+                "Xtream 服务器使用 http:// 明文连接，登录凭据（用户名/密码）将以明文传输，同一网络下的他人可能窃取。\n建议改用 https:// 服务器地址。",
+                "明文传输风险", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
 
         // v1.4.15 迭代 3：配置保存放后台线程（DPAPI 加密 + 原子换名，慢盘会卡 UI）；
         // 读盘失败待确认时仍走 UI 线程（Save 里要弹确认框）。

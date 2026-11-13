@@ -63,7 +63,7 @@ public partial class ChannelWindow : Window
             try
             {
                 if (_closing) return;   // 等待期间窗口已关闭：不再启动播放
-                await Task.Run(() =>
+                var playTask = Task.Run(() =>
                 {
                     // v1.4.15 迭代 3：锁内再校验一次关闭状态——等锁期间窗口已关时，
                     // 后台释放可能正在 Dispose 同一个播放器，Play 会撞上去。
@@ -72,12 +72,19 @@ public partial class ChannelWindow : Window
                         ? new Media(_libvlc, new Uri(ch.Url))
                         : new Media(_libvlc, ch.Url, FromType.FromPath);
                     media.AddOption($":network-caching={_networkCache}");
+                    if (_closing)
+                    {
+                        // M1：关闭已开始，不再触碰可能正在释放的播放器，丢弃新建的 Media。
+                        media.Dispose();
+                        return;
+                    }
                     _player.Play(media);
                     var old = _media;
                     _media = media;   // 新 Media 接管
                     old?.Dispose();
                 });
-                AppLog.Info($"channel window play [{ch.Name}]");
+                await playTask;
+                if (!_closing) AppLog.Info($"channel window play [{ch.Name}]");
             }
             finally { _playGate.Release(); }
         }

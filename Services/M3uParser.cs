@@ -17,15 +17,17 @@ public static class M3uParser
         var result = new List<ChannelItem>();
         if (string.IsNullOrWhiteSpace(text)) return result;
 
-        // 换行符归一化：兼容 \r\n、\n 以及孤立 \r（老式 Mac 风格/部分采集器输出）
-        if (text.Contains('\r')) text = text.Replace("\r\n", "\n").Replace("\r", "\n");
-
         string pendingName = "";
         string pendingGroup = "未分组";
         string? pendingLogo = null;
         string? pendingTvgId = null;
 
-        foreach (var raw in text.Split('\n'))
+        // L8：StringReader 逐行读，不再 Replace 整段文本 + Split 建全量行数组
+        //（大清单峰值内存从约 3 倍输入降到接近 1 倍）。ReadLine 识别 \r\n、\n、
+        // 孤立 \r 三种换行，与旧实现“Replace 归一化 + Split('\n')”的切行口径一致。
+        using var reader = new StringReader(text);
+        string? raw;
+        while ((raw = reader.ReadLine()) != null)
         {
             var line = raw.Trim();
             if (line.Length == 0) continue;

@@ -67,7 +67,12 @@ public static class EpgParser
             foreach (var kv in result)
                 kv.Value.Sort((a, b) => a.Start.CompareTo(b.Start));
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // L4：畸形 XML 导致解析中途失败时，返回已解析的部分结果，但记一条日志
+            //（仅异常类型与消息，不含 XML 内容），便于区分源问题与解析问题。
+            AppLog.Error($"epg parse failed: {ex.GetType().Name}: {ex.Message}");
+        }
         return result;
     }
 

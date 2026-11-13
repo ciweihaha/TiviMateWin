@@ -11,7 +11,8 @@ namespace TiviMateWin.Services;
 /// 频道 Logo 加载服务（V1.4 新增）：内存缓存 → 磁盘缓存 → 网络，三级取图。
 /// - 列表虚拟化下 DataTemplate 反复实例化，靠内存缓存保证不重复下载；
 /// - 磁盘缓存放 %AppData%\TiviMateWin\logos，二次启动秒出图；
-/// - 失败走内存负缓存（null），同一会话内不重复请求坏地址；
+/// - 失败走内存负缓存（null，5 分钟 TTL），过期后重试，同一会话内不重复请求坏地址；
+/// - 内存缓存上限 2000 项，超限淘汰已完成项（失败项优先）；
 /// - 返回 Freeze 后的 BitmapImage，可在后台线程解码、UI 线程直接赋值；
 /// - 解码宽 40px（2x 显示密度足够 20px 列表项），大图不占内存。
 /// </summary>
@@ -33,7 +34,16 @@ public static class LogoService
     /// <summary>单张 Logo 解码/落盘上限（与 Decode 的拒收口径同一值）。</summary>
     internal const long MaxLogoBytes = 5 * 1024 * 1024;
 
-    private static readonly ConcurrentDictionary<string, Task<BitmapImage?>> Cache = new();
+    // L3：内存缓存上限 2000 项，超限时淘汰已完成的项（失败项优先），在途下载不淘汰；
+    // 失败结果（null）只负缓存 5 分钟，过期后下次请求重试，瞬时网络抖动不再导致本会话永久无图。
+    private const int MaxCacheEntries = 2000;
+    private static readonly TimeSpan NegativeCacheTtl = TimeSpan.FromMinutes(5);
+
+    // 值用 Lazy<Task<...>> 包装（ExecutionAndPublication）：GetOrAdd 的工厂在并发时可能被多次调用，
+    // 但 Lazy 保证同一 URL 的下载任务只创建一次，重复下载被去重。
+    private static readonly ConcurrentDictionary<string, Lazy<Task<BitmapImage?>>> Cache = new();
+    // 负缓存项的失败时刻（键与 Cache 一致；成功后移除，随缓存淘汰一并移除）。
+    private static readonly ConcurrentDictionary<string, DateTime> NegativeSince = new();
     private static readonly SemaphoreSlim NetGate = new(4, 4);   // 并发下载限流，列表滚动不撑满连接池
 
     /// <summary>取频道 Logo；失败/无地址返回 null（UI 显示首字符占位）。任务缓存放大：同 URL 并发只发一次。</summary>
@@ -43,10 +53,53 @@ public static class LogoService
         // 内存缓存键用脱敏地址：原 URL 仍用于实际请求（LoadCoreAsync 的 url 参数），
         // 但键本身不再含 username=/password=/userinfo；同图在不同凭据下共享同一缓存项。
         var key = AppConfig.StripCredentialsForCacheKey(url);
-        // 容量上限（v1.4.15 迭代 1）：长会话 + 大清单时缓存无限增长；满 500 条直接清空，
-        // 丢的只是内存图片（磁盘缓存还在，下次取回时重新解码），无功能影响。
-        if (Cache.Count >= 500) Cache.Clear();
-        return Cache.GetOrAdd(key, _ => LoadCoreAsync(url));
+        // 负缓存过期：移除旧失败项后重试（仅当仍是同一任务时移除，避免误删新项）。
+        if (Cache.TryGetValue(key, out var existing) && existing.IsValueCreated)
+        {
+            var oldTask = existing.Value;
+            if (oldTask.IsCompletedSuccessfully && oldTask.Result is null &&
+                NegativeSince.TryGetValue(key, out var failedAt) &&
+                DateTime.UtcNow - failedAt > NegativeCacheTtl)
+            {
+                ((ICollection<KeyValuePair<string, Lazy<Task<BitmapImage?>>>>)Cache)
+                    .Remove(new KeyValuePair<string, Lazy<Task<BitmapImage?>>>(key, existing));
+                NegativeSince.TryRemove(key, out _);
+            }
+        }
+        var fresh = new Lazy<Task<BitmapImage?>>(
+            () => LoadAndTrackAsync(key, url), LazyThreadSafetyMode.ExecutionAndPublication);
+        var lazy = Cache.GetOrAdd(key, fresh);
+        if (ReferenceEquals(lazy, fresh)) TrimCacheIfNeeded();   // 本次新增了条目，检查容量
+        return lazy.Value;
+    }
+
+    /// <summary>下载并记录负缓存时刻：失败（null）记入 NegativeSince 供 TTL 过期重试；成功则清除旧记录。</summary>
+    private static async Task<BitmapImage?> LoadAndTrackAsync(string key, string url)
+    {
+        var bmp = await LoadCoreAsync(url).ConfigureAwait(false);
+        if (bmp is null) NegativeSince[key] = DateTime.UtcNow;
+        else NegativeSince.TryRemove(key, out _);
+        return bmp;
+    }
+
+    /// <summary>缓存超限时淘汰：第一轮淘汰已完成的失败项，第二轮淘汰任意已完成项；
+    /// 未开始/在途的项不淘汰。枚举 ConcurrentDictionary 的同时移除是安全的。</summary>
+    private static void TrimCacheIfNeeded()
+    {
+        if (Cache.Count < MaxCacheEntries) return;
+        for (var pass = 0; pass < 2; pass++)
+        {
+            foreach (var kv in Cache)
+            {
+                if (Cache.Count < MaxCacheEntries) return;
+                if (!kv.Value.IsValueCreated) continue;
+                var task = kv.Value.Value;
+                if (!task.IsCompletedSuccessfully) continue;
+                if (pass == 0 && task.Result is not null) continue;   // 第一轮只淘汰失败项
+                if (((ICollection<KeyValuePair<string, Lazy<Task<BitmapImage?>>>>)Cache).Remove(kv))
+                    NegativeSince.TryRemove(kv.Key, out _);
+            }
+        }
     }
 
     private static async Task<BitmapImage?> LoadCoreAsync(string url)
