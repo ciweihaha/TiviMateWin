@@ -27,6 +27,8 @@ public partial class MainWindow : Window
     private List<ChannelItem> _all = new();
     // 频道列表视图：用 ICollectionView.Filter 过滤/排序，避免每次搜索/切分组全量重建列表
     private ICollectionView _view = CollectionViewSource.GetDefaultView(new List<ChannelItem>());
+    // P1：过滤后列表缓存——ApplyFilter 一次枚举建出，翻台/回车直接取用，
+    // 不再每按键重枚举 ICollectionView。
 
     private LibVLC? _libvlc;
     private MediaPlayer? _player;
@@ -952,9 +954,11 @@ public partial class MainWindow : Window
                 _sortMode == "名称" ? "Name" : "Number", ListSortDirection.Ascending));
         }
 
-        // L7：一次枚举同时算出过滤后的数量与是否为空，避免 Count()/Any() 各扫一次过滤视图。
-        var filteredCount = 0;
-        foreach (var _ in _view) filteredCount++;
+        // P1：一次枚举同时建出过滤后列表与数量，供翻台/回车直接取用，
+        // 不再每按键重枚举过滤视图（L7 的计数循环并入此处）。
+        _filtered.Clear();
+        foreach (ChannelItem item in _view) _filtered.Add(item);
+        var filteredCount = _filtered.Count;
         CountText.Text = $"{filteredCount} 个频道";
         // V1.4：有频道但被过滤得一个不剩时，给出明确反馈而不是空白列表
         NoMatchText.Visibility = _all.Count > 0 && filteredCount == 0
@@ -2205,9 +2209,9 @@ public partial class MainWindow : Window
         }
         else if (e.Key == Key.Enter)
         {
-            if (_view.Cast<ChannelItem>().Count() > 0)
+            if (_filtered.Count > 0)
             {
-                var first = _view.Cast<ChannelItem>().First();
+                var first = _filtered[0];
                 SelectInList(first);
                 _ = PlayAsync(first);
             }
@@ -2332,10 +2336,10 @@ public partial class MainWindow : Window
             case Key.R when Keyboard.Modifiers == ModifierKeys.Control:
                 ResetLayout();
                 return true;
-            case Key.Up when Keyboard.Modifiers == ModifierKeys.None && _view.Cast<ChannelItem>().Count() > 0:
+            case Key.Up when Keyboard.Modifiers == ModifierKeys.None && _filtered.Count > 0:
                 MoveChannel(-1);
                 return true;
-            case Key.Down when Keyboard.Modifiers == ModifierKeys.None && _view.Cast<ChannelItem>().Count() > 0:
+            case Key.Down when Keyboard.Modifiers == ModifierKeys.None && _filtered.Count > 0:
                 MoveChannel(1);
                 return true;
             case Key.F when Keyboard.Modifiers == ModifierKeys.Control:
@@ -2396,15 +2400,14 @@ public partial class MainWindow : Window
 
     private void MoveChannel(int delta)
     {
-        // L7：直接 ToList 后用 Count，不再先 Count() 扫一次。
-        var items = _view.Cast<ChannelItem>().ToList();
-        if (items.Count == 0) return;
+        // P1：用 ApplyFilter 缓存的 _filtered，不再每按键 ToList 全量枚举。
+        if (_filtered.Count == 0) return;
         int idx;
         if (ChannelList.SelectedIndex < 0)
-            idx = delta > 0 ? 0 : items.Count - 1;  // 无选中：↓从第1个开始，↑从最后1个开始
+            idx = delta > 0 ? 0 : _filtered.Count - 1;  // 无选中：↓从第1个开始，↑从最后1个开始
         else
-            idx = (ChannelList.SelectedIndex + delta + items.Count) % items.Count;
-        var ch = items[idx];
+            idx = (ChannelList.SelectedIndex + delta + _filtered.Count) % _filtered.Count;
+        var ch = _filtered[idx];
         ChannelList.SelectedItem = ch;
         ChannelList.ScrollIntoView(ch);
         NowPlaying.Text = ch.Name;             // 选中/滚动/名称即时反馈
