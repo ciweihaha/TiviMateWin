@@ -313,8 +313,9 @@
 
             <!-- 换台 OSD（V1.4）：频道号 + 名称 + 当前节目，右上角半透明卡片，3 秒自动隐藏 -->
             <!-- 2026-11-14 台标遮挡修：Margin 上/右各留 32px 安全边距；横幅内加 40px 台标（数字＋台标＋台名同显） -->
+            <!-- 2026-11-14 1.4.19：XAML 默认边距加大到 48px；代码里再按视频区尺寸自适应（见 ShowChannelOsd），电视 overscan 裁边时横幅不再被切 -->
             <Border x:Name="ChannelOsd" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Right" VerticalAlignment="Top"
-                    Margin="0,32,32,0" Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
+                    Margin="0,48,48,0" Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
                     CornerRadius="10" Padding="18,12" Visibility="Collapsed" IsHitTestVisible="False">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock x:Name="OsdNumber" Text="" FontSize="34" FontWeight="Bold" Foreground="#FF4FA3E3"

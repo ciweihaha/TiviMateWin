@@ -1532,6 +1532,14 @@ public partial class MainWindow : Window
     private void ShowChannelOsd(ChannelItem ch)
     {
         if (_digitBuf.Length > 0) return;
+        // 2026-11-14 1.4.19：横幅边距按视频区尺寸自适应——电视 HDMI 常有 overscan 裁边，
+        // 固定 32px 在 4K 电视上不够，横幅顶部会被切掉一半。顶边距取视频区高度的 6%
+        //（不小于 48px），右缘取宽度的 2%（不小于 32px），保证横幅完整落在屏幕内。
+        var vh = VideoView.ActualHeight;
+        var vw = VideoView.ActualWidth;
+        var osdTop = vh > 0 ? Math.Max(48.0, vh * 0.06) : 48.0;
+        var osdRight = vw > 0 ? Math.Max(32.0, vw * 0.02) : 32.0;
+        ChannelOsd.Margin = new Thickness(0, osdTop, osdRight, 0);
         OsdNumber.Text = ch.Number > 0 ? ch.Number.ToString() : "";
         OsdName.Text = ch.Name;
         var now = DateTime.Now;
@@ -1552,13 +1560,14 @@ public partial class MainWindow : Window
         _osdHideTimer.Start();
     }
 
-    /// <summary>OSD 台标异步加载：序号已变（又换了台）或 Logo 取失败时不碰界面，占位保持显示。</summary>
+    /// <summary>OSD 台标异步加载：序号已变（又换了台）或 Logo 取失败时不碰界面，占位保持显示。
+    /// 2026-11-14 1.4.19：取到图后不再隐藏首字符占位——有的台标图是透明/空白底，
+    /// 藏掉占位后横幅里只剩空黑框；占位留作垫底，图不透明时会盖住它，透明图则透出首字符，台标区永不为空。</summary>
     private async Task LoadOsdLogoAsync(string url, int seq)
     {
         var bmp = await LogoService.GetAsync(url);
         if (seq != _osdLogoSeq || bmp is null) return;
         OsdLogoImg.Source = bmp;
-        OsdLogoFallback.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>标记正在播放的列表项（左侧蓝色指示条）；旧项取消高亮</summary>

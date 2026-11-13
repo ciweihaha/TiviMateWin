@@ -10,7 +10,7 @@
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
     <!-- 应用图标：exe 文件图标（任务栏/桌面快捷方式/资源管理器） -->
     <ApplicationIcon>Assets\tivimate-icon.ico</ApplicationIcon>
-    <Version>1.4.18</Version>
+    <Version>1.4.19</Version>
     <!-- F9：1.4.18 仅为本地构建回退版本；tag 构建由 CI 在 Publish 时以 -p:Version 注入（见 .github/workflows/build.yml）。 -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Optimize>true</Optimize>
