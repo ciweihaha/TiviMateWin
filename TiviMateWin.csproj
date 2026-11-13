@@ -14,8 +14,6 @@
     <!-- F9：1.4.18 仅为本地构建回退版本；tag 构建由 CI 在 Publish 时以 -p:Version 注入（见 .github/workflows/build.yml）。 -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Optimize>true</Optimize>
-    <!-- 发布体积：不带调试器支持文件（mscordaccore 等，仅影响调试/转储分析，不影响正常运行） -->
-    <DebuggerSupport>false</DebuggerSupport>
   </PropertyGroup>
 
   <!-- 窗口图标：供 MainWindow/PipWindow 的 Icon 属性引用（pack URI 资源） -->
