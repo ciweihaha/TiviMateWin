@@ -10,7 +10,7 @@ public static class M3uParser
     // P5：4 个属性正则合并为 1 个，一次 Matches 扫出全部属性；
     // 逐个 Match 每行要跑 4 遍正则。命名组按属性区分，匹配顺序不影响结果。
     private static readonly Regex AttrRx = new(
-        "(?:group-title\\s*=\\s*\"(?<g>[^\"]*)\"|tvg-logo\\s*=\\s*\"(?<l>[^\"]*)\"|tvg-name\\s*=\\s*\"(?<n>[^\"]*)\"|tvg-id\\s*=\\s*\"(?<i>[^\"]*)\"",
+        "(?:group-title\\s*=\\s*\"(?<g>[^\"]*)\"|tvg-logo\\s*=\\s*\"(?<l>[^\"]*)\"|tvg-name\\s*=\\s*\"(?<n>[^\"]*)\"|tvg-id\\s*=\\s*\"(?<i>[^\"]*)\")",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public static List<ChannelItem> Parse(string text)
