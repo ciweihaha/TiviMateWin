@@ -260,6 +260,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _digitTimer = new() { Interval = TimeSpan.FromMilliseconds(1200) };
     // 换台 OSD（V1.4）：右上角频道号+名称+当前节目卡片，3 秒自动隐藏
     private readonly DispatcherTimer _osdHideTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    // OSD 台标异步加载序号：换台很快时旧图请求回来不再覆盖新频道
+    private int _osdLogoSeq;
     // EPG 时效刷新（V1.4）：每分钟刷新本地正在播放显示，避免长时间停留时节目过期
     private readonly DispatcherTimer _epgRefreshTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     // 当前处于播放态的列表项引用（列表高亮用；AdoptChannels 整体替换列表后按 Url 恢复）
@@ -1535,9 +1537,28 @@ public partial class MainWindow : Window
         var now = DateTime.Now;
         var cur = GetPrograms(ch).FirstOrDefault(p => p.Start <= now && now < p.Stop);
         OsdEpg.Text = cur != null ? $"正在播放 {cur.TimeRange}  {cur.Title}" : "";
+        // OSD 台标：先显示首字符占位，有 Logo 地址时异步取图（复用 LogoService 三级缓存）；
+        // 序号守卫：换台很快时旧图请求回来不再覆盖新频道，取图失败时占位保持显示。
+        OsdLogoInitial.Text = ch.Initial;
+        OsdLogoImg.Source = null;
+        OsdLogoFallback.Visibility = Visibility.Visible;
+        if (!string.IsNullOrWhiteSpace(ch.Logo))
+        {
+            var seq = ++_osdLogoSeq;
+            _ = LoadOsdLogoAsync(ch.Logo, seq);
+        }
         ChannelOsd.Visibility = Visibility.Visible;
         _osdHideTimer.Stop();
         _osdHideTimer.Start();
+    }
+
+    /// <summary>OSD 台标异步加载：序号已变（又换了台）或 Logo 取失败时不碰界面，占位保持显示。</summary>
+    private async Task LoadOsdLogoAsync(string url, int seq)
+    {
+        var bmp = await LogoService.GetAsync(url);
+        if (seq != _osdLogoSeq || bmp is null) return;
+        OsdLogoImg.Source = bmp;
+        OsdLogoFallback.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>标记正在播放的列表项（左侧蓝色指示条）；旧项取消高亮</summary>
