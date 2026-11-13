@@ -27,10 +27,12 @@ public partial class MainWindow : Window
     private List<ChannelItem> _all = new();
     // P3：归一化频道名 → 同名频道列表（AdoptChannels 建好），FindBackupChannel 查表，
     // 不再每次播放出错时对全列表做 4 次 Replace+Trim。
+    private Dictionary<string, List<ChannelItem>> _backupByName = new();
     // 频道列表视图：用 ICollectionView.Filter 过滤/排序，避免每次搜索/切分组全量重建列表
     private ICollectionView _view = CollectionViewSource.GetDefaultView(new List<ChannelItem>());
     // P1：过滤后列表缓存——ApplyFilter 一次枚举建出，翻台/回车直接取用，
     // 不再每按键重枚举 ICollectionView。
+    private List<ChannelItem> _filtered = new();
 
     private LibVLC? _libvlc;
     private MediaPlayer? _player;
