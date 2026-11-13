@@ -25,6 +25,8 @@ public partial class MainWindow : Window
 {
     private AppConfig _config = new();
     private List<ChannelItem> _all = new();
+    // P3：归一化频道名 → 同名频道列表（AdoptChannels 建好），FindBackupChannel 查表，
+    // 不再每次播放出错时对全列表做 4 次 Replace+Trim。
     // 频道列表视图：用 ICollectionView.Filter 过滤/排序，避免每次搜索/切分组全量重建列表
     private ICollectionView _view = CollectionViewSource.GetDefaultView(new List<ChannelItem>());
     // P1：过滤后列表缓存——ApplyFilter 一次枚举建出，翻台/回车直接取用，
@@ -802,6 +804,18 @@ public partial class MainWindow : Window
         var keepUrl = _current?.Url;
         var wasPlayingUrl = _playingItem?.Url;   // V1.4：旧列表中处于播放态的频道，新列表中恢复高亮
         _all = list;
+        // P3：建归一化名 → 同名频道表（首个为准的顺序与原 FirstOrDefault 一致）
+        _backupByName = new Dictionary<string, List<ChannelItem>>();
+        foreach (var c in list)
+        {
+            var key = NormalizeName(c.Name);
+            if (!_backupByName.TryGetValue(key, out var bucket))
+            {
+                bucket = new List<ChannelItem>();
+                _backupByName[key] = bucket;
+            }
+            bucket.Add(c);
+        }
         _view = CollectionViewSource.GetDefaultView(_all);   // 重新绑定视图（_all 被整体替换）
         ChannelList.ItemsSource = _view;
         RebuildGroups();
@@ -2499,9 +2513,9 @@ public partial class MainWindow : Window
     /// <summary>按频道名配对备用线路（去掉常见备用标记后名称相同的另一条 URL）</summary>
     private ChannelItem? FindBackupChannel(ChannelItem failed)
     {
-        var baseName = NormalizeName(failed.Name);
-        return _all.FirstOrDefault(c => c.Url != failed.Url
-                                     && NormalizeName(c.Name) == baseName);
+        // P3：查 AdoptChannels 预建的表；同名多条时取第一条非自身的，与原 FirstOrDefault 语义一致。
+        if (!_backupByName.TryGetValue(NormalizeName(failed.Name), out var bucket)) return null;
+        return bucket.FirstOrDefault(c => c.Url != failed.Url);
     }
 
     private static string NormalizeName(string name) => name
