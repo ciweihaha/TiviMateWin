@@ -37,6 +37,9 @@ public static class LogoService
     // L3：内存缓存上限 2000 项，超限时淘汰已完成的项（失败项优先），在途下载不淘汰；
     // 失败结果（null）只负缓存 5 分钟，过期后下次请求重试，瞬时网络抖动不再导致本会话永久无图。
     private const int MaxCacheEntries = 2000;
+    // P4(b)：滞后淘汰目标——缓存满时一次淘汰到 1800 项，而不是每次插入都全字典扫描
+    // 只为恰好回到 2000。
+    private const int TrimTargetEntries = 1800;
     private static readonly TimeSpan NegativeCacheTtl = TimeSpan.FromMinutes(5);
 
     // 值用 Lazy<Task<...>> 包装（ExecutionAndPublication）：GetOrAdd 的工厂在并发时可能被多次调用，
@@ -83,7 +86,9 @@ public static class LogoService
     }
 
     /// <summary>缓存超限时淘汰：第一轮淘汰已完成的失败项，第二轮淘汰任意已完成项；
-    /// 未开始/在途的项不淘汰。枚举 ConcurrentDictionary 的同时移除是安全的。</summary>
+    /// 未开始/在途的项不淘汰。枚举 ConcurrentDictionary 的同时移除是安全的。
+    /// P4(b)：滞后淘汰——超限时一次淘汰到 TrimTargetEntries（1800），下次插入
+    /// 不必再全字典扫描。</summary>
     private static void TrimCacheIfNeeded()
     {
         if (Cache.Count < MaxCacheEntries) return;
@@ -91,7 +96,7 @@ public static class LogoService
         {
             foreach (var kv in Cache)
             {
-                if (Cache.Count < MaxCacheEntries) return;
+                if (Cache.Count <= TrimTargetEntries) return;
                 if (!kv.Value.IsValueCreated) continue;
                 var task = kv.Value.Value;
                 if (!task.IsCompletedSuccessfully) continue;

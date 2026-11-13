@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -126,9 +127,16 @@ public class AppConfig
     // 其余 query 参数原样保留，避免仅 query 不同的图片误撞同一缓存键。
     // 未处理：token= 等其他参数——仓库内无 logo URL 带此类参数的证据，不凭空扩展剥离表；
     // 幂等：对已脱敏地址再跑一次结果不变，LogoService 两处调用可安全叠加。
+    // P4(a)：脱敏键记忆——LogoService 每次取图/落盘都对同一 URL 跑一遍
+    // Split/Join/IndexOf 字符串手术；频道数有界（通常 < 5000），用有上限的
+    // 记忆表缓存结果，满了清空重建，避免无界增长。
+    private static readonly ConcurrentDictionary<string, string> CacheKeyMemo = new();
+    private const int CacheKeyMemoMax = 4096;
+
     internal static string StripCredentialsForCacheKey(string url)
     {
         if (string.IsNullOrEmpty(url)) return url;
+        if (CacheKeyMemo.TryGetValue(url, out var memo)) return memo;
         var stripped = StripCredentialQuery(url);
         var hash = stripped.IndexOf('#');
         if (hash >= 0) stripped = stripped[..hash];
@@ -159,6 +167,9 @@ public class AppConfig
             var baseUrl = stripped[..q];
             stripped = kept.Count == 0 ? baseUrl : baseUrl + "?" + string.Join("&", kept);
         }
+        // P4(a)：记入记忆表（有上限，满了清空重建）。
+        if (CacheKeyMemo.Count >= CacheKeyMemoMax) CacheKeyMemo.Clear();
+        CacheKeyMemo[url] = stripped;
         return stripped;
     }
 
