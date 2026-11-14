@@ -144,8 +144,6 @@
                     <Button Style="{StaticResource ToolBtn}" Content="收藏" Click="BtnFav_Click"/>
                     <Button Style="{StaticResource ToolBtn}" Content="小窗" Click="BtnPip_Click"/>
                     <Button Style="{StaticResource ToolBtn}" Content="全屏" Click="BtnFull_Click"/>
-                    <Button Style="{StaticResource ToolBtn}" Content="节目表" Click="BtnGuide_Click"
-                            ToolTip="打开节目表（时间轴）"/>
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,0,12,10">
@@ -311,12 +309,15 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <lvc:VideoView x:Name="VideoView" Grid.Row="0" Grid.Column="0" Background="Black" Focusable="False"/>
-
-            <!-- 换台信息条（v1.4.25）：按参考图——左下角半透明卡片，频道名大字 + 来源徽标 +
-                 正在播放 / 稍后播放，3 秒自动隐藏；换台时显示（见 ShowChannelOsd），无 EPG 时只显示频道名 -->
-            <Border x:Name="ChannelOsd" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                    Margin="48,0,0,48" Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
+            <!-- 换台信息条（v1.4.26）：必须放在 VideoView.Content 里——LibVLCSharp.WPF 的视频是
+                 原生 HWND（空域规则：Grid 里的同级 WPF 元素永远画不到视频上面）。v1.4.25 把卡片放在
+                 左下角当同级元素，所以完全看不见，只剩边框下沿在视频面盖不到的黑边带里露出来一条
+                 空壳（用户截图里的小细条就是它）。只有 VideoView.Content 会被转到覆盖窗口
+                 （ForegroundWindow）浮在视频之上。居中显示（用户要求放视频中间），3 秒自动隐藏；
+                 换台时显示（见 ShowChannelOsd），无 EPG 时只显示频道名 -->
+            <lvc:VideoView x:Name="VideoView" Grid.Row="0" Grid.Column="0" Background="Black" Focusable="False">
+            <Border x:Name="ChannelOsd" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
                     CornerRadius="10" Padding="18,14" Visibility="Collapsed" IsHitTestVisible="False">
                 <StackPanel MaxWidth="560">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -335,6 +336,7 @@
                                TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
                 </StackPanel>
             </Border>
+            </lvc:VideoView>
 
             <!-- EPG 节目单面板 -->
             <Border x:Name="EpgPanel" Grid.Row="0" Grid.Column="1" Width="260" Background="{DynamicResource EpgBgBrush}"
@@ -385,85 +387,6 @@
                             Click="BtnFull_Click" ToolTip="退出全屏（Esc / F11）"/>
                 </StackPanel>
             </Border>
-
-            <!-- 节目表（时间轴）视图：覆盖视频区的浮层，视频在后台继续播放；Esc / 关闭按钮退出。
-                 数据复用现有 EPG（_epg / GetPrograms），不改解析；行数上限 200，避免超大源卡死。 -->
-            <Grid x:Name="GuideView" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
-                  Visibility="Collapsed" Background="{DynamicResource WindowBgBrush}">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-
-                <!-- 头栏 -->
-                <DockPanel Grid.Row="0" Margin="16,12,16,8">
-                    <Button Content="关闭" DockPanel.Dock="Right" Style="{StaticResource ToolBtn}" FontSize="12"
-                            Padding="12,6" Click="GuideClose_Click" ToolTip="关闭节目表（Esc）"/>
-                    <Button Content="回到现在" DockPanel.Dock="Right" Style="{StaticResource ToolBtn}" FontSize="12"
-                            Padding="12,6" Click="GuideNow_Click" ToolTip="回到当前时间"/>
-                    <TextBlock Text="节目表" FontSize="17" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}"
-                               VerticalAlignment="Center"/>
-                    <TextBlock x:Name="GuideGroupText" Text="全部" Foreground="{DynamicResource SubFgBrush}" FontSize="12"
-                               VerticalAlignment="Center" Margin="12,0,0,0"/>
-                    <TextBlock x:Name="GuideWindowText" Text="" Foreground="{DynamicResource MutedFgBrush}" FontSize="12"
-                               VerticalAlignment="Center" Margin="12,0,0,0"/>
-                </DockPanel>
-
-                <!-- 时间轴 -->
-                <Grid Grid.Row="1" Margin="16,0,16,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="200"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <!-- 频道列：与右侧时间轴纵向同步滚动（见 GuideTimelineScroll_ScrollChanged） -->
-                    <Border Grid.Column="0" Background="{DynamicResource SideBgBrush}" BorderBrush="{DynamicResource BorderBrush}"
-                            BorderThickness="0,0,1,0" CornerRadius="8,0,0,8">
-                        <ScrollViewer x:Name="GuideChannelScroll" VerticalScrollBarVisibility="Hidden"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel x:Name="GuideChannelList" Margin="0,28,0,0"/>
-                        </ScrollViewer>
-                    </Border>
-                    <!-- 节目时间轴 -->
-                    <ScrollViewer x:Name="GuideTimelineScroll" Grid.Column="1"
-                                  HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
-                                  ScrollChanged="GuideTimelineScroll_ScrollChanged">
-                        <Grid x:Name="GuideTimelineContent">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="28"/>
-                                <RowDefinition Height="*"/>
-                            </Grid.RowDefinitions>
-                            <Canvas x:Name="GuideRuler" Grid.Row="0" Height="28"/>
-                            <Grid x:Name="GuideRows" Grid.Row="1"/>
-                            <!-- 现在竖线：覆盖刻度 + 全部节目行（不拦截节目块点击） -->
-                            <Canvas x:Name="GuideNowLineLayer" Grid.Row="0" Grid.RowSpan="2" IsHitTestVisible="False">
-                                <Rectangle x:Name="GuideNowLine" Width="2" Fill="{DynamicResource NowLineBrush}"/>
-                            </Canvas>
-                        </Grid>
-                    </ScrollViewer>
-                </Grid>
-
-                <!-- 节目详情：点节目块后显示；提醒/录制/回放本应用没有对应功能，只显示能做的“看直播”。 -->
-                <Border Grid.Row="2" Margin="16,0,16,12" Background="{DynamicResource PanelBgBrush}"
-                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14,10">
-                    <Grid>
-                        <TextBlock x:Name="GuideDetailEmpty" Text="点击上方节目块查看详情" Foreground="{DynamicResource MutedFgBrush}"
-                                   FontSize="12" VerticalAlignment="Center"/>
-                        <DockPanel x:Name="GuideDetail" Visibility="Collapsed">
-                            <Button x:Name="GuideDetailPlay" DockPanel.Dock="Right" Content="看直播" Style="{StaticResource ToolBtn}"
-                                    FontSize="13" Padding="16,8" VerticalAlignment="Center" Click="GuideDetailPlay_Click"/>
-                            <StackPanel VerticalAlignment="Center" MinWidth="0">
-                                <TextBlock x:Name="GuideDetailTitle" Text="" Foreground="{DynamicResource ItemFgBrush}" FontSize="14"
-                                           FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock x:Name="GuideDetailMeta" Text="" Foreground="{DynamicResource SubFgBrush}" FontSize="12"
-                                           Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock x:Name="GuideDetailDesc" Text="" Foreground="{DynamicResource ItemSubFgBrush}" FontSize="12"
-                                           Margin="0,3,0,0" TextWrapping="Wrap" MaxHeight="34" TextTrimming="CharacterEllipsis"/>
-                            </StackPanel>
-                        </DockPanel>
-                    </Grid>
-                </Border>
-            </Grid>
 
             <Border x:Name="StatusBar" Grid.Row="1" Grid.ColumnSpan="2" Background="{DynamicResource SideBgBrush}" BorderBrush="{DynamicResource BorderBrush}"
                     BorderThickness="0,1,0,0" Padding="14,7">
