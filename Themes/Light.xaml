@@ -21,6 +21,10 @@
     <SolidColorBrush x:Key="AccentBrush" Color="#FF1F6FB5"/>
     <SolidColorBrush x:Key="StarBrush" Color="#FFD9A521"/>
 
+    <!-- 节目表（时间轴） -->
+    <SolidColorBrush x:Key="NowLineBrush" Color="#FFD92D20"/>
+    <SolidColorBrush x:Key="GuideNowBgBrush" Color="#FFDCE9F7"/>
+
     <!-- 边框 -->
     <SolidColorBrush x:Key="BorderBrush" Color="#FFD1D9E0"/>
 
