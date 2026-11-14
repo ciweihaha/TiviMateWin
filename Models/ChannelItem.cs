@@ -57,5 +57,41 @@ public class ChannelItem : INotifyPropertyChanged
         }
     }
 
+    private string _nowProgramText = "";
+    /// <summary>当前正在播的节目（UI 改版：频道行第二行显示；无节目单时为空）。
+    /// 由 MainWindow 随 EPG 加载/每分钟刷新统一更新，不参与序列化。</summary>
+    [JsonIgnore]
+    public string NowProgramText
+    {
+        get => _nowProgramText;
+        private set
+        {
+            if (_nowProgramText == value) return;
+            _nowProgramText = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NowProgramText)));
+        }
+    }
+
+    private double _nowProgress;
+    /// <summary>当前节目已播进度 0..1（UI 改版：频道行细进度条 / OSD / 全屏浮层共用）；无节目时为 0。</summary>
+    [JsonIgnore]
+    public double NowProgress
+    {
+        get => _nowProgress;
+        private set
+        {
+            if (Math.Abs(_nowProgress - value) < 0.001) return;
+            _nowProgress = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NowProgress)));
+        }
+    }
+
+    /// <summary>更新当前节目显示（文本 + 进度）：值不变时不触发通知，避免无谓重绘。</summary>
+    public void SetNowProgram(string text, double progress)
+    {
+        NowProgramText = text;
+        NowProgress = Math.Clamp(progress, 0, 1);
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 }
