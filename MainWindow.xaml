@@ -20,7 +20,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -43,7 +43,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
                             <ContentPresenter/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -144,6 +144,8 @@
                     <Button Style="{StaticResource ToolBtn}" Content="收藏" Click="BtnFav_Click"/>
                     <Button Style="{StaticResource ToolBtn}" Content="小窗" Click="BtnPip_Click"/>
                     <Button Style="{StaticResource ToolBtn}" Content="全屏" Click="BtnFull_Click"/>
+                    <Button Style="{StaticResource ToolBtn}" Content="节目表" Click="BtnGuide_Click"
+                            ToolTip="打开节目表（时间轴）"/>
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,0,12,10">
@@ -163,7 +165,7 @@
 
                 <!-- 独立源管理面板：可展开/收起，显示所有源并点击切换 -->
                 <Border DockPanel.Dock="Top" Margin="12,0,12,8" Background="{DynamicResource PanelBgBrush}"
-                        BorderBrush="{DynamicResource InputBorderBrush}" BorderThickness="1" CornerRadius="4">
+                        BorderBrush="{DynamicResource InputBorderBrush}" BorderThickness="1" CornerRadius="8">
                     <DockPanel>
                         <Button x:Name="SrcToggleBtn" DockPanel.Dock="Right" Width="30" Height="30"
                                 Content="▾" Foreground="{DynamicResource BtnFgBrush}" Background="Transparent" BorderThickness="0"
@@ -251,10 +253,19 @@
                     </ListBox.ContextMenu>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <DockPanel Margin="8,2">
+                            <!-- UI 改版：双行频道行（约 44px）——第一行频道名，第二行当前节目 + 细进度条；
+                                 频道号、台标、收藏星、播放中指示条全部保留。 -->
+                            <Grid Margin="8,3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
                                 <!-- 播放中指示条（V1.4）：当前频道左侧蓝色竖条 -->
                                 <Border Width="3" CornerRadius="1.5" Background="{DynamicResource AccentBrush}"
-                                        DockPanel.Dock="Left" Margin="-6,0,7,0">
+                                        Margin="-6,0,7,0" VerticalAlignment="Stretch">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -266,28 +277,59 @@
                                         </Style>
                                     </Border.Style>
                                 </Border>
-                                <!-- 频道 Logo（V1.4）：异步加载 + 磁盘缓存；无 Logo 时显示首字符占位 -->
-                                <Grid Width="24" Height="24" DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0">
-                                    <Border x:Name="LogoFallback" CornerRadius="4" Background="#26808FA0">
-                                        <TextBlock Text="{Binding Initial}" FontSize="11" FontWeight="Bold"
+                                <!-- 频道 Logo（V1.4）：异步加载 + 磁盘缓存；无 Logo 时显示首字符占位。
+                                     结构保持 Grid[Border 占位, Image]：LoadLogoInto 按 Children[0] 找占位。 -->
+                                <Grid Grid.Column="1" Width="32" Height="32" VerticalAlignment="Center" Margin="0,0,8,0">
+                                    <Border x:Name="LogoFallback" CornerRadius="6" Background="#26808FA0">
+                                        <TextBlock Text="{Binding Initial}" FontSize="12" FontWeight="Bold"
                                                    Foreground="{DynamicResource ItemFgBrush}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
-                                    <Image x:Name="LogoImg" Width="24" Height="24" Stretch="Uniform" Loaded="LogoImg_Loaded"/>
+                                    <Image x:Name="LogoImg" Width="32" Height="32" Stretch="Uniform" Loaded="LogoImg_Loaded"/>
                                 </Grid>
-                                <TextBlock Text="{Binding Number}" Width="34" Foreground="{DynamicResource NumberFgBrush}" FontSize="12"
-                                           VerticalAlignment="Center" DockPanel.Dock="Left"/>
-                                <Button Content="{Binding FavoriteMark}" Tag="{Binding}" Click="FavStar_Click"
+                                <TextBlock Grid.Column="2" Text="{Binding Number}" Width="34" Foreground="{DynamicResource NumberFgBrush}" FontSize="12"
+                                           VerticalAlignment="Center" Margin="0,0,2,0"/>
+                                <StackPanel Grid.Column="3" VerticalAlignment="Center" MinWidth="0">
+                                    <DockPanel>
+                                        <TextBlock Text="{Binding Group}" Foreground="{DynamicResource ItemSubFgBrush}" FontSize="11"
+                                                   VerticalAlignment="Center" MaxWidth="80" Margin="6,0,0,0"
+                                                   TextTrimming="CharacterEllipsis" DockPanel.Dock="Right" ToolTip="{Binding Group}"/>
+                                        <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ItemFgBrush}" FontSize="13" FontWeight="SemiBold"
+                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+                                    </DockPanel>
+                                    <TextBlock Text="{Binding NowProgramText}" Foreground="{DynamicResource ItemSubFgBrush}" FontSize="11"
+                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding NowProgramText}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding NowProgramText}" Value="">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <ProgressBar Height="3" Margin="0,3,0,0" Minimum="0" Maximum="1" Value="{Binding NowProgress}"
+                                                 Foreground="{DynamicResource AccentBrush}" Background="{DynamicResource BorderBrush}" BorderThickness="0">
+                                        <ProgressBar.Style>
+                                            <Style TargetType="ProgressBar">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding NowProgress}" Value="0">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ProgressBar.Style>
+                                    </ProgressBar>
+                                </StackPanel>
+                                <Button Grid.Column="4" Content="{Binding FavoriteMark}" Tag="{Binding}" Click="FavStar_Click"
                                         Width="22" Height="22" Background="Transparent" BorderThickness="0"
                                         Foreground="{DynamicResource StarBrush}" FontSize="14" Cursor="Hand" Focusable="False"
-                                        ToolTip="点击收藏 / 取消收藏" DockPanel.Dock="Right" Margin="0,0,4,0"
+                                        ToolTip="点击收藏 / 取消收藏" Margin="4,0,0,0"
                                         VerticalAlignment="Center"/>
-                                <TextBlock Text="{Binding Group}" Foreground="{DynamicResource ItemSubFgBrush}" FontSize="11"
-                                           VerticalAlignment="Center" MaxWidth="80" Margin="6,0,0,0"
-                                           TextTrimming="CharacterEllipsis" DockPanel.Dock="Right" ToolTip="{Binding Group}"/>
-                                <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ItemFgBrush}" FontSize="13"
-                                           Margin="0,0,6,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
-                            </DockPanel>
+                            </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
@@ -311,31 +353,41 @@
 
             <lvc:VideoView x:Name="VideoView" Grid.Row="0" Grid.Column="0" Background="Black" Focusable="False"/>
 
-            <!-- 换台 OSD（V1.4）：频道号 + 名称 + 当前节目，右上角半透明卡片，3 秒自动隐藏 -->
-            <!-- 2026-11-14 台标遮挡修：Margin 上/右各留 32px 安全边距；横幅内加 40px 台标（数字＋台标＋台名同显） -->
-            <!-- 2026-11-14 1.4.19：XAML 默认边距加大到 48px；代码里再按视频区尺寸自适应（见 ShowChannelOsd），电视 overscan 裁边时横幅不再被切 -->
-            <Border x:Name="ChannelOsd" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Right" VerticalAlignment="Top"
-                    Margin="0,48,48,0" Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
-                    CornerRadius="10" Padding="18,12" Visibility="Collapsed" IsHitTestVisible="False">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock x:Name="OsdNumber" Text="" FontSize="34" FontWeight="Bold" Foreground="#FF4FA3E3"
-                               VerticalAlignment="Center" MinWidth="40" TextAlignment="Center"/>
-                    <!-- OSD 台标：首字符占位 + 异步图（复用 LogoService；无 Logo 时只显示占位） -->
-                    <Grid Width="40" Height="40" VerticalAlignment="Center" Margin="12,0,0,0">
-                        <Border x:Name="OsdLogoFallback" CornerRadius="6" Background="#26808FA0">
-                            <TextBlock x:Name="OsdLogoInitial" Text="" FontSize="16" FontWeight="Bold"
-                                       Foreground="#FFE8EDF2"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <Image x:Name="OsdLogoImg" Width="40" Height="40" Stretch="Uniform"/>
-                    </Grid>
-                    <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="OsdName" Text="" FontSize="17" FontWeight="SemiBold" Foreground="#FFE8EDF2"
-                                   MaxWidth="320" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock x:Name="OsdEpg" Text="" FontSize="12" Foreground="#FF9FB3C8" Margin="0,2,0,0"
-                                   MaxWidth="320" TextTrimming="CharacterEllipsis"/>
+            <!-- 换台 OSD（V1.4）：频道号 + 名称 + 当前节目，3 秒自动隐藏。
+                 UI 改版：由右上角卡片改为底部控制条（频道号 + 台标 + 频道名 + 当前节目 + 节目进度），
+                 边距仍按视频区尺寸自适应（见 ShowChannelOsd，电视 overscan 裁边时不被切）。 -->
+            <Border x:Name="ChannelOsd" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
+                    Margin="16,0,16,16" Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
+                    CornerRadius="8" Padding="16,10" Visibility="Collapsed" IsHitTestVisible="False">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal" Grid.Row="0">
+                        <TextBlock x:Name="OsdNumber" Text="" FontSize="30" FontWeight="Bold" Foreground="#FF4FA3E3"
+                                   VerticalAlignment="Center" MinWidth="40" TextAlignment="Center"/>
+                        <!-- OSD 台标：首字符占位 + 异步图（复用 LogoService；无 Logo 时只显示占位） -->
+                        <Grid Width="40" Height="40" VerticalAlignment="Center" Margin="12,0,0,0">
+                            <Border x:Name="OsdLogoFallback" CornerRadius="6" Background="#26808FA0">
+                                <TextBlock x:Name="OsdLogoInitial" Text="" FontSize="16" FontWeight="Bold"
+                                           Foreground="#FFE8EDF2"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <Image x:Name="OsdLogoImg" Width="40" Height="40" Stretch="Uniform"/>
+                        </Grid>
+                        <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                            <TextBlock x:Name="OsdName" Text="" FontSize="17" FontWeight="SemiBold" Foreground="#FFE8EDF2"
+                                       MaxWidth="320" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="OsdEpg" Text="" FontSize="12" Foreground="#FF9FB3C8" Margin="0,2,0,0"
+                                       MaxWidth="320" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
                     </StackPanel>
-                </StackPanel>
+                    <!-- 当前节目进度：无节目时隐藏（见 ShowChannelOsd / UpdateProgress） -->
+                    <ProgressBar x:Name="OsdProgress" Grid.Row="1" Height="3" Margin="0,8,0,0" Minimum="0" Maximum="1"
+                                 Foreground="{DynamicResource AccentBrush}" Background="{DynamicResource BorderBrush}" BorderThickness="0"
+                                 Visibility="Collapsed"/>
+                </Grid>
             </Border>
 
             <!-- EPG 节目单面板 -->
@@ -369,24 +421,119 @@
                          Margin="0,16,0,0" HorizontalAlignment="Center" Click="BtnAdd_Click"/>
             </StackPanel>
 
-            <!-- 全屏控制浮层：鼠标移动显示，静止自动隐藏 -->
+            <!-- 全屏控制浮层：鼠标移动显示，静止自动隐藏。
+                 UI 改版：由居中按钮组改为底部控制条（当前节目进度细条 + 频道名/当前节目 + 控制按钮）。 -->
             <Border x:Name="FullscreenOverlay" Grid.Row="0" Grid.ColumnSpan="2" Background="{DynamicResource OverlayBgBrush}"
-                    Visibility="Collapsed" VerticalAlignment="Bottom" Padding="0,10,0,10">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                    <TextBlock x:Name="FsNowPlaying" Text="" Foreground="{DynamicResource FgBrush}" FontSize="14"
-                               VerticalAlignment="Center" Margin="0,0,20,0" MaxWidth="360"
-                               TextTrimming="CharacterEllipsis"/>
-                    <Button x:Name="FsPlayPause" Content="⏸" Width="40" Height="36" Margin="4,0"
-                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
-                            Click="BtnPlayPause_Click" ToolTip="播放/暂停（Space）"/>
-                    <Button x:Name="FsStop" Content="⏹" Width="40" Height="36" Margin="4,0"
-                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
-                            Click="BtnStop_Click" ToolTip="停止（S）"/>
-                    <Button x:Name="FsExitFull" Content="退出全屏" Width="88" Height="36" Margin="4,0"
-                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
-                            Click="BtnFull_Click" ToolTip="退出全屏（Esc / F11）"/>
-                </StackPanel>
+                    Visibility="Collapsed" VerticalAlignment="Bottom">
+                <Grid Margin="24,10,24,14">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <!-- 当前节目进度：无节目时隐藏（见 ShowFullscreenOverlay / UpdateProgress） -->
+                    <ProgressBar x:Name="FsProgress" Grid.Row="0" Height="3" Minimum="0" Maximum="1"
+                                 Foreground="{DynamicResource AccentBrush}" Background="{DynamicResource BorderBrush}" BorderThickness="0"
+                                 Visibility="Collapsed"/>
+                    <DockPanel Grid.Row="1" Margin="0,10,0,0">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button x:Name="FsPlayPause" Content="⏸" Width="40" Height="36" Margin="4,0"
+                                    Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
+                                    Click="BtnPlayPause_Click" ToolTip="播放/暂停（Space）"/>
+                            <Button x:Name="FsStop" Content="⏹" Width="40" Height="36" Margin="4,0"
+                                    Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
+                                    Click="BtnStop_Click" ToolTip="停止（S）"/>
+                            <Button x:Name="FsExitFull" Content="退出全屏" Width="88" Height="36" Margin="4,0"
+                                    Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
+                                    Click="BtnFull_Click" ToolTip="退出全屏（Esc / F11）"/>
+                        </StackPanel>
+                        <StackPanel VerticalAlignment="Center" MinWidth="0">
+                            <TextBlock x:Name="FsNowPlaying" Text="" Foreground="{DynamicResource FgBrush}" FontSize="14" FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="FsEpg" Text="" Foreground="{DynamicResource EpgSubFgBrush}" FontSize="12"
+                                       Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Grid>
             </Border>
+
+            <!-- 节目表（时间轴）视图：覆盖视频区的浮层，视频在后台继续播放；Esc / 关闭按钮退出。
+                 数据复用现有 EPG（_epg / GetPrograms），不改解析；行数上限 200，避免超大源卡死。 -->
+            <Grid x:Name="GuideView" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
+                  Visibility="Collapsed" Background="{DynamicResource WindowBgBrush}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- 头栏 -->
+                <DockPanel Grid.Row="0" Margin="16,12,16,8">
+                    <Button Content="关闭" DockPanel.Dock="Right" Style="{StaticResource ToolBtn}" FontSize="12"
+                            Padding="12,6" Click="GuideClose_Click" ToolTip="关闭节目表（Esc）"/>
+                    <Button Content="回到现在" DockPanel.Dock="Right" Style="{StaticResource ToolBtn}" FontSize="12"
+                            Padding="12,6" Click="GuideNow_Click" ToolTip="回到当前时间"/>
+                    <TextBlock Text="节目表" FontSize="17" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}"
+                               VerticalAlignment="Center"/>
+                    <TextBlock x:Name="GuideGroupText" Text="全部" Foreground="{DynamicResource SubFgBrush}" FontSize="12"
+                               VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    <TextBlock x:Name="GuideWindowText" Text="" Foreground="{DynamicResource MutedFgBrush}" FontSize="12"
+                               VerticalAlignment="Center" Margin="12,0,0,0"/>
+                </DockPanel>
+
+                <!-- 时间轴 -->
+                <Grid Grid.Row="1" Margin="16,0,16,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="200"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <!-- 频道列：与右侧时间轴纵向同步滚动（见 GuideTimelineScroll_ScrollChanged） -->
+                    <Border Grid.Column="0" Background="{DynamicResource SideBgBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                            BorderThickness="0,0,1,0" CornerRadius="8,0,0,8">
+                        <ScrollViewer x:Name="GuideChannelScroll" VerticalScrollBarVisibility="Hidden"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="GuideChannelList" Margin="0,28,0,0"/>
+                        </ScrollViewer>
+                    </Border>
+                    <!-- 节目时间轴 -->
+                    <ScrollViewer x:Name="GuideTimelineScroll" Grid.Column="1"
+                                  HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                                  ScrollChanged="GuideTimelineScroll_ScrollChanged">
+                        <Grid x:Name="GuideTimelineContent">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="28"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Canvas x:Name="GuideRuler" Grid.Row="0" Height="28"/>
+                            <Grid x:Name="GuideRows" Grid.Row="1"/>
+                            <!-- 现在竖线：覆盖刻度 + 全部节目行（不拦截节目块点击） -->
+                            <Canvas x:Name="GuideNowLineLayer" Grid.Row="0" Grid.RowSpan="2" IsHitTestVisible="False">
+                                <Rectangle x:Name="GuideNowLine" Width="2" Fill="{DynamicResource NowLineBrush}"/>
+                            </Canvas>
+                        </Grid>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- 节目详情：点节目块后显示；提醒/录制/回放本应用没有对应功能，只显示能做的“看直播”。 -->
+                <Border Grid.Row="2" Margin="16,0,16,12" Background="{DynamicResource PanelBgBrush}"
+                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14,10">
+                    <Grid>
+                        <TextBlock x:Name="GuideDetailEmpty" Text="点击上方节目块查看详情" Foreground="{DynamicResource MutedFgBrush}"
+                                   FontSize="12" VerticalAlignment="Center"/>
+                        <DockPanel x:Name="GuideDetail" Visibility="Collapsed">
+                            <Button x:Name="GuideDetailPlay" DockPanel.Dock="Right" Content="看直播" Style="{StaticResource ToolBtn}"
+                                    FontSize="13" Padding="16,8" VerticalAlignment="Center" Click="GuideDetailPlay_Click"/>
+                            <StackPanel VerticalAlignment="Center" MinWidth="0">
+                                <TextBlock x:Name="GuideDetailTitle" Text="" Foreground="{DynamicResource ItemFgBrush}" FontSize="14"
+                                           FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock x:Name="GuideDetailMeta" Text="" Foreground="{DynamicResource SubFgBrush}" FontSize="12"
+                                           Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock x:Name="GuideDetailDesc" Text="" Foreground="{DynamicResource ItemSubFgBrush}" FontSize="12"
+                                           Margin="0,3,0,0" TextWrapping="Wrap" MaxHeight="34" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Grid>
+                </Border>
+            </Grid>
 
             <Border x:Name="StatusBar" Grid.Row="1" Grid.ColumnSpan="2" Background="{DynamicResource SideBgBrush}" BorderBrush="{DynamicResource BorderBrush}"
                     BorderThickness="0,1,0,0" Padding="14,7">
