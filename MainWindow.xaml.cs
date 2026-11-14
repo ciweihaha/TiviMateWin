@@ -267,6 +267,18 @@ public partial class MainWindow : Window
     // 当前处于播放态的列表项引用（列表高亮用；AdoptChannels 整体替换列表后按 Url 恢复）
     private ChannelItem? _playingItem;
 
+    // ---------- 节目表（时间轴）视图（UI 改版） ----------
+    // 窗口：现在前 30 分钟起，共 4 小时；每分钟 3px，行高 48px，行数上限 200。
+    private const double GuidePxPerMinute = 3.0;
+    private const double GuideRowHeight = 48;
+    private const double GuideRulerHeight = 28;
+    private const int GuideMaxRows = 200;
+    private DateTime _guideWindowStart;
+    private List<ChannelItem> _guideChannels = new();
+    private Border? _guideSelectedBlock;   // 当前选中的节目块（详情区对应显示）
+    private ChannelItem? _guideSelectedChannel;
+    private EpgProgram? _guideSelectedProgram;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -419,6 +431,8 @@ public partial class MainWindow : Window
     {
         if (FullscreenOverlay.Visibility == Visibility.Visible && IsPointInElement(FullscreenOverlay, screenPoint)) return true;
         if (ChannelOsd.Visibility == Visibility.Visible && IsPointInElement(ChannelOsd, screenPoint)) return true;
+        // UI 改版：节目表打开时它是盖在视频区上的浮层，其上的双击不应切全屏
+        if (GuideView.Visibility == Visibility.Visible && IsPointInElement(GuideView, screenPoint)) return true;
         return false;
     }
 
@@ -981,6 +995,8 @@ public partial class MainWindow : Window
         // V1.4：有频道但被过滤得一个不剩时，给出明确反馈而不是空白列表
         NoMatchText.Visibility = _all.Count > 0 && filteredCount == 0
             ? Visibility.Visible : Visibility.Collapsed;
+        RefreshChannelNowPrograms();   // UI 改版：过滤后列表的频道行当前节目 + 进度
+        BuildGuide();                  // UI 改版：节目表打开时跟随分组/搜索同步重建（关闭时内部直接返回）
     }
 
     private void SelectInList(ChannelItem ch)
@@ -1178,6 +1194,16 @@ public partial class MainWindow : Window
         if (_player is null || _seekDragging) return;
         try
         {
+            // UI 改版：换台 OSD / 全屏浮层的节目进度随播放推进（仅浮层可见时算，避免空转）；
+            // 直播也有节目进度，放在下面的直播分支之前。
+            if (_current != null && (ChannelOsd.Visibility == Visibility.Visible || FullscreenOverlay.Visibility == Visibility.Visible))
+            {
+                var (_, programProgress) = CurrentProgram(_current);
+                if (ChannelOsd.Visibility == Visibility.Visible && OsdProgress.Visibility == Visibility.Visible)
+                    OsdProgress.Value = programProgress;
+                if (FullscreenOverlay.Visibility == Visibility.Visible && FsProgress.Visibility == Visibility.Visible)
+                    FsProgress.Value = programProgress;
+            }
             var len = _player.Length;
             var t = _player.Time;
             // v1.4.16：直播流没有总时长——libvlc 报的 Length 只是 HLS 滑动窗口（十几秒），
@@ -1421,12 +1447,25 @@ public partial class MainWindow : Window
         ShowFullscreenOverlay();
     }
 
-    /// <summary>显示全屏控制浮层并更新当前频道名，3 秒后自动隐藏</summary>
+    /// <summary>显示全屏控制浮层并更新当前频道名与当前节目，3 秒后自动隐藏</summary>
     private void ShowFullscreenOverlay()
     {
         if (!_fullscreen) return;
         FsNowPlaying.Text = _current?.Name ?? "未播放";
         FsPlayPause.Content = _isPaused ? "▶" : "⏸";
+        // UI 改版：浮层底部控制条带当前节目名与节目进度
+        if (_current != null)
+        {
+            var (cur, progress) = CurrentProgram(_current);
+            FsEpg.Text = cur != null ? $"正在播放 {cur.TimeRange}  {cur.Title}" : "";
+            FsProgress.Value = progress;
+            FsProgress.Visibility = cur != null ? Visibility.Visible : Visibility.Collapsed;
+        }
+        else
+        {
+            FsEpg.Text = "";
+            FsProgress.Visibility = Visibility.Collapsed;
+        }
         FullscreenOverlay.Visibility = Visibility.Visible;
         _fsHideTimer.Stop();
         _fsHideTimer.Start();
@@ -1490,6 +1529,7 @@ public partial class MainWindow : Window
         OsdNumber.Text = _digitBuf;
         OsdName.Text = "输入频道号…";
         OsdEpg.Text = "";
+        OsdProgress.Visibility = Visibility.Collapsed;   // 数字输入预览时不显示旧节目进度
         ChannelOsd.Visibility = Visibility.Visible;
         _osdHideTimer.Stop();
         _osdHideTimer.Start();
@@ -1516,6 +1556,7 @@ public partial class MainWindow : Window
             OsdNumber.Text = buf;
             OsdName.Text = $"无 {buf} 号频道";
             OsdEpg.Text = "";
+            OsdProgress.Visibility = Visibility.Collapsed;   // 无匹配提示时不显示旧节目进度
             ChannelOsd.Visibility = Visibility.Visible;
             _osdHideTimer.Stop();
             _osdHideTimer.Start();
@@ -1528,23 +1569,23 @@ public partial class MainWindow : Window
         _ = PlayAsync(ch);
     }
 
-    /// <summary>换台 OSD：右上角频道号 + 名称 + 当前节目，3 秒自动隐藏（数字输入中不覆盖）</summary>
+    /// <summary>换台 OSD：底部控制条（频道号 + 名称 + 当前节目 + 节目进度），3 秒自动隐藏（数字输入中不覆盖）。
+    /// UI 改版：由右上角卡片改为底部横条；边距仍按视频区尺寸自适应——电视 HDMI 常有 overscan 裁边，
+    /// 底边距取视频区高度的 2%（不小于 16px），左右各取宽度的 2%（不小于 16px），保证横条完整落在屏幕内。</summary>
     private void ShowChannelOsd(ChannelItem ch)
     {
         if (_digitBuf.Length > 0) return;
-        // 2026-11-14 1.4.19：横幅边距按视频区尺寸自适应——电视 HDMI 常有 overscan 裁边，
-        // 固定 32px 在 4K 电视上不够，横幅顶部会被切掉一半。顶边距取视频区高度的 6%
-        //（不小于 48px），右缘取宽度的 2%（不小于 32px），保证横幅完整落在屏幕内。
         var vh = VideoView.ActualHeight;
         var vw = VideoView.ActualWidth;
-        var osdTop = vh > 0 ? Math.Max(48.0, vh * 0.06) : 48.0;
-        var osdRight = vw > 0 ? Math.Max(32.0, vw * 0.02) : 32.0;
-        ChannelOsd.Margin = new Thickness(0, osdTop, osdRight, 0);
+        var osdBottom = vh > 0 ? Math.Max(16.0, vh * 0.02) : 16.0;
+        var osdSide = vw > 0 ? Math.Max(16.0, vw * 0.02) : 16.0;
+        ChannelOsd.Margin = new Thickness(osdSide, 0, osdSide, osdBottom);
         OsdNumber.Text = ch.Number > 0 ? ch.Number.ToString() : "";
         OsdName.Text = ch.Name;
-        var now = DateTime.Now;
-        var cur = GetPrograms(ch).FirstOrDefault(p => p.Start <= now && now < p.Stop);
+        var (cur, progress) = CurrentProgram(ch);
         OsdEpg.Text = cur != null ? $"正在播放 {cur.TimeRange}  {cur.Title}" : "";
+        OsdProgress.Value = progress;
+        OsdProgress.Visibility = cur != null ? Visibility.Visible : Visibility.Collapsed;
         // OSD 台标：先显示首字符占位，有 Logo 地址时异步取图（复用 LogoService 三级缓存）；
         // 序号守卫：换台很快时旧图请求回来不再覆盖新频道，取图失败时占位保持显示。
         OsdLogoInitial.Text = ch.Initial;
@@ -1593,6 +1634,8 @@ public partial class MainWindow : Window
     {
         if (_closing || _current is null) return;
         ShowEpgForChannel(_current);
+        RefreshChannelNowPrograms();   // UI 改版：频道行当前节目 + 进度随分钟刷新
+        BuildGuide();                  // UI 改版：节目表打开时同步重建（关闭时内部直接返回）
         if (ChannelOsd.Visibility == Visibility.Visible && _digitBuf.Length == 0)
             ShowChannelOsd(_current);   // 顺带重置隐藏计时，刷新后重新计 3 秒
     }
@@ -2130,6 +2173,8 @@ public partial class MainWindow : Window
             AppLog.Info($"epg loaded {epg.Count} channels from {AppConfig.RedactUrlForLog(url)}");
             // 刷新当前频道节目显示
             if (_current != null) ShowEpgForChannel(_current);
+            RefreshChannelNowPrograms();   // UI 改版：频道行当前节目 + 进度
+            BuildGuide();                  // UI 改版：节目表打开时同步重建（关闭时内部直接返回）
         }
         catch (OperationCanceledException)
         {
@@ -2145,6 +2190,37 @@ public partial class MainWindow : Window
             // M3：加载结束（成功/失败/取消/被新请求取代）后清除在途标记；若已有更新的
             // 加载启动（标记已被覆写为新地址），不清除他人的标记。
             if (_epgLoadingUrl == url) _epgLoadingUrl = null;
+        }
+    }
+
+    /// <summary>取频道当前正在播的节目及其已播进度（0..1）；无节目时返回 (null, 0)。
+    /// 频道行第二行、换台 OSD、全屏浮层、节目表高亮共用同一口径。</summary>
+    private (EpgProgram? Program, double Progress) CurrentProgram(ChannelItem ch)
+    {
+        var now = DateTime.Now;
+        var cur = GetPrograms(ch).FirstOrDefault(p => p.Start <= now && now < p.Stop);
+        if (cur is null) return (null, 0);
+        var total = (cur.Stop - cur.Start).TotalMinutes;
+        var progress = total > 0 ? Math.Clamp((now - cur.Start).TotalMinutes / total, 0, 1) : 0;
+        return (cur, progress);
+    }
+
+    /// <summary>刷新过滤后频道行的“当前节目 + 进度”（UI 改版）：
+    /// EPG 加载成功、每分钟时效刷新、过滤条件变化后调用；无 EPG 数据时直接返回。</summary>
+    private void RefreshChannelNowPrograms()
+    {
+        if (_epg.Count == 0) return;
+        var now = DateTime.Now;
+        foreach (var ch in _filtered)
+        {
+            var cur = GetPrograms(ch).FirstOrDefault(p => p.Start <= now && now < p.Stop);
+            if (cur is null) ch.SetNowProgram("", 0);
+            else
+            {
+                var total = (cur.Stop - cur.Start).TotalMinutes;
+                var progress = total > 0 ? Math.Clamp((now - cur.Start).TotalMinutes / total, 0, 1) : 0;
+                ch.SetNowProgram($"{cur.Title}  {cur.TimeRange}", progress);
+            }
         }
     }
 
@@ -2174,6 +2250,319 @@ public partial class MainWindow : Window
             EpgNow.Visibility = Visibility.Visible;
         }
         else EpgNow.Visibility = Visibility.Collapsed;
+    }
+
+    // ---------- 节目表（时间轴）视图（UI 改版） ----------
+    // 数据复用现有 EPG（_epg / GetPrograms），不改解析；行取当前过滤后的频道
+    //（分组/搜索/收藏同样生效），仅保留窗口内有节目的，至多 200 行。
+
+    private Brush ThemeBrush(string key, Brush fallback) => TryFindResource(key) as Brush ?? fallback;
+
+    /// <summary>节目表入口（侧栏“节目表”按钮）：开/关切换</summary>
+    private void BtnGuide_Click(object sender, RoutedEventArgs e) => ToggleGuide();
+
+    private void GuideClose_Click(object sender, RoutedEventArgs e) => CloseGuide();
+
+    private void GuideNow_Click(object sender, RoutedEventArgs e)
+    {
+        BuildGuide();
+        ScrollGuideToNow();
+    }
+
+    /// <summary>节目表开/关：打开时重建时间轴并滚到“现在”，关闭时清空选中详情</summary>
+    private void ToggleGuide()
+    {
+        if (GuideView.Visibility == Visibility.Visible) CloseGuide();
+        else
+        {
+            GuideView.Visibility = Visibility.Visible;
+            BuildGuide();
+            // 刚设为可见时布局未跑完，ViewportWidth 还是 0：等布局完成后再滚动定位
+            Dispatcher.BeginInvoke(new Action(ScrollGuideToNow), DispatcherPriority.Loaded);
+        }
+    }
+
+    private void CloseGuide()
+    {
+        GuideView.Visibility = Visibility.Collapsed;
+        _guideSelectedBlock = null;
+        _guideSelectedChannel = null;
+        _guideSelectedProgram = null;
+        GuideDetail.Visibility = Visibility.Collapsed;
+        GuideDetailEmpty.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>把时间轴横向滚到“现在”竖线附近（留 1/4 视口看过去的节目），纵向回顶</summary>
+    private void ScrollGuideToNow()
+    {
+        var nowX = (DateTime.Now - _guideWindowStart).TotalMinutes * GuidePxPerMinute;
+        GuideTimelineScroll.ScrollToHorizontalOffset(Math.Max(0, nowX - GuideTimelineScroll.ViewportWidth * 0.25));
+        GuideTimelineScroll.ScrollToVerticalOffset(0);
+        GuideChannelScroll.ScrollToVerticalOffset(0);
+    }
+
+    /// <summary>时间轴纵向滚动时同步左侧频道列（频道列自身不处理滚动事件，不会回环）</summary>
+    private void GuideTimelineScroll_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (e.VerticalChange != 0) GuideChannelScroll.ScrollToVerticalOffset(e.VerticalOffset);
+    }
+
+    /// <summary>重建节目表时间轴：窗口为现在前 30 分钟起共 4 小时。
+    /// 节目表关闭时不建（ApplyFilter / 每分钟刷新也会调到这里，由此守卫挡住）。</summary>
+    private void BuildGuide()
+    {
+        if (GuideView.Visibility != Visibility.Visible) return;
+        var now = DateTime.Now;
+        _guideWindowStart = now.AddMinutes(-30);
+        var windowEnd = _guideWindowStart.AddHours(4);
+        var timelineWidth = 4 * 60 * GuidePxPerMinute;
+
+        GuideGroupText.Text = GroupCombo.SelectedItem as string ?? "全部";
+        GuideWindowText.Text = $"{_guideWindowStart:HH:mm} - {windowEnd:HH:mm}";
+
+        // 重建前记住选中（频道 Url + 节目开始时间）：重建后同一节目仍在窗口内则恢复选中与详情
+        var selUrl = _guideSelectedChannel?.Url;
+        var selStart = _guideSelectedProgram?.Start;
+        _guideSelectedBlock = null;
+
+        // 频道行：窗口内有节目的过滤后频道，上限 200 行
+        _guideChannels = _filtered
+            .Where(ch => GetPrograms(ch).Any(p => p.Stop > _guideWindowStart && p.Start < windowEnd))
+            .Take(GuideMaxRows)
+            .ToList();
+
+        var accent = ThemeBrush("AccentBrush", Brushes.DodgerBlue);
+        var border = ThemeBrush("BorderBrush", Brushes.Gray);
+        var panelBg = ThemeBrush("PanelBgBrush", Brushes.DimGray);
+        var itemFg = ThemeBrush("ItemFgBrush", Brushes.White);
+        var subFg = ThemeBrush("SubFgBrush", Brushes.LightGray);
+        var mutedFg = ThemeBrush("MutedFgBrush", Brushes.Gray);
+        var nowBg = ThemeBrush("GuideNowBgBrush", Brushes.DarkSlateBlue);
+
+        // ---- 频道列 ----
+        GuideChannelList.Children.Clear();
+        foreach (var ch in _guideChannels)
+        {
+            var row = new Border
+            {
+                Height = GuideRowHeight,
+                Background = Brushes.Transparent,
+                BorderBrush = border,
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                Cursor = Cursors.Hand,
+                Tag = ch,
+                ToolTip = "点击播放该频道"
+            };
+            row.MouseLeftButtonUp += GuideChannel_Click;
+            var rowGrid = new Grid();
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            // 台标：与主列表同结构（Grid[Border 占位, Image]），复用 LogoImg_Loaded 异步加载
+            var logoGrid = new Grid { Width = 28, Height = 28, Margin = new Thickness(10, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+            var fallback = new Border
+            {
+                CornerRadius = new CornerRadius(6),
+                Background = new SolidColorBrush(Color.FromArgb(0x26, 0x80, 0x8F, 0xA0)),
+                Child = new TextBlock
+                {
+                    Text = ch.Initial, FontSize = 11, FontWeight = FontWeights.Bold, Foreground = itemFg,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            var img = new Image { Width = 28, Height = 28, Stretch = Stretch.Uniform, DataContext = ch };
+            img.Loaded += LogoImg_Loaded;
+            logoGrid.Children.Add(fallback);
+            logoGrid.Children.Add(img);
+            Grid.SetColumn(logoGrid, 0);
+            rowGrid.Children.Add(logoGrid);
+            var name = new TextBlock
+            {
+                Text = ch.Name, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = _current?.Url == ch.Url ? accent : itemFg,
+                FontWeight = _current?.Url == ch.Url ? FontWeights.SemiBold : FontWeights.Normal
+            };
+            Grid.SetColumn(name, 1);
+            rowGrid.Children.Add(name);
+            row.Child = rowGrid;
+            GuideChannelList.Children.Add(row);
+        }
+
+        // ---- 时间刻度：每 30 分钟一格 ----
+        GuideRuler.Children.Clear();
+        GuideRuler.Width = timelineWidth;
+        for (var t = _guideWindowStart; t <= windowEnd; t = t.AddMinutes(30))
+        {
+            var x = (t - _guideWindowStart).TotalMinutes * GuidePxPerMinute;
+            var tick = new Border { Width = 1, Height = 8, Background = border, VerticalAlignment = VerticalAlignment.Bottom };
+            Canvas.SetLeft(tick, x);
+            GuideRuler.Children.Add(tick);
+            var label = new TextBlock { Text = t.ToString("HH:mm"), FontSize = 11, Foreground = mutedFg };
+            Canvas.SetLeft(label, x + 4);
+            Canvas.SetTop(label, 6);
+            GuideRuler.Children.Add(label);
+        }
+
+        // ---- 节目行 ----
+        GuideRows.Children.Clear();
+        GuideRows.RowDefinitions.Clear();
+        GuideRows.Width = timelineWidth;
+        GuideTimelineContent.Width = timelineWidth;
+        for (var i = 0; i < _guideChannels.Count; i++)
+        {
+            var ch = _guideChannels[i];
+            GuideRows.RowDefinitions.Add(new RowDefinition { Height = new GridLength(GuideRowHeight) });
+            var rowCanvas = new Canvas();
+            Grid.SetRow(rowCanvas, i);
+            foreach (var prog in GetPrograms(ch))
+            {
+                if (prog.Stop <= _guideWindowStart || prog.Start >= windowEnd) continue;
+                var start = prog.Start < _guideWindowStart ? _guideWindowStart : prog.Start;
+                var stop = prog.Stop > windowEnd ? windowEnd : prog.Stop;
+                var x = (start - _guideWindowStart).TotalMinutes * GuidePxPerMinute;
+                var w = Math.Max(24, (stop - start).TotalMinutes * GuidePxPerMinute - 2);
+                var isNow = prog.Start <= now && now < prog.Stop;
+                var block = new Border
+                {
+                    Width = w,
+                    Height = GuideRowHeight - 8,
+                    CornerRadius = new CornerRadius(8),
+                    Background = isNow ? nowBg : panelBg,
+                    BorderBrush = isNow ? accent : border,
+                    BorderThickness = new Thickness(1),
+                    Cursor = Cursors.Hand,
+                    Tag = (ch, prog),
+                    ToolTip = $"{prog.Title}  {prog.TimeRange}"
+                };
+                block.MouseLeftButtonUp += GuideProgram_Click;
+                var inner = new Grid();
+                inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                inner.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                var title = new TextBlock
+                {
+                    Text = prog.Title, FontSize = 12, Foreground = itemFg,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Margin = new Thickness(8, 5, 8, 0), VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetRow(title, 0);
+                inner.Children.Add(title);
+                if (isNow)
+                {
+                    var (_, progress) = CurrentProgram(ch);
+                    var bar = new Border
+                    {
+                        Height = 3, Background = accent,
+                        HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom,
+                        Margin = new Thickness(8, 0, 8, 5), Width = Math.Max(0, w - 16) * progress
+                    };
+                    Grid.SetRow(bar, 1);
+                    inner.Children.Add(bar);
+                }
+                else
+                {
+                    var time = new TextBlock
+                    {
+                        Text = prog.TimeRange, FontSize = 10, Foreground = subFg,
+                        Margin = new Thickness(8, 0, 8, 5)
+                    };
+                    Grid.SetRow(time, 1);
+                    inner.Children.Add(time);
+                }
+                block.Child = inner;
+                Canvas.SetLeft(block, x);
+                Canvas.SetTop(block, 4);
+                rowCanvas.Children.Add(block);
+                // 重建后恢复之前的选中
+                if (selUrl != null && ch.Url == selUrl && selStart == prog.Start)
+                    ShowGuideDetail(ch, prog, block);
+            }
+            GuideRows.Children.Add(rowCanvas);
+        }
+
+        // 之前选中的节目已不在窗口内（播完了或被过滤掉）：清空详情区，不留过期内容
+        if (selUrl != null && _guideSelectedBlock == null)
+        {
+            _guideSelectedChannel = null;
+            _guideSelectedProgram = null;
+            GuideDetail.Visibility = Visibility.Collapsed;
+            GuideDetailEmpty.Visibility = Visibility.Visible;
+            GuideDetailEmpty.Text = "点击上方节目块查看详情";
+        }
+
+        // ---- 现在竖线 ----
+        var nowX = (now - _guideWindowStart).TotalMinutes * GuidePxPerMinute;
+        Canvas.SetLeft(GuideNowLine, nowX);
+        GuideNowLine.Height = GuideRulerHeight + _guideChannels.Count * GuideRowHeight;
+        GuideNowLine.Visibility = Visibility.Visible;
+
+        // 空态提示（写在详情区）：没有 EPG，或当前分组/搜索下没有带节目单的频道
+        if (_guideChannels.Count == 0)
+        {
+            GuideDetail.Visibility = Visibility.Collapsed;
+            GuideDetailEmpty.Visibility = Visibility.Visible;
+            GuideDetailEmpty.Text = _epg.Count == 0
+                ? "节目单尚未加载：请先在播放列表里配置 EPG 地址（或等 EPG 加载完成）"
+                : "当前分组 / 搜索下没有带节目单的频道";
+        }
+        else if (_guideSelectedProgram is null)
+        {
+            GuideDetailEmpty.Text = "点击上方节目块查看详情";
+        }
+    }
+
+    /// <summary>点节目块：高亮该块，下方详情区显示频道/节目/简介（提醒/录制/回放本应用没有对应功能，只显示能做的“看直播”）</summary>
+    private void GuideProgram_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border block || block.Tag is not (ChannelItem ch, EpgProgram prog)) return;
+        ShowGuideDetail(ch, prog, block);
+        e.Handled = true;
+    }
+
+    private void ShowGuideDetail(ChannelItem ch, EpgProgram prog, Border block)
+    {
+        if (_guideSelectedBlock != null && _guideSelectedBlock != block) RestoreGuideBlockBorder(_guideSelectedBlock);
+        _guideSelectedBlock = block;
+        block.BorderBrush = ThemeBrush("AccentBrush", Brushes.DodgerBlue);
+        block.BorderThickness = new Thickness(2);
+        _guideSelectedChannel = ch;
+        _guideSelectedProgram = prog;
+        var now = DateTime.Now;
+        var status = prog.Start <= now && now < prog.Stop ? "正在播出"
+            : prog.Start > now ? "即将播出" : "已结束";
+        GuideDetailTitle.Text = prog.Title;
+        GuideDetailMeta.Text = $"{ch.Number}  {ch.Name}  ·  {prog.TimeRange}  ·  {status}";
+        GuideDetailDesc.Text = string.IsNullOrWhiteSpace(prog.Description) ? "暂无节目简介" : prog.Description.Trim();
+        GuideDetailEmpty.Visibility = Visibility.Collapsed;
+        GuideDetail.Visibility = Visibility.Visible;
+        GuideDetailPlay.Tag = ch;
+    }
+
+    /// <summary>恢复节目块的默认描边（正在播：蓝色细边；其他：主题边框色细边）</summary>
+    private void RestoreGuideBlockBorder(Border b)
+    {
+        if (b.Tag is not (ChannelItem, EpgProgram prog)) return;
+        var now = DateTime.Now;
+        var isNow = prog.Start <= now && now < prog.Stop;
+        b.BorderBrush = ThemeBrush(isNow ? "AccentBrush" : "BorderBrush", Brushes.Gray);
+        b.BorderThickness = new Thickness(1);
+    }
+
+    /// <summary>详情区“看直播”：换到该频道并关闭节目表</summary>
+    private void GuideDetailPlay_Click(object sender, RoutedEventArgs e)
+    {
+        if (GuideDetailPlay.Tag is not ChannelItem ch) return;
+        SelectInList(ch);
+        CloseGuide();
+        _ = PlayAsync(ch);
+    }
+
+    /// <summary>点频道列：直接播放该频道并关闭节目表</summary>
+    private void GuideChannel_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border row || row.Tag is not ChannelItem ch) return;
+        SelectInList(ch);
+        CloseGuide();
+        _ = PlayAsync(ch);
     }
 
     /// <summary>加载 Xtream Codes 频道列表：通过 M3U 输出接口获取</summary>
@@ -2401,6 +2790,9 @@ public partial class MainWindow : Window
                     return true;
                 }
                 ToggleFullscreen();
+                return true;
+            case Key.Escape when GuideView.Visibility == Visibility.Visible:
+                CloseGuide();
                 return true;
             case Key.Escape when _pipWindow is { } pipEsc && pipEsc.IsPipFullscreen:
                 pipEsc.TogglePipFullscreen();
