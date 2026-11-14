@@ -1000,7 +1000,10 @@ public partial class MainWindow : Window
         // V1.4：有频道但被过滤得一个不剩时，给出明确反馈而不是空白列表
         NoMatchText.Visibility = _all.Count > 0 && filteredCount == 0
             ? Visibility.Visible : Visibility.Collapsed;
-        BuildGuide();                  // 节目表打开时跟随分组/搜索同步重建（关闭时内部直接返回）
+        // v1.4.22 加固（节目表独立功能移植时一并带回）：刷新点无守卫，异常会穿出
+        // 调用方（启动链）触发全局弹窗；只记日志，不影响列表本身的过滤结果。
+        try { BuildGuide(); }                  // 节目表打开时跟随分组/搜索同步重建（关闭时内部直接返回）
+        catch (Exception ex) { AppLog.Error($"ApplyFilter BuildGuide failed: {ex.Message}"); }
     }
 
     private void SelectInList(ChannelItem ch)
@@ -1611,11 +1614,17 @@ public partial class MainWindow : Window
     /// <summary>EPG 每分钟刷新本地正在播放显示：节目跨档后“正在播放”保持准确，OSD 可见时同步刷新</summary>
     private void OnEpgRefreshTick()
     {
-        if (_closing || _current is null) return;
-        ShowEpgForChannel(_current);
-        BuildGuide();                  // 节目表打开时同步重建（关闭时内部直接返回）
-        if (ChannelOsd.Visibility == Visibility.Visible && _digitBuf.Length == 0)
-            ShowChannelOsd(_current);   // 顺带重置隐藏计时，刷新后重新计 3 秒
+        // v1.4.22 加固（节目表独立功能移植时一并带回）：定时器回调无 try/catch，
+        // 异常会直达全局弹窗（每分钟一次）；整段包住，只记日志，下次 tick 继续刷新。
+        try
+        {
+            if (_closing || _current is null) return;
+            ShowEpgForChannel(_current);
+            BuildGuide();                  // 节目表打开时同步重建（关闭时内部直接返回）
+            if (ChannelOsd.Visibility == Visibility.Visible && _digitBuf.Length == 0)
+                ShowChannelOsd(_current);   // 顺带重置隐藏计时，刷新后重新计 3 秒
+        }
+        catch (Exception ex) { AppLog.Error($"EPG refresh tick failed: {ex.Message}"); }
     }
 
     /// <summary>频道 Logo 异步加载：内存/磁盘缓存命中即显示，失败留在首字符占位</summary>
