@@ -1026,6 +1026,10 @@ public partial class MainWindow : Window
         await EnsureEngineAsync();
         if (_player is null || _libvlc is null) return;
 
+        // 停止时已断开视频面（黑屏），重播前先挂回，否则只有声音没有画面；
+        // 小窗效果进行中不挂（主窗口应保持黑屏）。
+        if (!_pipEffectActive && VideoView.MediaPlayer != _player) VideoView.MediaPlayer = _player;
+
         _switchDebounce.Stop();               // 新播放请求使挂起的防抖播放失效
         _pendingPlay = null;
         if (!watchdogReconnect)              // 用户主动播放：看门狗计数与失败计数重新开始
@@ -1138,7 +1142,14 @@ public partial class MainWindow : Window
     /// <summary>播放/暂停切换</summary>
     private void TogglePlayPause()
     {
-        if (_player is null || _current is null) return;
+        if (_player is null) return;
+        if (_current is null)
+        {
+            // 停止后按播放/暂停（按钮或空格）：重播当前选中的频道；旧代码直接 return，
+            // 停止后播放键是死的，再按也不会恢复播放。
+            if (ChannelList.SelectedItem is ChannelItem ch) _ = PlayAsync(ch);
+            return;
+        }
         if (_isPaused)
         {
             _player.Play();
@@ -1179,13 +1190,18 @@ public partial class MainWindow : Window
         {
             try { lock (_mainPlayerLock) { if (seqAtStop == _playSeq) playerToStop.Stop(); } } catch { }
         });
+        // 停止后断开视频面：_player.Stop() 只停流，VideoView 的原生 STATIC 子窗口
+        // （LibVLCSharp.WPF VideoHwndHost，窗口类 "static"）仍挂着，libvlc 停掉 vout 后
+        // 它只剩默认浅色底（HWND 空域盖住了 WPF 的黑色背景），整页变白；断开后露出
+        // 黑色背景恢复黑屏，与 ApplyPipMainEffect 同款做法。重播时由 PlayAsync 重新挂回。
+        try { VideoView.MediaPlayer = null; } catch { }
         try
         {
             _isPaused = false;
             ClearPlayingChannel();          // V1.4：取消列表播放高亮
             Title = "星辰直播";             // V1.4：标题栏恢复
-            BtnPlayPause.Content = "⏸";
-            FsPlayPause.Content = "⏸";
+            BtnPlayPause.Content = "▶";     // 已停止：显示播放图标，按下可恢复播放
+            FsPlayPause.Content = "▶";
             SeekBar.Value = 0;
             TimeText.Text = "00:00";
             DurationText.Text = "--:--";
