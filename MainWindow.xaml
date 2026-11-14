@@ -310,7 +310,7 @@
                                             </Style>
                                         </TextBlock.Style>
                                     </TextBlock>
-                                    <ProgressBar Height="3" Margin="0,3,0,0" Minimum="0" Maximum="1" Value="{Binding NowProgress}"
+                                    <ProgressBar Height="3" Margin="0,3,0,0" Minimum="0" Maximum="1" Value="{Binding NowProgress, Mode=OneWay}"
                                                  Foreground="{DynamicResource AccentBrush}" Background="{DynamicResource BorderBrush}" BorderThickness="0">
                                         <ProgressBar.Style>
                                             <Style TargetType="ProgressBar">
