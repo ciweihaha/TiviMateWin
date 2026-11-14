@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
@@ -263,10 +264,8 @@ public partial class MainWindow : Window
     // 数字键换台（V1.4）：输入缓冲 + 超时确认；匹配规则在 DigitTuner（纯逻辑可自测）
     private string _digitBuf = "";
     private readonly DispatcherTimer _digitTimer = new() { Interval = TimeSpan.FromMilliseconds(1200) };
-    // 换台 OSD（V1.4）：右上角频道号+名称+当前节目卡片，3 秒自动隐藏
+    // 换台信息条（V1.4）：左下角频道名 + 正在播放 / 稍后播放卡片，3 秒自动隐藏
     private readonly DispatcherTimer _osdHideTimer = new() { Interval = TimeSpan.FromSeconds(3) };
-    // OSD 台标异步加载序号：换台很快时旧图请求回来不再覆盖新频道
-    private int _osdLogoSeq;
     // EPG 时效刷新（V1.4）：每分钟刷新本地正在播放显示，避免长时间停留时节目过期
     private readonly DispatcherTimer _epgRefreshTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     // 当前处于播放态的列表项引用（列表高亮用；AdoptChannels 整体替换列表后按 Url 恢复）
@@ -1026,6 +1025,10 @@ public partial class MainWindow : Window
         await EnsureEngineAsync();
         if (_player is null || _libvlc is null) return;
 
+        // 停止时已断开视频面（黑屏），重播前先挂回，否则只有声音没有画面；
+        // 小窗效果进行中不挂（主窗口应保持黑屏）。
+        if (!_pipEffectActive && VideoView.MediaPlayer != _player) VideoView.MediaPlayer = _player;
+
         _switchDebounce.Stop();               // 新播放请求使挂起的防抖播放失效
         _pendingPlay = null;
         if (!watchdogReconnect)              // 用户主动播放：看门狗计数与失败计数重新开始
@@ -1045,7 +1048,7 @@ public partial class MainWindow : Window
         PlayState.Text = "连接中…";
         EmptyState.Visibility = Visibility.Collapsed;
         ShowOsd();
-        ShowChannelOsd(ch);   // V1.4：换台 OSD（频道号+名称+当前节目）
+        ShowChannelOsd(ch);   // V1.4：换台信息条（频道名 + 来源徽标 + 正在播放 / 稍后播放）
         _isPaused = false;
         BtnPlayPause.Content = "⏸";
         FsPlayPause.Content = "⏸";
@@ -1138,7 +1141,14 @@ public partial class MainWindow : Window
     /// <summary>播放/暂停切换</summary>
     private void TogglePlayPause()
     {
-        if (_player is null || _current is null) return;
+        if (_player is null) return;
+        if (_current is null)
+        {
+            // 停止后按播放/暂停（按钮或空格）：重播当前选中的频道；旧代码直接 return，
+            // 停止后播放键是死的，再按也不会恢复播放。
+            if (ChannelList.SelectedItem is ChannelItem ch) _ = PlayAsync(ch);
+            return;
+        }
         if (_isPaused)
         {
             _player.Play();
@@ -1179,13 +1189,18 @@ public partial class MainWindow : Window
         {
             try { lock (_mainPlayerLock) { if (seqAtStop == _playSeq) playerToStop.Stop(); } } catch { }
         });
+        // 停止后断开视频面：_player.Stop() 只停流，VideoView 的原生 STATIC 子窗口
+        // （LibVLCSharp.WPF VideoHwndHost，窗口类 "static"）仍挂着，libvlc 停掉 vout 后
+        // 它只剩默认浅色底（HWND 空域盖住了 WPF 的黑色背景），整页变白；断开后露出
+        // 黑色背景恢复黑屏，与 ApplyPipMainEffect 同款做法。重播时由 PlayAsync 重新挂回。
+        try { VideoView.MediaPlayer = null; } catch { }
         try
         {
             _isPaused = false;
             ClearPlayingChannel();          // V1.4：取消列表播放高亮
             Title = "星辰直播";             // V1.4：标题栏恢复
-            BtnPlayPause.Content = "⏸";
-            FsPlayPause.Content = "⏸";
+            BtnPlayPause.Content = "▶";     // 已停止：显示播放图标，按下可恢复播放
+            FsPlayPause.Content = "▶";
             SeekBar.Value = 0;
             TimeText.Text = "00:00";
             DurationText.Text = "--:--";
@@ -1510,9 +1525,12 @@ public partial class MainWindow : Window
     private void HandleDigit(char d)
     {
         _digitBuf = DigitTuner.AppendDigit(_digitBuf, d);
-        OsdNumber.Text = _digitBuf;
-        OsdName.Text = "输入频道号…";
-        OsdEpg.Text = "";
+        OsdName.Text = _digitBuf;
+        OsdNow.Text = "输入频道号…";
+        OsdNow.Visibility = Visibility.Visible;
+        OsdNowProgress.Visibility = Visibility.Collapsed;
+        OsdNext.Visibility = Visibility.Collapsed;
+        OsdSourceBadge.Visibility = Visibility.Collapsed;
         ChannelOsd.Visibility = Visibility.Visible;
         _osdHideTimer.Stop();
         _osdHideTimer.Start();
@@ -1536,9 +1554,11 @@ public partial class MainWindow : Window
         var ch = DigitTuner.Match(_all, buf);
         if (ch is null)
         {
-            OsdNumber.Text = buf;
             OsdName.Text = $"无 {buf} 号频道";
-            OsdEpg.Text = "";
+            OsdNow.Visibility = Visibility.Collapsed;
+            OsdNowProgress.Visibility = Visibility.Collapsed;
+            OsdNext.Visibility = Visibility.Collapsed;
+            OsdSourceBadge.Visibility = Visibility.Collapsed;
             ChannelOsd.Visibility = Visibility.Visible;
             _osdHideTimer.Stop();
             _osdHideTimer.Start();
@@ -1551,46 +1571,59 @@ public partial class MainWindow : Window
         _ = PlayAsync(ch);
     }
 
-    /// <summary>换台 OSD：右上角频道号 + 名称 + 当前节目，3 秒自动隐藏（数字输入中不覆盖）</summary>
+    /// <summary>换台信息条（v1.4.25）：左下角频道名大字 + 来源徽标 + 正在播放 / 稍后播放，
+    /// 3 秒自动隐藏（数字输入中不覆盖）；无 EPG 数据时只显示频道名，不编节目名。</summary>
     private void ShowChannelOsd(ChannelItem ch)
     {
         if (_digitBuf.Length > 0) return;
-        // 2026-11-14 1.4.19：横幅边距按视频区尺寸自适应——电视 HDMI 常有 overscan 裁边，
-        // 固定 32px 在 4K 电视上不够，横幅顶部会被切掉一半。顶边距取视频区高度的 6%
-        //（不小于 48px），右缘取宽度的 2%（不小于 32px），保证横幅完整落在屏幕内。
+        // 左下角：左缘取视频区宽度的 2%（不小于 32px），底边距取高度的 6%（不小于 48px），
+        // 电视 overscan 裁边时横幅完整落在屏幕内；全屏时再抬高 72px，避开底部控制浮层。
         var vh = VideoView.ActualHeight;
         var vw = VideoView.ActualWidth;
-        var osdTop = vh > 0 ? Math.Max(48.0, vh * 0.06) : 48.0;
-        var osdRight = vw > 0 ? Math.Max(32.0, vw * 0.02) : 32.0;
-        ChannelOsd.Margin = new Thickness(0, osdTop, osdRight, 0);
-        OsdNumber.Text = ch.Number > 0 ? ch.Number.ToString() : "";
+        var osdLeft = vw > 0 ? Math.Max(32.0, vw * 0.02) : 32.0;
+        var osdBottom = vh > 0 ? Math.Max(48.0, vh * 0.06) : 48.0;
+        if (_fullscreen) osdBottom += 72;
+        ChannelOsd.Margin = new Thickness(osdLeft, 0, 0, osdBottom);
         OsdName.Text = ch.Name;
+        // 来源徽标：流地址 host 是字面 IP 时才显示（IPv4→IPV4，IPv6→IPV6），域名不编。
+        var badge = SourceBadge(ch.Url);
+        OsdSourceText.Text = badge ?? "";
+        OsdSourceBadge.Visibility = badge is null ? Visibility.Collapsed : Visibility.Visible;
         var now = DateTime.Now;
-        var cur = GetPrograms(ch).FirstOrDefault(p => p.Start <= now && now < p.Stop);
-        OsdEpg.Text = cur != null ? $"正在播放 {cur.TimeRange}  {cur.Title}" : "";
-        // OSD 台标：先显示首字符占位，有 Logo 地址时异步取图（复用 LogoService 三级缓存）；
-        // 序号守卫：换台很快时旧图请求回来不再覆盖新频道，取图失败时占位保持显示。
-        OsdLogoInitial.Text = ch.Initial;
-        OsdLogoImg.Source = null;
-        OsdLogoFallback.Visibility = Visibility.Visible;
-        if (!string.IsNullOrWhiteSpace(ch.Logo))
+        var progs = GetPrograms(ch);
+        var cur = progs.FirstOrDefault(p => p.Start <= now && now < p.Stop);
+        if (cur != null)
         {
-            var seq = ++_osdLogoSeq;
-            _ = LoadOsdLogoAsync(ch.Logo, seq);
+            OsdNow.Text = $"正在播放：{cur.Title}";
+            OsdNow.Visibility = Visibility.Visible;
+            var total = (cur.Stop - cur.Start).TotalMinutes;
+            var progress = total > 0 ? Math.Clamp((now - cur.Start).TotalMinutes / total, 0, 1) : 0;
+            OsdNowProgress.Value = progress;
+            OsdNowProgress.Visibility = Visibility.Visible;
         }
+        else
+        {
+            OsdNow.Visibility = Visibility.Collapsed;
+            OsdNowProgress.Visibility = Visibility.Collapsed;
+        }
+        var next = progs.FirstOrDefault(p => p.Start > now);
+        if (next != null)
+        {
+            OsdNext.Text = $"稍后播放：{next.Title}";
+            OsdNext.Visibility = Visibility.Visible;
+        }
+        else OsdNext.Visibility = Visibility.Collapsed;
         ChannelOsd.Visibility = Visibility.Visible;
         _osdHideTimer.Stop();
         _osdHideTimer.Start();
     }
 
-    /// <summary>OSD 台标异步加载：序号已变（又换了台）或 Logo 取失败时不碰界面，占位保持显示。
-    /// 2026-11-14 1.4.19：取到图后不再隐藏首字符占位——有的台标图是透明/空白底，
-    /// 藏掉占位后横幅里只剩空黑框；占位留作垫底，图不透明时会盖住它，透明图则透出首字符，台标区永不为空。</summary>
-    private async Task LoadOsdLogoAsync(string url, int seq)
+    /// <summary>来源徽标：流地址 host 是字面 IP 时返回 IPV4/IPV6，域名返回 null（不编）。</summary>
+    private static string? SourceBadge(string url)
     {
-        var bmp = await LogoService.GetAsync(url);
-        if (seq != _osdLogoSeq || bmp is null) return;
-        OsdLogoImg.Source = bmp;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
+        if (!IPAddress.TryParse(uri.Host, out var ip)) return null;
+        return ip.AddressFamily == AddressFamily.InterNetwork ? "IPV4" : "IPV6";
     }
 
     /// <summary>标记正在播放的列表项（左侧蓝色指示条）；旧项取消高亮</summary>
