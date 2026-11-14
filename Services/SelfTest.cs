@@ -3,6 +3,8 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Windows;   // SystemParameters（窗口位置校验自测用，无界面可访问）
+using System.Windows.Controls;   // 绑定回归自测：ProgressBar
+using System.Windows.Data;   // 绑定回归自测：Binding
 using LibVLCSharp.Shared;
 using TiviMateWin.Models;
 
@@ -64,6 +66,28 @@ public static class SelfTest
             lines.Add(crlf.Count == 1 && crlf[0].Name == "频道A" ? "PASS CRLF兼容" : "FAIL CRLF");
             var cr = M3uParser.Parse("#EXTM3U\r#EXTINF:-1,频道B\rhttp://b.m3u8\r");
             lines.Add(cr.Count == 1 && cr[0].Name == "频道B" ? "PASS 孤立CR兼容" : "FAIL 孤立CR");
+
+            // --- 绑定回归（v1.4.20 启动崩溃）---
+            // ProgressBar.Value 默认 TwoWay；ChannelItem.NowProgress 只有 private setter，
+            // TwoWay 绑定只读属性会在行容器生成时抛 InvalidOperationException，
+            // v1.4.20 启动时每行弹一次、窗口加载不完直接退出。修复后 XAML 用 Mode=OneWay；
+            // 这里直接复现该绑定机制：OneWay 必须能正常取值。
+            try
+            {
+                var bindItem = new ChannelItem { Name = "测试", Url = "http://x" };
+                bindItem.SetNowProgram("测试节目", 0.5);
+                var bar = new ProgressBar { Minimum = 0, Maximum = 1 };
+                bar.SetBinding(ProgressBar.ValueProperty,
+                    new Binding("NowProgress") { Source = bindItem, Mode = BindingMode.OneWay });
+                bar.GetBindingExpression(ProgressBar.ValueProperty)?.UpdateTarget();
+                lines.Add(Math.Abs(bar.Value - 0.5) < 0.001
+                    ? "PASS 绑定回归-只读进度 OneWay 绑定正常取值"
+                    : $"FAIL 绑定回归-只读进度 OneWay 取值异常 实际={bar.Value}");
+            }
+            catch (Exception ex)
+            {
+                lines.Add("FAIL 绑定回归-只读进度 OneWay 绑定抛异常: " + ex.Message);
+            }
 
             // --- M3U tvg-id 解析 ---
             var tvg = M3uParser.Parse("#EXTM3U\n#EXTINF:-1 tvg-id=\"cctv1\" group-title=\"央视\",CCTV-1\nhttp://c.m3u8");
