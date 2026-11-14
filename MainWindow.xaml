@@ -313,30 +313,26 @@
 
             <lvc:VideoView x:Name="VideoView" Grid.Row="0" Grid.Column="0" Background="Black" Focusable="False"/>
 
-            <!-- 换台 OSD（V1.4）：频道号 + 名称 + 当前节目，右上角半透明卡片，3 秒自动隐藏 -->
-            <!-- 2026-11-14 台标遮挡修：Margin 上/右各留 32px 安全边距；横幅内加 40px 台标（数字＋台标＋台名同显） -->
-            <!-- 2026-11-14 1.4.19：XAML 默认边距加大到 48px；代码里再按视频区尺寸自适应（见 ShowChannelOsd），电视 overscan 裁边时横幅不再被切 -->
-            <Border x:Name="ChannelOsd" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Right" VerticalAlignment="Top"
-                    Margin="0,48,48,0" Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
-                    CornerRadius="10" Padding="18,12" Visibility="Collapsed" IsHitTestVisible="False">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock x:Name="OsdNumber" Text="" FontSize="34" FontWeight="Bold" Foreground="#FF4FA3E3"
-                               VerticalAlignment="Center" MinWidth="40" TextAlignment="Center"/>
-                    <!-- OSD 台标：首字符占位 + 异步图（复用 LogoService；无 Logo 时只显示占位） -->
-                    <Grid Width="40" Height="40" VerticalAlignment="Center" Margin="12,0,0,0">
-                        <Border x:Name="OsdLogoFallback" CornerRadius="6" Background="#26808FA0">
-                            <TextBlock x:Name="OsdLogoInitial" Text="" FontSize="16" FontWeight="Bold"
-                                       Foreground="#FFE8EDF2"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <!-- 换台信息条（v1.4.25）：按参考图——左下角半透明卡片，频道名大字 + 来源徽标 +
+                 正在播放 / 稍后播放，3 秒自动隐藏；换台时显示（见 ShowChannelOsd），无 EPG 时只显示频道名 -->
+            <Border x:Name="ChannelOsd" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                    Margin="48,0,0,48" Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
+                    CornerRadius="10" Padding="18,14" Visibility="Collapsed" IsHitTestVisible="False">
+                <StackPanel MaxWidth="560">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock x:Name="OsdName" Text="" FontSize="28" FontWeight="Bold" Foreground="#FFE8EDF2"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <Border x:Name="OsdSourceBadge" CornerRadius="4" Background="#2E7D32" Padding="8,3" Margin="12,0,0,0"
+                                VerticalAlignment="Center" Visibility="Collapsed">
+                            <TextBlock x:Name="OsdSourceText" Text="" FontSize="12" FontWeight="SemiBold" Foreground="White"/>
                         </Border>
-                        <Image x:Name="OsdLogoImg" Width="40" Height="40" Stretch="Uniform"/>
-                    </Grid>
-                    <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="OsdName" Text="" FontSize="17" FontWeight="SemiBold" Foreground="#FFE8EDF2"
-                                   MaxWidth="320" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock x:Name="OsdEpg" Text="" FontSize="12" Foreground="#FF9FB3C8" Margin="0,2,0,0"
-                                   MaxWidth="320" TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
+                    <TextBlock x:Name="OsdNow" Text="" FontSize="14" Foreground="#FFE8EDF2" Margin="0,8,0,0"
+                               TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
+                    <ProgressBar x:Name="OsdNowProgress" Height="4" Margin="0,6,0,0" Minimum="0" Maximum="1"
+                                 Foreground="{DynamicResource AccentBrush}" Visibility="Collapsed"/>
+                    <TextBlock x:Name="OsdNext" Text="" FontSize="14" Foreground="#FF9FB3C8" Margin="0,6,0,0"
+                               TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
                 </StackPanel>
             </Border>
 
