@@ -1007,8 +1007,9 @@ public partial class MainWindow : Window
         await EnsureEngineAsync();
         if (_player is null || _libvlc is null) return;
 
-        // 停止时已断开视频面（黑屏），重播前先挂回，否则只有声音没有画面；
-        // 小窗效果进行中不挂（主窗口应保持黑屏）。
+        // v1.4.26：停止时 VideoView 被隐藏（防白屏，见 StopPlayback），重播前先恢复可见
+        // 再挂回视频面，否则只有声音没有画面；小窗效果进行中不恢复不挂（主窗口应保持黑屏）。
+        if (!_pipEffectActive && VideoView.Visibility != Visibility.Visible) VideoView.Visibility = Visibility.Visible;
         if (!_pipEffectActive && VideoView.MediaPlayer != _player) VideoView.MediaPlayer = _player;
 
         _switchDebounce.Stop();               // 新播放请求使挂起的防抖播放失效
@@ -1128,7 +1129,14 @@ public partial class MainWindow : Window
         {
             // 停止后按播放/暂停（按钮或空格）：重播当前选中的频道；旧代码直接 return，
             // 停止后播放键是死的，再按也不会恢复播放。
+            // v1.4.26：选中项可能为空（列表刷新后选择丢失）时，退到上次播放的频道
+            // （_config.ActiveChannelUrl，停止时不清），再按播放键一定能恢复。
             if (ChannelList.SelectedItem is ChannelItem ch) _ = PlayAsync(ch);
+            else if (!string.IsNullOrEmpty(_config.ActiveChannelUrl))
+            {
+                var last = _all.FirstOrDefault(c => c.Url == _config.ActiveChannelUrl);
+                if (last != null) { SelectInList(last); _ = PlayAsync(last); }
+            }
             return;
         }
         if (_isPaused)
@@ -1171,11 +1179,14 @@ public partial class MainWindow : Window
         {
             try { lock (_mainPlayerLock) { if (seqAtStop == _playSeq) playerToStop.Stop(); } } catch { }
         });
-        // 停止后断开视频面：_player.Stop() 只停流，VideoView 的原生 STATIC 子窗口
-        // （LibVLCSharp.WPF VideoHwndHost，窗口类 "static"）仍挂着，libvlc 停掉 vout 后
-        // 它只剩默认浅色底（HWND 空域盖住了 WPF 的黑色背景），整页变白；断开后露出
-        // 黑色背景恢复黑屏，与 ApplyPipMainEffect 同款做法。重播时由 PlayAsync 重新挂回。
+        // v1.4.26：只断开 MediaPlayer 不够——VideoView.MediaPlayer = null 只清 libvlc
+        // 的 Hwnd 指针（VideoView.cs：mediaPlayer.Hwnd = IntPtr.Zero），VideoHwndHost
+        // 的原生 STATIC 子窗口本身不会被销毁；libvlc 停掉 vout 后它只剩默认浅色底，
+        // HWND 空域盖住 WPF 黑色背景，停播仍是白屏——这就是 v1.4.25 修复没起作用的原因。
+        // 必须把 VideoView 整个隐藏（HwndHost 会随之隐藏子 HWND），露出 WPF 黑色背景
+        // 才真正黑屏。重播时由 PlayAsync 恢复可见（重挂视频面前先恢复）。
         try { VideoView.MediaPlayer = null; } catch { }
+        try { VideoView.Visibility = Visibility.Hidden; } catch { }
         try
         {
             _isPaused = false;
@@ -1269,7 +1280,12 @@ public partial class MainWindow : Window
         try
         {
             if (ratio == "拉伸") { _player.Scale = 0; _player.AspectRatio = ""; }
-            else if (string.IsNullOrEmpty(ratio)) { _player.Scale = 1; _player.AspectRatio = ""; }
+            // v1.4.26：原始（空）之前用 Scale=1（libvlc 里是 1:1 像素映射，不是自适应），
+            // 与“16:9/4:3/21:9”分支的 Scale=0 不一致；Scale=0 才是文档说的“自适应输出窗口”，
+            // 与具体比例分支同款写法，原始比例贴合窗口、不拉伸不压扁。用户截图的 2.39:1 内容
+            // 是 CCTV-4 播的宽银幕节目本身带进 16:9 信号里的黑边，不是应用拉伸——应用不改尺寸，
+            // 只把这个不一致修掉，保证以后进设置保存后画面仍是正确的自适应。
+            else if (string.IsNullOrEmpty(ratio)) { _player.Scale = 0; _player.AspectRatio = ""; }
             else { _player.Scale = 0; _player.AspectRatio = ratio; }
         }
         catch (Exception ex) { AppLog.Error($"apply aspect ratio failed: {ex.Message}"); }
@@ -1401,6 +1417,10 @@ public partial class MainWindow : Window
             {
                 VideoView.MediaPlayer = null;
                 VideoView.MediaPlayer = _player;
+                // v1.4.26：停止后 VideoView 是隐藏的（防白屏）；全屏切换/小窗恢复后重挂时，
+                // 有正在播的频道才恢复可见——已停止（_current 为空）时保持隐藏，否则重挂的
+                // 已停播放器的空 STATIC 窗口又会露出来变白。
+                if (_current != null) VideoView.Visibility = Visibility.Visible;
                 AppLog.Info("video surface reattached after fullscreen toggle");
                 // 1 秒后检查：重挂后仍未恢复播放（不含用户主动暂停），重播当前频道兜底
                 _reattachCheckTimer.Stop();
@@ -1553,19 +1573,13 @@ public partial class MainWindow : Window
         _ = PlayAsync(ch);
     }
 
-    /// <summary>换台信息条（v1.4.25）：左下角频道名大字 + 来源徽标 + 正在播放 / 稍后播放，
-    /// 3 秒自动隐藏（数字输入中不覆盖）；无 EPG 数据时只显示频道名，不编节目名。</summary>
+    /// <summary>换台信息条（v1.4.26）：视频中间频道名大字 + 来源徽标 + 正在播放 / 稍后播放，
+    /// 3 秒自动隐藏（数字输入中不覆盖）；无 EPG 数据时只显示频道名，不编节目名。
+    /// 信息条放在 VideoView.Content 里（覆盖窗口浮在视频之上），XAML 里已居中，
+    /// 这里不再算左下角边距；全屏/窗口态都居中。</summary>
     private void ShowChannelOsd(ChannelItem ch)
     {
         if (_digitBuf.Length > 0) return;
-        // 左下角：左缘取视频区宽度的 2%（不小于 32px），底边距取高度的 6%（不小于 48px），
-        // 电视 overscan 裁边时横幅完整落在屏幕内；全屏时再抬高 72px，避开底部控制浮层。
-        var vh = VideoView.ActualHeight;
-        var vw = VideoView.ActualWidth;
-        var osdLeft = vw > 0 ? Math.Max(32.0, vw * 0.02) : 32.0;
-        var osdBottom = vh > 0 ? Math.Max(48.0, vh * 0.06) : 48.0;
-        if (_fullscreen) osdBottom += 72;
-        ChannelOsd.Margin = new Thickness(osdLeft, 0, 0, osdBottom);
         OsdName.Text = ch.Name;
         // 来源徽标：流地址 host 是字面 IP 时才显示（IPv4→IPV4，IPv6→IPV6），域名不编。
         var badge = SourceBadge(ch.Url);
@@ -1891,6 +1905,10 @@ public partial class MainWindow : Window
             });
         }
         try { VideoView.MediaPlayer = null; } catch { }
+        // v1.4.26：断开只清 libvlc 的 Hwnd 指针，原生 STATIC 子窗口仍在；主窗口若被手动
+        // 还原（未关小窗）会露白，直接隐藏 VideoView 保证主窗口真黑。关小窗后由
+        // RestoreMainAfterPip → ReattachVideoSurface 恢复可见。
+        try { VideoView.Visibility = Visibility.Hidden; } catch { }
         PlayState.Text = "小窗播放中";
         WindowState = WindowState.Minimized;
         // 主窗口最小化后把小窗推到前台并激活：它是唯一可见的窗口，必须拿到输入焦点，否则只见画面点不动。
