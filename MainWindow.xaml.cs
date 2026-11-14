@@ -1708,7 +1708,17 @@ public partial class MainWindow : Window
     {
         // 工具栏小窗按钮：若小窗开着则关闭，否则小窗播放当前选中/正在播放的频道。
         // 全屏时小窗只是隐藏（IsVisible 为假），仍算开着，点按钮应关闭而不是重开。
-        if (_pipWindow != null) { ClosePip(); return; }
+        // 小窗已最小化时则是恢复而不是关闭——小窗不进任务栏，最小化后没有别的恢复入口。
+        if (_pipWindow != null)
+        {
+            if (_pipWindow.WindowState == WindowState.Minimized)
+            {
+                _pipWindow.WindowState = WindowState.Normal;
+                _pipWindow.Activate();
+                return;
+            }
+            ClosePip(); return;
+        }
         var ch = ChannelList.SelectedItem as ChannelItem ?? _current;
         if (ch != null) OpenPip(ch);
     }
@@ -1783,9 +1793,11 @@ public partial class MainWindow : Window
             if (_fullscreen) _pipWindow.Visibility = Visibility.Hidden;
             else _pipWindow.Activate(); // 主动激活：小窗要成为前台窗口才能接收鼠标，否则只见画面点不动
         }
-        else if (!_pipWindow.IsVisible)
+        else if (_pipWindow.WindowState == WindowState.Minimized || !_pipWindow.IsVisible)
         {
-            // 全屏隐藏的小窗只换台不显示，避免全屏时小窗弹出来盖住画面
+            // 已最小化：先恢复成普通窗口再换台，否则只换台不显示；
+            // 全屏隐藏的小窗只换台不显示，避免全屏时小窗弹出来盖住画面。
+            _pipWindow.WindowState = WindowState.Normal;
             _pipWindow.Show();
             if (_fullscreen) _pipWindow.Visibility = Visibility.Hidden;
             else _pipWindow.Activate();

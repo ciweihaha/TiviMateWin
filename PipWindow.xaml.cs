@@ -83,9 +83,32 @@ public partial class PipWindow : Window
             Height = _pipPreBounds.Height;
             _pipFullscreen = false;
         }
+        UpdateFullscreenButton();
         _pipFsCheckTimer.Stop();
         _pipFsCheckTimer.Start();
     }
+
+    /// <summary>全屏按钮图标跟随状态：正常时 □（点按全屏），全屏时 ▣（点按还原）。
+    /// 双击视频区、F11、Esc 切全屏也走 TogglePipFullscreen，图标在这里统一同步。</summary>
+    private void UpdateFullscreenButton()
+    {
+        try
+        {
+            BtnFullscreen.Content = _pipFullscreen ? "▣" : "□";
+            BtnFullscreen.ToolTip = _pipFullscreen ? "退出全屏" : "全屏";
+        }
+        catch { }
+    }
+
+    private void Minimize_Click(object sender, RoutedEventArgs e)
+    {
+        // 最小化小窗：只改 WindowState，不碰播放器/视频面（播着的流继续播，
+        // 只是窗口收起来）。恢复入口在主窗口：工具栏小窗按钮、右键“小窗播放”
+        // 都会把已最小化的小窗恢复出来（见 MainWindow），小窗本身不进任务栏。
+        WindowState = WindowState.Minimized;
+    }
+
+    private void Fullscreen_Click(object sender, RoutedEventArgs e) => TogglePipFullscreen();
 
     private void OnPipFsCheckTick()
     {
@@ -113,8 +136,8 @@ public partial class PipWindow : Window
             var x = (short)(lParam.ToInt32() & 0xFFFF);
             var y = (short)((lParam.ToInt32() >> 16) & 0xFFFF);
             var pt = PointFromScreen(new Point(x, y));
-            // 标题栏（高 30px）且不在右侧两个按钮区（2×28px）→ 按标题栏处理，系统接管拖动
-            if (pt.Y >= 0 && pt.Y < 30 && pt.X >= 0 && pt.X < ActualWidth - 56)
+            // 标题栏（高 30px）且不在右侧四个按钮区（4×28px）→ 按标题栏处理，系统接管拖动
+            if (pt.Y >= 0 && pt.Y < 30 && pt.X >= 0 && pt.X < ActualWidth - 112)
             {
                 handled = true;
                 return (IntPtr)HTCAPTION;

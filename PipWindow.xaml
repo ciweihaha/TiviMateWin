@@ -18,6 +18,12 @@
                 <Button x:Name="CloseBtn" DockPanel.Dock="Right" Width="28" Background="Transparent"
                         BorderThickness="0" Foreground="#FFE2E8EF" FontSize="13" Cursor="Hand"
                         Click="Close_Click" Content="✕" Focusable="False" ToolTip="关闭小窗"/>
+                <Button x:Name="BtnFullscreen" DockPanel.Dock="Right" Width="28" Background="Transparent"
+                        BorderThickness="0" Foreground="#FFE2E8EF" FontSize="12" Cursor="Hand"
+                        Click="Fullscreen_Click" Content="□" Focusable="False" ToolTip="全屏"/>
+                <Button x:Name="BtnMinimize" DockPanel.Dock="Right" Width="28" Background="Transparent"
+                        BorderThickness="0" Foreground="#FFE2E8EF" FontSize="13" Cursor="Hand"
+                        Click="Minimize_Click" Content="—" Focusable="False" ToolTip="最小化"/>
                 <Button x:Name="BtnPlayPause" DockPanel.Dock="Right" Width="28" Background="Transparent"
                         BorderThickness="0" Foreground="#FFE2E8EF" FontSize="12" Cursor="Hand"
                         Click="PlayPause_Click" Content="⏸" Focusable="False" ToolTip="播放/暂停"/>
