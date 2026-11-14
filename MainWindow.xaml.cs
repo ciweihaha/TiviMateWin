@@ -15,6 +15,9 @@ using LibVLCSharp.Shared;
 using TiviMateWin.Dialogs;
 using TiviMateWin.Models;
 using TiviMateWin.Services;
+// System.Windows.Media 引入后 MediaPlayer 与 LibVLCSharp.Shared.MediaPlayer 二义：
+// 本文件用的 MediaPlayer 一律是 LibVLC 的，用别名固定下来。
+using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace TiviMateWin;
 
