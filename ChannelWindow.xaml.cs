@@ -35,7 +35,8 @@ public partial class ChannelWindow : Window
         _player.EndReached += (_, _) => Dispatcher.BeginInvoke(OnChannelEndReached);
     }
 
-    /// <summary>直播流意外播完（v1.4.16）：自动重播同一频道（最多 3 次）；点播文件播完不重播。</summary>
+    /// <summary>直播流意外播完（v1.4.16）：自动重播同一频道（最多 3 次）；点播文件播完不重播。
+    //  自动重播不重置计数（Play 的 resetCounter=false），否则每次重播都清零、上限永不到、无限循环。</summary>
     private void OnChannelEndReached()
     {
         if (_closing || _channel == null) return;
@@ -44,17 +45,17 @@ public partial class ChannelWindow : Window
         {
             _endReconnects++;
             AppLog.Info($"channel window stream ended, replay #{_endReconnects}: [{_channel.Name}]");
-            Play(_channel);
+            Play(_channel, resetCounter: false);
         }
     }
 
     /// <summary>播放指定频道（串行化，避免并发调用 MediaPlayer 崩溃）</summary>
-    public async void Play(ChannelItem ch)
+    public async void Play(ChannelItem ch, bool resetCounter = true)
     {
         // F6(a)：关闭中不再启动新播放。
         if (_closing) return;
         _channel = ch;
-        _endReconnects = 0; // v1.4.16：新播放开始，播完重播计数清零
+        if (resetCounter) _endReconnects = 0; // 用户主动播放才清零；自动重播不清零，否则上限永不到
         Title = ch.Name;
         TitleText.Text = ch.Name;
         try

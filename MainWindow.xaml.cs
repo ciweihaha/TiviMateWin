@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -175,6 +176,12 @@ public partial class MainWindow : Window
     // 连续 5 次都没播起来就停手等用户，避免死流无限循环重播。
     private int _stopTicks;
     private int _autoReconnectCount;
+    // 硬件解码自动回退：硬解失败时连续失败会触发回退到软解并重启；每会话只触发一次。
+    private bool _hwFallbackDone;
+    // 持续播放判定：Playing 触发时只记时间，连续播满 10 秒才算真正播起来、清零失败计数。
+    // 旧代码在 Playing 里立即清零，硬解失败时 Playing 可能闪一下又立刻 EndReached，
+    // 计数永远清零、重连上限形同虚设、无限循环（一天 568 次重连）。
+    private DateTime _lastPlayingAt = DateTime.MinValue;
     private bool _closing;
 
     // 独立悬浮小窗（画中画）：无边框窗口，可拖到屏幕任意位置
@@ -652,9 +659,9 @@ public partial class MainWindow : Window
             _player = new MediaPlayer(_libvlc) { Volume = _config.Volume };
             _player.Playing += (_, _) => Dispatcher.BeginInvoke(() =>
             {
-                _failCount = 0;              // 播放成功：重置失败链
-                _autoReconnectCount = 0;     // v1.4.16：播起来了，自动重连计数清零
-                _recentFailedUrls.Clear();   // 网络已恢复，允许重试已失败线路
+                // 只记时间，不清零失败计数：持续播满 10 秒才算真正播起来（见看门狗），
+                // 硬解失败时 Playing 闪一下就断，立即清零会让重连上限永不到、无限循环。
+                _lastPlayingAt = DateTime.UtcNow;
                 PlayState.Text = "播放中";
                 ShowOsd();
             });
@@ -2685,11 +2692,55 @@ public partial class MainWindow : Window
         if (_closing || _isPaused || _pipEffectActive) return false;
         if (++_autoReconnectCount > 5)
         {
+            // 硬解失败回退：连续 5 次都没播起来、且当前用的是硬件解码，
+            // 很可能是硬解本身播不了这路流——自动切软解并重启（每会话一次）。
+            if (TryHardwareDecodeFallback()) return true;
             PlayState.Text = "连续失败，请手动重进";
             AppLog.Error($"auto-reconnect stopped after limit: [{ch.Name}]");
             return false;
         }
         _ = PlayAsync(ch, true);
+        return true;
+    }
+
+    /// <summary>硬件解码自动回退：连续失败且当前用硬件解码时，
+    //  很可能是硬解播不了这路流（实测：同一央视直播源，软解可连播 30 秒无中断，
+    //  硬解 --avcodec-hw=any 下播几秒就断、无限重连）。切为软件解码并重启应用，
+    //  重启后引擎按新设置创建，即可正常播放。每会话只触发一次。</summary>
+    private bool TryHardwareDecodeFallback()
+    {
+        if (_closing || _hwFallbackDone) return false;
+        if (!_config.HardwareDecode) return false;   // 已是软解：不是硬解问题，不回退
+        _hwFallbackDone = true;
+        _config.HardwareDecode = false;
+        _config.Save();
+        AppLog.Error("hardware decode failed repeatedly, switched to software decode and restarting");
+        PlayState.Text = "硬件解码失败，已切换为软件解码，正在重启…";
+        MessageBox.Show(this,
+            "硬件解码播放失败，已自动切换为软件解码。\n点击确定重启应用，重启后即可正常播放。",
+            "已切换为软件解码", MessageBoxButton.OK, MessageBoxImage.Information);
+        var restarted = false;
+        try
+        {
+            var exe = Environment.ProcessPath
+                ?? Process.GetCurrentProcess().MainModule?.FileName;
+            if (!string.IsNullOrEmpty(exe))
+            {
+                Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
+                restarted = true;
+            }
+        }
+        catch (Exception ex) { AppLog.Error($"restart after hw fallback failed: {ex.Message}"); }
+        if (restarted)
+        {
+            Application.Current.Shutdown();
+        }
+        else
+        {
+            // 重启失败时不退出：留住窗口，让用户手动重启应用即可生效。
+            PlayState.Text = "硬件解码失败，已切换为软件解码，请手动重启应用";
+            AppLog.Error("restart after hw fallback failed, please restart manually");
+        }
         return true;
     }
 
@@ -2710,6 +2761,7 @@ public partial class MainWindow : Window
         switch (DecideRecovery(_failCount, hasBackup))
         {
             case RecoveryAction.Stop:
+                if (TryHardwareDecodeFallback()) return;
                 PlayState.Text = "连续失败，已停止自动换台";
                 AppLog.Error($"auto-skip stopped after limit: [{ch.Name}]");
                 return;
@@ -2830,6 +2882,16 @@ public partial class MainWindow : Window
         else
         {
             _stallTicks = 0;          // 播放正常前进
+            // 持续播满 10 秒才算真正播起来：清零失败链（硬解失败时 Playing 闪一下就断，
+            // 不再立即清零，避免重连上限被绕过、无限循环）。
+            if (_lastPlayingAt != DateTime.MinValue
+                && (DateTime.UtcNow - _lastPlayingAt).TotalSeconds >= 10)
+            {
+                _failCount = 0;
+                _autoReconnectCount = 0;
+                _recentFailedUrls.Clear();
+                _lastPlayingAt = DateTime.MinValue;
+            }
             // 停滞 1 分钟后仍在正常播放：流已真正恢复，看门狗计数清零
             if (_stallRetryCount > 0 && (DateTime.Now - _lastStallAt).TotalMinutes > 1)
                 _stallRetryCount = 0;
