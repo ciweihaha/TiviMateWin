@@ -23,7 +23,9 @@
 
                 <!-- 硬件解码 -->
                 <CheckBox x:Name="HwDecodeChk" Content="硬件解码（Intel 核显加速）" Foreground="#FFB9C4CE"
-                          FontSize="12" Margin="0,4,0,12" Checked="HwDecode_Changed" Unchecked="HwDecode_Changed"/>
+                          FontSize="12" Margin="0,4,0,2" Checked="HwDecode_Changed" Unchecked="HwDecode_Changed"/>
+                <TextBlock x:Name="HwDecodeHint" Text="⚠ 改动将在重启应用后生效" Foreground="#FFE8B93E" FontSize="11"
+                           Margin="0,0,0,12" Visibility="Collapsed"/>
 
                 <!-- 画面比例 -->
                 <TextBlock Text="画面比例" Foreground="#FFB9C4CE" FontSize="12" Margin="0,4,0,4"/>
