@@ -24,10 +24,13 @@ jobs:
           dotnet-version: '11.0.x'
 
       - name: Publish (win-x64 self-contained)
-        # F9：版本注入——非 tag 构建默认硬编码 1.4.1（与 csproj 的 1.4.1 一致，见残余清单；tag 构建时取 tag 名去掉前缀 v 后的版本号）。
-        # refs/tags/ 占 10 位、v 占第 11 位（0 起计），故从第 11 位截取即为纯版本号，如 v1.4.1 -> 1.4.1。
+        # F9（v1.4.27，M30）：版本号唯一来源是 csproj 的 <Version>——非 tag 构建也从
+        # csproj 读，禁止再硬编码；tag 构建时取 tag 名去掉前缀 v 后的版本号。
+        # 旧代码把非 tag 构建写死成 1.4.1，覆盖了 csproj 的 1.4.26，同一份代码三种版本号。
+        # refs/tags/ 占 10 位、v 占第 11 位（0 起计），故从第 11 位截取即为纯版本号，如 v1.4.26 -> 1.4.26。
         run: |
-          $version = "1.4.1"
+          $version = ([xml](Get-Content -Raw TiviMateWin.csproj)).SelectSingleNode('/Project/PropertyGroup/Version').InnerText
+          if (-not $version) { throw "Version not found in TiviMateWin.csproj" }
           if ($env:GITHUB_REF -like 'refs/tags/v*') { $version = $env:GITHUB_REF.Substring(11) }
           dotnet publish TiviMateWin.csproj -c Release -r win-x64 --self-contained true -o publish -p:Version=$version
 
