@@ -403,9 +403,13 @@ public class AppConfig
             }
             var plain = XtreamPassword;
             var plainOl = OpenListPassword;
-            var originalUrls = new List<string>();
+            // 按对象身份快照原始 Url：保存放后台线程时 UI 线程可能增删播放列表，
+            // 按下标恢复会把 Url 写到错位的条目上（甚至把已剥离的凭据写回别的条目）；
+            // PlaylistSource 未重写 Equals，用对象引用做键；保存期间新增的条目不在表里、
+            // 不会被误恢复，删除的条目自然失效。
+            var originalUrls = new Dictionary<PlaylistSource, string>();
             if (Playlists != null)
-                foreach (var p in Playlists) originalUrls.Add(p.Url);
+                foreach (var p in Playlists) originalUrls[p] = p.Url;
             var path = ConfigPath;
             var tmp = Path.Combine(Dir, $"config.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
             try
@@ -454,8 +458,10 @@ public class AppConfig
                 OpenListPassword = plainOl; // 同上
                 if (Playlists != null)
                 {
-                    for (var i = 0; i < Playlists.Count && i < originalUrls.Count; i++)
-                        Playlists[i].Url = originalUrls[i];
+                    foreach (var p in Playlists)
+                    {
+                        if (originalUrls.TryGetValue(p, out var orig)) p.Url = orig;
+                    }
                 }
             }
         }

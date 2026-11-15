@@ -118,24 +118,33 @@ public sealed class OpenListService : IDisposable
         catch { return null; }
     }
 
-    /// <summary>列目录：返回子文件夹与文件（失败返回空列表）</summary>
+    /// <summary>列目录：返回子文件夹与文件（失败返回空列表）。
+    /// 大目录分页拉取：单页 200 条，循环拉到不足一页为止；页数上限 50 页（1 万项），
+    /// 避免异常服务端无限返回。失败页返回已有结果（不抛错）。</summary>
     public async Task<List<Entry>> ListAsync(string path, CancellationToken ct = default)
     {
         var result = new List<Entry>();
-        using var doc = await PostApiAsync("/api/fs/list",
-            new { path, password = "", page = 1, per_page = 200, refresh = false }, ct);
-        if (doc is null) return result;
-        if (!doc.RootElement.TryGetProperty("data", out var data)) return result;
-        if (!data.TryGetProperty("content", out var content) ||
-            content.ValueKind != JsonValueKind.Array) return result;
-        foreach (var item in content.EnumerateArray())
+        const int perPage = 200;
+        const int maxPages = 50;
+        for (var page = 1; page <= maxPages; page++)
         {
-            if (item.ValueKind != JsonValueKind.Object) continue;
-            var name = item.TryGetProperty("name", out var n) ? n.GetString() : null;
-            if (string.IsNullOrEmpty(name)) continue;
-            var isDir = item.TryGetProperty("is_dir", out var d) && d.GetBoolean();
-            var size = item.TryGetProperty("size", out var s) && s.TryGetInt64(out var sz) ? sz : 0;
-            result.Add(new Entry { Name = name, IsDir = isDir, Size = size, Path = JoinPath(path, name) });
+            using var doc = await PostApiAsync("/api/fs/list",
+                new { path, password = "", page, per_page = perPage, refresh = false }, ct);
+            if (doc is null) break;
+            if (!doc.RootElement.TryGetProperty("data", out var data)) break;
+            if (!data.TryGetProperty("content", out var content) ||
+                content.ValueKind != JsonValueKind.Array) break;
+            var rawCount = content.GetArrayLength();
+            foreach (var item in content.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) continue;
+                var name = item.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (string.IsNullOrEmpty(name)) continue;
+                var isDir = item.TryGetProperty("is_dir", out var d) && d.GetBoolean();
+                var size = item.TryGetProperty("size", out var s) && s.TryGetInt64(out var sz) ? sz : 0;
+                result.Add(new Entry { Name = name, IsDir = isDir, Size = size, Path = JoinPath(path, name) });
+            }
+            if (rawCount < perPage) break;
         }
         return result;
     }
