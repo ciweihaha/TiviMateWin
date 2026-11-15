@@ -2499,6 +2499,17 @@ public partial class MainWindow : Window
     {
         if (Keyboard.FocusedElement is TextBox or MenuItem or ComboBox) return false; // 输入/菜单/下拉中不接管
 
+        // 小窗在前台时：只放行小窗全屏相关键（F11 / 无修饰 F / Esc 由下方分支转给小窗），
+        // 其余主窗口快捷键一律不接管——否则 ↑/↓ 换台、数字键、空格、S、回车会在已最小化、
+        // 已停止的主播放器上重新出声，与小窗双音轨；小窗本身没有键盘操作，也不该被抢键。
+        // （小窗不设 Owner，不在 OwnedWindows 里，OnThreadFilterMessage 的模态守卫拦不住它，
+        // 只能在这里按 _pipWindow.IsActive 守。）
+        if (_pipWindow != null && _pipWindow.IsActive)
+        {
+            var plainF = key == Key.F && Keyboard.Modifiers == ModifierKeys.None;
+            if (key != Key.F11 && !plainF && key != Key.Escape) return false;
+        }
+
         // 数字键换台（V1.4）：主键盘 + 小键盘，无修饰键时拦截
         var k = (int)key;
         if (Keyboard.Modifiers == ModifierKeys.None && k is >= (int)Key.D0 and <= (int)Key.D9)
@@ -2677,6 +2688,14 @@ public partial class MainWindow : Window
         if (_closing) return;                      // 窗口已关闭：不再操作 UI
         if (_current?.Url != failed.Url) return;    // 用户已手动换台
         if (_player is { IsPlaying: true }) return; // 事件竞态：实际已恢复播放
+        // 网盘文件不在列表里：失败后跳到列表下一台是错的（用户看的不是列表频道），
+        // 只留失败文案等用户手动处理，不自动跳台。
+        if (!_all.Any(c => c.Url == failed.Url))
+        {
+            PlayState.Text = "播放失败";
+            AppLog.Error($"auto-skip skipped (not in list): [{failed.Name}]");
+            return;
+        }
         MoveChannel(1);
     }
 
