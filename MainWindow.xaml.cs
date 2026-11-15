@@ -259,6 +259,8 @@ public partial class MainWindow : Window
     private int _epgSeq;   // F7：EPG 加载序号：只采纳最后一次请求的结果，防止旧结果覆盖新结果
     private string? _epgLoadingUrl;   // M3：正在加载的 EPG 地址（与 _epgUrl 分离：失败时 _epgUrl 不动，下次刷新可重试；加载中不重复发起）
     // EPG 频道名 → 节目列表索引：GetPrograms 的名称回退查索引，不再线性扫整个 EPG 字典；与 _epg 同步重建。
+    // 键的来源是 EPG 的 &lt;channel&gt; display-name（见 LoadEpgAsync），不是 id 的原样复制——
+    // 旧实现只抄 id 键，名字回退基本查不到；id 键仍先占位，撞名时 id 优先。
     private Dictionary<string, List<EpgProgram>> _epgByName = new(StringComparer.OrdinalIgnoreCase);
 
     // 数字键换台（V1.4）：输入缓冲 + 超时确认；匹配规则在 DigitTuner（纯逻辑可自测）
@@ -2202,9 +2204,38 @@ public partial class MainWindow : Window
             ApplyAspectRatio(_aspectRatio);
             if (_player != null) { try { _player.SetRate(_playbackRate); } catch (Exception ex) { AppLog.Error($"apply rate from settings failed: {ex.Message}"); } }
             ApplyTheme(_config.Theme);
-            // 若配置了 Xtream，加载其频道列表
-            if (!string.IsNullOrEmpty(_config.XtreamServer) && _config.Playlists.Count == 0)
-                _ = LoadXtreamAsync(_netCts.Token);
+            // Xtream：配好凭据后要让源列表里出现 Xtream 项。旧代码只在没有任何播放列表时
+            // 才加载，已有 M3U 源的用户填了 Xtream、保存后什么也不会发生（功能静默失效，
+            // 也没有任何提示）。本处：无源、当前就是 Xtream、或未激活任何源时直接加载
+            //（旧行为）；否则只保证源列表里有一条与当前服务器一致的 Xtream 项，
+            // 用户从源列表点它即可切换——切源走 LoadPlaylistAsync，FetchTextAsync 会
+            // 经 ResolveXtreamUrl 把凭据拼回 get.php 地址再拉取，无需在此处改源。
+            if (!string.IsNullOrEmpty(_config.XtreamServer) &&
+                !string.IsNullOrEmpty(_config.XtreamUsername) &&
+                !string.IsNullOrEmpty(_config.XtreamPassword))
+            {
+                if (_config.Playlists.Count == 0 || _config.ActivePlaylist == "Xtream" || _config.ActivePlaylist == null)
+                    _ = LoadXtreamAsync(_netCts.Token);
+                else
+                {
+                    var xtreamUrl = $"{_config.XtreamServer.TrimEnd('/')}/get.php?type=live&output=m3u8";
+                    var existing = _config.Playlists.FirstOrDefault(p => p.Name == "Xtream");
+                    if (existing == null)
+                    {
+                        _config.Playlists.Add(new PlaylistSource { Name = "Xtream", Url = xtreamUrl });
+                        SaveConfigAsync();
+                        RefreshPlaylistCombo();
+                        PlayState.Text = "已添加 Xtream 源，可在源列表中切换";
+                    }
+                    else if (existing.Url != xtreamUrl)
+                    {
+                        // 服务器地址改了：旧 Xtream 项的占位地址跟着更新（与 LoadXtreamAsync
+                        // 的先删后加口径一致），否则切过去拉的还是旧服务器。
+                        existing.Url = xtreamUrl;
+                        SaveConfigAsync();
+                    }
+                }
+            }
         }
     }
 
@@ -2258,13 +2289,26 @@ public partial class MainWindow : Window
         try
         {
             var xml = await FetchTextAsync(url, ct, MaxEpgBytes);
-            var epg = await Task.Run(() => EpgParser.Parse(xml), ct);
+            // display-name 表要带出 Task.Run：out var 只能活在 lambda 内，先在外层声明再在 lambda 里赋值。
+            Dictionary<string, string> displayNames = new();
+            var epg = await Task.Run(() =>
+            {
+                var parsed = EpgParser.Parse(xml, out var names);
+                displayNames = names;
+                return parsed;
+            }, ct);
             if (seq != _epgSeq) return;   // 已有更新的 EPG 请求，丢弃旧结果，不覆盖 _epg、不刷新当前频道节目
             _epgUrl = url;   // M3：仅成功后才更新 _epgUrl，失败时保持旧值，下次刷新仍会重试
             _epg = epg;
             // L7：同步重建名称索引（TryAdd：仅大小写不同的 id 碰撞时先到先得，与旧线性扫描的首个匹配一致）。
+            // 旧代码只把 id 键原样抄进名称索引，GetPrograms 用频道名查它时只有名字恰好等于
+            // 某个 id 才命中——tvg-id 为空的频道永远看不到节目。现用解析器收到的
+            // display-name → id 建索引：id 键仍先占位（名字与别台 id 撞名时 id 优先，
+            // 口径与旧实现一致），display-name 只填空缺。
             _epgByName = new Dictionary<string, List<EpgProgram>>(StringComparer.OrdinalIgnoreCase);
             foreach (var kv in epg) _epgByName.TryAdd(kv.Key, kv.Value);
+            foreach (var (name, id) in displayNames)
+                if (epg.TryGetValue(id, out var byNameList)) _epgByName.TryAdd(name, byNameList);
             AppLog.Info($"epg loaded {epg.Count} channels from {AppConfig.RedactUrlForLog(url)}");
             // 刷新当前频道节目显示
             if (_current != null) ShowEpgForChannel(_current);
