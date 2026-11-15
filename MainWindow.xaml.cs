@@ -304,6 +304,9 @@ public partial class MainWindow : Window
         _osdHideTimer.Tick += (_, _) => { _osdHideTimer.Stop(); ChannelOsd.Visibility = Visibility.Collapsed; };
         _epgRefreshTimer.Tick += (_, _) => OnEpgRefreshTick();
         _reattachCheckTimer.Tick += (_, _) => { _reattachCheckTimer.Stop(); OnReattachCheckTick(); };
+        // v1.4.27（轻微 5）：拉伸模式的 DAR 按视频区实时尺寸算，窗口尺寸变了要重算，
+        // 否则拉伸比例停留在旧尺寸上；非拉伸模式不碰，避免无意义地重设播放器参数。
+        VideoView.SizeChanged += (_, _) => { if (_aspectRatio == "拉伸") ApplyAspectRatio("拉伸"); };
 
         // 焦点守护：窗口激活/VLC原生窗口拖走焦点时，把键盘焦点还给频道列表，保证↑↓换台始终可用
         Activated += OnWindowActivated;
@@ -722,6 +725,9 @@ public partial class MainWindow : Window
         if (src is null)
         {
             EmptyState.Visibility = Visibility.Visible;
+            // v1.4.27（M28）：首跑无播放列表时也要隐藏视频面，否则原生 STATIC 子窗口
+            // 的浅色底盖住空状态，“暂无频道”和添加入口看不见、点不到。
+            ClearVideoSurface();
             PlayState.Text = "未添加播放列表";
             return;
         }
@@ -781,7 +787,17 @@ public partial class MainWindow : Window
             }
             else if (_all.Count == 0)
             {
+                // v1.4.27（M28）：源解析出 0 个频道时走 AdoptChannels 空列表——
+                // 旧代码只写状态文案，EmptyState 从不显示；空列表还会隐藏视频面，
+                // 空状态才能露出来、点得到。
+                AdoptChannels(new List<ChannelItem>());
                 PlayState.Text = "播放列表为空";
+            }
+            else if (_loadedSourceUrl == src.Url)
+            {
+                // v1.4.27：同源刷新解析出 0 个频道，旧列表保留、状态文案也要更新，
+                // 否则用户看不到任何反馈，还以为刷新成功或根本没刷新。
+                PlayState.Text = "刷新结果为空，保留旧列表";
             }
         }
         catch (OperationCanceledException)
@@ -844,6 +860,12 @@ public partial class MainWindow : Window
                 SelectInList(again);
             }
         }
+
+        // v1.4.27（M28）：空列表且无正在播的频道时隐藏视频面（黑底），空状态
+        // （AdoptChannels 上面已按 _all.Count 置 Visible）才能露出来、点得到；
+        // 有正在播的频道时不动——切源失败清列表的路径 _current 已由 ActivatePlaylist
+        // 清掉，走得到这里；同源刷新失败用缓存的路径不调 AdoptChannels。
+        if (_all.Count == 0 && _current == null) ClearVideoSurface();
     }
 
     private async Task ResumeLastAsync()
@@ -1131,11 +1153,17 @@ public partial class MainWindow : Window
             // 停止后播放键是死的，再按也不会恢复播放。
             // v1.4.26：选中项可能为空（列表刷新后选择丢失）时，退到上次播放的频道
             // （_config.ActiveChannelUrl，停止时不清），再按播放键一定能恢复。
+            // v1.4.27（轻微 8）：上次频道已随旧源被删（last 为空）时旧代码直接落空、
+            // 按钮按了没任何反馈；改为退到第一个可用频道，都没有时给状态提示。
             if (ChannelList.SelectedItem is ChannelItem ch) _ = PlayAsync(ch);
-            else if (!string.IsNullOrEmpty(_config.ActiveChannelUrl))
+            else
             {
-                var last = _all.FirstOrDefault(c => c.Url == _config.ActiveChannelUrl);
-                if (last != null) { SelectInList(last); _ = PlayAsync(last); }
+                ChannelItem? target = null;
+                if (!string.IsNullOrEmpty(_config.ActiveChannelUrl))
+                    target = _all.FirstOrDefault(c => c.Url == _config.ActiveChannelUrl);
+                target ??= _all.FirstOrDefault();
+                if (target != null) { SelectInList(target); _ = PlayAsync(target); }
+                else PlayState.Text = "没有可播放的频道，请先添加播放列表";
             }
             return;
         }
@@ -1159,6 +1187,20 @@ public partial class MainWindow : Window
     }
 
     private void BtnStop_Click(object sender, RoutedEventArgs e) => StopPlayback();
+
+    /// <summary>清空视频面（v1.4.27，M27/M28/轻微7 共用）：断开 MediaPlayer、隐藏 VideoView、
+    /// 立即隐藏换台信息条。只断开 MediaPlayer 不够——VideoView.MediaPlayer = null 只清 libvlc
+    /// 的 Hwnd 指针，原生 STATIC 子窗口仍在，停播后只剩浅色底会盖住 WPF 黑底变白屏
+    /// （见 StopPlayback 的 v1.4.26 注释）；信息条住在 VideoView.Content 的覆盖窗口里，
+    /// 不跟随 VideoView.Visibility 隐藏，不立即藏会在黑屏上再漂最多 3 秒。
+    /// 停止、切源、删源、空源都走这里，保证无频道可播时视频区是黑底、空状态可见可点；
+    /// 重播时由 PlayAsync 恢复可见并重挂视频面。</summary>
+    private void ClearVideoSurface()
+    {
+        try { _osdHideTimer.Stop(); ChannelOsd.Visibility = Visibility.Collapsed; } catch { }
+        try { VideoView.MediaPlayer = null; } catch { }
+        try { VideoView.Visibility = Visibility.Hidden; } catch { }
+    }
 
     /// <summary>停止播放：停止当前流并清空进度</summary>
     private void StopPlayback()
@@ -1185,8 +1227,9 @@ public partial class MainWindow : Window
         // HWND 空域盖住 WPF 黑色背景，停播仍是白屏——这就是 v1.4.25 修复没起作用的原因。
         // 必须把 VideoView 整个隐藏（HwndHost 会随之隐藏子 HWND），露出 WPF 黑色背景
         // 才真正黑屏。重播时由 PlayAsync 恢复可见（重挂视频面前先恢复）。
-        try { VideoView.MediaPlayer = null; } catch { }
-        try { VideoView.Visibility = Visibility.Hidden; } catch { }
+        // v1.4.27：抽到 ClearVideoSurface（切源/删源/空源共用），并顺手立即隐藏信息条
+        // （轻微 7：覆盖窗口不跟随 VideoView 隐藏，否则在黑屏上再漂最多 3 秒）。
+        ClearVideoSurface();
         try
         {
             _isPaused = false;
@@ -1279,7 +1322,11 @@ public partial class MainWindow : Window
         if (_player is null) return;
         try
         {
-            if (ratio == "拉伸") { _player.Scale = 0; _player.AspectRatio = ""; }
+            // v1.4.27（轻微 5）：拉伸真正拉伸——libvlc 里拉伸不是 Scale=0（那是自适应
+            // 贴合、不拉伸），而是把 AspectRatio 设成与输出窗口相同的比例：Scale=0 让画面
+            // 贴合窗口、DAR 被强制成窗口比例，内容横向/纵向拉满、不留黑边。旧代码把拉伸
+            // 写成与原始逐字相同，选项有名无实。
+            if (ratio == "拉伸") { _player.Scale = 0; _player.AspectRatio = WindowAspectRatio(); }
             // v1.4.26：原始（空）之前用 Scale=1（libvlc 里是 1:1 像素映射，不是自适应），
             // 与“16:9/4:3/21:9”分支的 Scale=0 不一致；Scale=0 才是文档说的“自适应输出窗口”，
             // 与具体比例分支同款写法，原始比例贴合窗口、不拉伸不压扁。用户截图的 2.39:1 内容
@@ -1289,6 +1336,23 @@ public partial class MainWindow : Window
             else { _player.Scale = 0; _player.AspectRatio = ratio; }
         }
         catch (Exception ex) { AppLog.Error($"apply aspect ratio failed: {ex.Message}"); }
+    }
+
+    /// <summary>当前视频区的宽高比（约分后 "W:H"，如 16:9）：拉伸模式的 DAR 目标。
+    /// 窗口未布局或尺寸异常时回落 16:9，避免 1:1 这类无意义的比例。</summary>
+    private string WindowAspectRatio()
+    {
+        var w = (int)Math.Round(VideoView.ActualWidth);
+        var h = (int)Math.Round(VideoView.ActualHeight);
+        if (w < 10 || h < 10) return "16:9";
+        var g = Gcd(w, h);
+        return $"{w / g}:{h / g}";
+    }
+
+    private static int Gcd(int a, int b)
+    {
+        while (b != 0) { var t = b; b = a % b; a = t; }
+        return a;
     }
 
     private void ToggleFavorite(ChannelItem ch)
@@ -1428,7 +1492,9 @@ public partial class MainWindow : Window
                 // 小窗开着时按 F11 进主全屏：主播放器是停着的，别等 1 秒检查，直接重播当前频道。
                 // （退出全屏且小窗开着时，回调跑到这里之前 ApplyPipMainEffect 已把标志置回真，
                 // 上面的 _pipEffectActive 守卫会提前返回，走不到这里，不会跟小窗效果打架）
-                if (_current != null && !_isPaused && !_player.IsPlaying)
+                // v1.4.27（轻微 6）：补上 1 秒检查同款 Buffering 守卫——缓冲中 IsPlaying 为
+                // false，慢启动流会被误判为“没恢复”而多播一次（新建 Media、重新缓冲，画面闪断）。
+                if (_current != null && !_isPaused && !_player.IsPlaying && _player.State != VLCState.Buffering)
                     _ = PlayAsync(_current);
             }
             catch (Exception ex) { AppLog.Error($"reattach video surface failed: {ex.Message}"); }
@@ -2004,15 +2070,15 @@ public partial class MainWindow : Window
         if (name == _config.ActivePlaylist) { RefreshPlaylistCombo(); return; }
         _config.ActivePlaylist = name;
         SaveConfigAsync();
-        // 切换源：停掉旧频道（后台 Stop，避免 VLC 阻塞 UI 导致卡死），清空播放状态。
+        // 切换源：停掉旧频道并清空视频面。v1.4.27（M27）：旧代码只做后台 Stop，
+        // 不断开 MediaPlayer 也不隐藏 VideoView，新源为空/加载失败时白屏一直留着；
+        // 与停止按钮走同一套清理（StopPlayback：后台 Stop + 代号校验 + 清视频面），
+        // 再补一次 ClearVideoSurface 覆盖 _player 为空的边界；新源播起来时 PlayAsync
+        // 会恢复可见、重挂视频面。
         // v1.4.15 2-4：代号校验——切源后若已播新频道（代号变了），迟到的 Stop 直接跳过，
         // 否则会停掉新起的流；此处无 1 秒重播兜底，停掉就黑屏无声。
-        var p = _player;
-        if (p is { IsPlaying: true })
-        {
-            var seq = _playSeq;
-            _ = Task.Run(() => { try { lock (_mainPlayerLock) { if (seq == _playSeq) p.Stop(); } } catch { } });
-        }
+        StopPlayback();
+        ClearVideoSurface();
         _current = null;
         ClearPlayingChannel();
         Title = "星辰直播";
@@ -2031,13 +2097,11 @@ public partial class MainWindow : Window
         {
             _config.ActivePlaylist = _config.Playlists.FirstOrDefault()?.Name;
             SaveConfigAsync();
+            // v1.4.27（M27）：同 ActivatePlaylist，与停止按钮走同一套清理，
+            // 否则删掉当前源后新源为空/加载失败时白屏一直留着。
             // v1.4.15 2-4：同 ActivatePlaylist，代号校验防迟到的 Stop 停掉新流。
-            var p = _player;
-            if (p is { IsPlaying: true })
-            {
-                var seq = _playSeq;
-                _ = Task.Run(() => { try { lock (_mainPlayerLock) { if (seq == _playSeq) p.Stop(); } } catch { } });
-            }
+            StopPlayback();
+            ClearVideoSurface();
             _current = null;
             ClearPlayingChannel();
             Title = "星辰直播";

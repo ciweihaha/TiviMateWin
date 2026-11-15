@@ -66,7 +66,7 @@ Windows 桌面 IPTV 直播播放器：WPF + libVLC + .NET 11，绿色免安装�
 dotnet publish TiviMateWin.csproj -c Release -r win-x64 --self-contained true -o publish
 ```
 
-推送 `v*` 格式的 tag（如 `v1.4.1`）时，GitHub Actions 会自动构建并发布 Release。
+推送 `v*` 格式的 tag（如 `v1.4.26`）时，GitHub Actions 会自动构建并发布 Release。
 
 ## 隐私说明
 

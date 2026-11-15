@@ -60,7 +60,7 @@ Credentials are encrypted with Windows DPAPI and stored locally in `config.json`
 dotnet publish TiviMateWin.csproj -c Release -r win-x64 --self-contained true -o publish
 ```
 
-Pushing a `v*` tag (e.g. `v1.4.1`) triggers GitHub Actions to build and publish a Release automatically.
+Pushing a `v*` tag (e.g. `v1.4.26`) triggers GitHub Actions to build and publish a Release automatically.
 
 ## Privacy
 

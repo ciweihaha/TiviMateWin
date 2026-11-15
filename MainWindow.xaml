@@ -316,6 +316,12 @@
                  （ForegroundWindow）浮在视频之上。居中显示（用户要求放视频中间），3 秒自动隐藏；
                  换台时显示（见 ShowChannelOsd），无 EPG 时只显示频道名 -->
             <lvc:VideoView x:Name="VideoView" Grid.Row="0" Grid.Column="0" Background="Black" Focusable="False">
+            <!-- 覆盖层容器（v1.4.27，M29）：VideoView.Content 会被转到覆盖窗口（ForegroundWindow）
+                 浮在原生视频之上；ChannelOsd 与 FullscreenOverlay 都必须放这里。放 Grid 同级
+                 会被原生 HWND 盖住、看不见也点不到（信息条 v1.4.26 已是同款修法，浮层本轮补上）。
+                 注意：覆盖窗口不跟随 VideoView.Visibility 隐藏，停止后信息条要由代码立即藏
+                 （见 ClearVideoSurface）；浮层只在全屏时显示，不受影响。 -->
+            <Grid>
             <Border x:Name="ChannelOsd" HorizontalAlignment="Center" VerticalAlignment="Center"
                     Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
                     CornerRadius="10" Padding="18,14" Visibility="Collapsed" IsHitTestVisible="False">
@@ -336,6 +342,28 @@
                                TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
                 </StackPanel>
             </Border>
+
+            <!-- 全屏控制浮层（v1.4.27，M29）：从 Grid 同级移入 VideoView.Content，
+                 全屏时才能浮在视频之上显示、可点击；之前落在视频 HWND 矩形内，三个按钮点不到、
+                 只能靠键盘。Grid.Row/ColumnSpan 在 Content 里无意义，已去掉，改为底部贴边。 -->
+            <Border x:Name="FullscreenOverlay" Background="{DynamicResource OverlayBgBrush}"
+                    Visibility="Collapsed" VerticalAlignment="Bottom" Padding="0,10,0,10">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <TextBlock x:Name="FsNowPlaying" Text="" Foreground="{DynamicResource FgBrush}" FontSize="14"
+                               VerticalAlignment="Center" Margin="0,0,20,0" MaxWidth="360"
+                               TextTrimming="CharacterEllipsis"/>
+                    <Button x:Name="FsPlayPause" Content="⏸" Width="40" Height="36" Margin="4,0"
+                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
+                            Click="BtnPlayPause_Click" ToolTip="播放/暂停（Space）"/>
+                    <Button x:Name="FsStop" Content="⏹" Width="40" Height="36" Margin="4,0"
+                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
+                            Click="BtnStop_Click" ToolTip="停止（S）"/>
+                    <Button x:Name="FsExitFull" Content="退出全屏" Width="88" Height="36" Margin="4,0"
+                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
+                            Click="BtnFull_Click" ToolTip="退出全屏（Esc / F11）"/>
+                </StackPanel>
+            </Border>
+            </Grid>
             </lvc:VideoView>
 
             <!-- EPG 节目单面板 -->
@@ -368,25 +396,6 @@
                 <Button Content="添加播放列表" Style="{StaticResource ToolBtn}" FontSize="13" Padding="18,8"
                          Margin="0,16,0,0" HorizontalAlignment="Center" Click="BtnAdd_Click"/>
             </StackPanel>
-
-            <!-- 全屏控制浮层：鼠标移动显示，静止自动隐藏 -->
-            <Border x:Name="FullscreenOverlay" Grid.Row="0" Grid.ColumnSpan="2" Background="{DynamicResource OverlayBgBrush}"
-                    Visibility="Collapsed" VerticalAlignment="Bottom" Padding="0,10,0,10">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                    <TextBlock x:Name="FsNowPlaying" Text="" Foreground="{DynamicResource FgBrush}" FontSize="14"
-                               VerticalAlignment="Center" Margin="0,0,20,0" MaxWidth="360"
-                               TextTrimming="CharacterEllipsis"/>
-                    <Button x:Name="FsPlayPause" Content="⏸" Width="40" Height="36" Margin="4,0"
-                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
-                            Click="BtnPlayPause_Click" ToolTip="播放/暂停（Space）"/>
-                    <Button x:Name="FsStop" Content="⏹" Width="40" Height="36" Margin="4,0"
-                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
-                            Click="BtnStop_Click" ToolTip="停止（S）"/>
-                    <Button x:Name="FsExitFull" Content="退出全屏" Width="88" Height="36" Margin="4,0"
-                            Background="{DynamicResource FsBtnBgBrush}" Foreground="{DynamicResource FgBrush}" BorderThickness="0" Cursor="Hand"
-                            Click="BtnFull_Click" ToolTip="退出全屏（Esc / F11）"/>
-                </StackPanel>
-            </Border>
 
             <Border x:Name="StatusBar" Grid.Row="1" Grid.ColumnSpan="2" Background="{DynamicResource SideBgBrush}" BorderBrush="{DynamicResource BorderBrush}"
                     BorderThickness="0,1,0,0" Padding="14,7">
