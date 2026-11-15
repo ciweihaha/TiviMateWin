@@ -2331,13 +2331,20 @@ public partial class MainWindow : Window
     }
 
     /// <summary>获取频道当前/即将播出的节目</summary>
-    private List<EpgProgram> GetPrograms(ChannelItem ch)
+    private List<EpgProgram> GetPrograms(ChannelItem ch) =>
+        LookupPrograms(ch.TvgId, ch.Name, _epg, _epgByName);
+
+    /// <summary>EPG 查询（纯函数，供 SelfTest 覆盖）：先按 tvg-id 查，查不到或 id 为空时
+    /// 按频道名查回退索引。注意：tvg-id 为空的频道不能直接返回空——第 3 轮建的名称回退索引
+    /// 正是为这类频道准备的，空 id 直接 return 会让回退永远走不到（第 4 轮 R4-A）。</summary>
+    internal static List<EpgProgram> LookupPrograms(
+        string? tvgId, string name,
+        IReadOnlyDictionary<string, List<EpgProgram>> byId,
+        IReadOnlyDictionary<string, List<EpgProgram>> byName)
     {
-        var id = ch.TvgId;
-        if (string.IsNullOrEmpty(id)) return new List<EpgProgram>();
-        if (_epg.TryGetValue(id, out var list)) return list;
+        if (!string.IsNullOrEmpty(tvgId) && byId.TryGetValue(tvgId, out var list)) return list;
         // 名称回退：查预建的索引，不再线性扫整个 EPG 字典（每次换台都触发，见 L7）。
-        if (_epgByName.TryGetValue(ch.Name, out var byName)) return byName;
+        if (!string.IsNullOrEmpty(name) && byName.TryGetValue(name, out var byNameList)) return byNameList;
         return new List<EpgProgram>();
     }
 
