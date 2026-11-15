@@ -131,6 +131,30 @@ public static class SelfTest
 
             // --- EPG 空输入 ---
             lines.Add(EpgParser.Parse("").Count == 0 ? "PASS EPG空输入" : "FAIL EPG空输入");
+            // --- EPG display-name 回退与 tvg-id 大小写不敏感（深查第 3 轮） ---
+            // 旧实现不读 <channel> 的 display-name，名称回退索引里只有 id 键，
+            // tvg-id 为空的频道永远看不到节目；id 字典还是大小写敏感，
+            // M3U 的 tvg-id 与 EPG 的 channel id 大小写不一致也查不到。
+            var epgNameXml = """
+                <?xml version="1.0"?>
+                <tv>
+                  <channel id="cctv1"><display-name>CCTV-1 综合</display-name><display-name>CCTV-1</display-name></channel>
+                  <programme start="20260101120000 +0800" stop="20260101130000 +0800" channel="cctv1"><title>新闻联播</title></programme>
+                  <programme start="20260101120000 +0800" stop="20260101130000 +0800" channel="CCTV5"><title>体育新闻</title></programme>
+                </tv>
+                """;
+            var epgNamed = EpgParser.Parse(epgNameXml, out var epgNames);
+            lines.Add(epgNamed.TryGetValue("CCTV1", out var epgCiList) && epgCiList.Count == 1 && epgCiList[0].Title == "新闻联播"
+                ? "PASS EPG解析-tvg-id大小写不敏感" : "FAIL EPG解析-tvg-id大小写不敏感");
+            lines.Add(epgNamed.TryGetValue("cctv5", out var epgC5List) && epgC5List.Count == 1 && epgC5List[0].Title == "体育新闻"
+                ? "PASS EPG解析-大小写不一的id归一" : "FAIL EPG解析-大小写不一的id归一");
+            lines.Add(epgNames.TryGetValue("CCTV-1 综合", out var epgNmId) && epgNmId == "cctv1" &&
+                      epgNames.TryGetValue("CCTV-1", out var epgNmId2) && epgNmId2 == "cctv1"
+                ? "PASS EPG解析-display-name取到频道id" : "FAIL EPG解析-display-name取到频道id");
+            // 无 <channel> 元素的旧式 EPG：重载仍正常解析，display-name 表为空，不影响既有行为。
+            var epgNoChan = EpgParser.Parse(epgXml, out var epgNoChanNames);
+            lines.Add(epgNoChan.Count == 1 && epgNoChanNames.Count == 0
+                ? "PASS EPG解析-无channel元素兼容旧行为" : "FAIL EPG解析-无channel元素兼容旧行为");
 
             // --- EPG 源地址提取（深查第 10 轮；纯逻辑） ---
             // 清单首行是空行时旧实现只看 [0] 行，url-tvg 永远取不到，EPG 静默缺失。

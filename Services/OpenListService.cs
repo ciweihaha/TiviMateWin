@@ -3,7 +3,6 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -102,7 +101,14 @@ public sealed class OpenListService : IDisposable
         {
             if (string.IsNullOrEmpty(_token) && !await LoginAsync(ct)) return null;
             using var req = new HttpRequestMessage(HttpMethod.Post, _server + path);
-            req.Headers.Authorization = new AuthenticationHeaderValue("Authorization", _token);
+            // OpenList 的 Authorization 头不带任何 scheme：服务端取整个头值当 token
+            //（auth.go：token := c.GetHeader("Authorization")，与 admin token 全值比对，
+            // 否则直接喂给 ParseToken；jwt-go 还会拒收带 "bearer " 前缀的串）。
+            // 旧代码用 AuthenticationHeaderValue("Authorization", token) 发出的是
+            // "Authorization: Authorization <token>"，每次调用都 401（登录本身不要 token
+            // 所以看起来“登录成功、目录为空”）；401 重试重登后仍是同一错头，必然再 401，
+            // 网盘浏览/取直链全灭。改发裸 token。
+            req.Headers.TryAddWithoutValidation("Authorization", _token);
             req.Content = new StringContent(
                 JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             using var res = await _http.SendAsync(req, ct);

@@ -7,13 +7,23 @@ namespace TiviMateWin.Services;
 
 /// <summary>XMLTV EPG 解析器：解析节目单数据，按频道 id 索引。
 /// 用 XmlReader 流式读取每个 programme 元素（XElement.ReadFrom），
-/// 避免 XDocument 全量加载大 XML 造成的内存 spike。</summary>
+/// 避免 XDocument 全量加载大 XML 造成的内存 spike。
+/// 同一遍扫描里也收 &lt;channel id&gt; 下的 display-name（名称回退用）：
+/// 很多 M3U 的 tvg-id 为空、只有频道名，节目单里频道只有 id 没有名，
+/// 不收 display-name 时名称回退永远查不到；id 字典用 OrdinalIgnoreCase，
+/// M3U 的 tvg-id 与 EPG 的 channel id 大小写不一致时仍能匹配。</summary>
 public static class EpgParser
 {
     /// <summary>解析 XMLTV 数据，返回 频道id → 节目列表（按开始时间排序）</summary>
-    public static Dictionary<string, List<EpgProgram>> Parse(string xml)
+    public static Dictionary<string, List<EpgProgram>> Parse(string xml) => Parse(xml, out _);
+
+    /// <summary>解析 XMLTV 数据，返回 频道id → 节目列表；另出 display-name → 频道id
+    ///（同一遍扫描收集，一个频道可有多个 display-name，先到先得；无 &lt;channel&gt;
+    /// 元素时为空字典）。调用方用它建“频道名 → 节目列表”的回退索引。</summary>
+    public static Dictionary<string, List<EpgProgram>> Parse(string xml, out Dictionary<string, string> channelDisplayNames)
     {
-        var result = new Dictionary<string, List<EpgProgram>>();
+        var result = new Dictionary<string, List<EpgProgram>>(StringComparer.OrdinalIgnoreCase);
+        channelDisplayNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(xml)) return result;
 
         try
@@ -27,7 +37,25 @@ public static class EpgParser
 
             while (reader.Read())
             {
-                if (reader.NodeType != XmlNodeType.Element || reader.Name != "programme") continue;
+                if (reader.NodeType != XmlNodeType.Element) continue;
+
+                // &lt;channel id="cctv1"&gt;&lt;display-name&gt;CCTV-1 综合&lt;/display-name&gt;…：只收名字，
+                // 不建节目；programme 仍按 channel 属性归组，顺序无关（调用方在解析完成后建索引）。
+                if (reader.Name == "channel")
+                {
+                    using var channelSubtree = reader.ReadSubtree();
+                    var cel = (XElement)XElement.Load(channelSubtree);
+                    var id = ((string?)cel.Attribute("id"))?.Trim() ?? "";
+                    if (id.Length == 0) continue;
+                    foreach (var dn in cel.Elements("display-name"))
+                    {
+                        var name = dn.Value?.Trim() ?? "";
+                        if (name.Length > 0) channelDisplayNames.TryAdd(name, id);
+                    }
+                    continue;
+                }
+
+                if (reader.Name != "programme") continue;
 
                 // 用 ReadSubtree 只加载当前 programme 子树，reader 自动移到下一个节点
                 using var subtree = reader.ReadSubtree();

@@ -401,69 +401,95 @@ public class AppConfig
                 if (answer != MessageBoxResult.Yes) return false;
                 ReadFailurePending = false;
             }
-            var plain = XtreamPassword;
-            var plainOl = OpenListPassword;
-            // 按对象身份快照原始 Url：保存放后台线程时 UI 线程可能增删播放列表，
-            // 按下标恢复会把 Url 写到错位的条目上（甚至把已剥离的凭据写回别的条目）；
-            // PlaylistSource 未重写 Equals，用对象引用做键；保存期间新增的条目不在表里、
-            // 不会被误恢复，删除的条目自然失效。
-            var originalUrls = new Dictionary<PlaylistSource, string>();
-            if (Playlists != null)
-                foreach (var p in Playlists) originalUrls[p] = p.Url;
-            var path = ConfigPath;
-            var tmp = Path.Combine(Dir, $"config.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
-            try
+            // 后台保存（SaveConfigAsync / 设置保存走 Task.Run）与 UI 线程的增删播放列表/
+            // 收藏/隐藏并发时，序列化枚举集合可能抛 InvalidOperationException
+            //（"Collection was modified"）：旧代码在 try 外快照 Url、try 内序列化——
+            // try 内抛错被 catch 吃掉返回 false 静默丢改动，try 外抛错直接冲到
+            // Task.Run 成为未观察异常、保存也丢了。改为整轮重试（最多 3 次）：
+            // 快照与序列化都在 try 内，每次重拍快照、重做剥离/加密；UI 的增删是
+            // 单次 Add/Remove，瞬间即完成，重试几乎必然成功；3 次都撞上才返回 false。
+            for (var attempt = 0; attempt < 3; attempt++)
             {
-                Directory.CreateDirectory(Dir);
-                // 保存前加密密码（若已是加密值则不重复加密）；加密失败由 EncryptSecret 抛错（fail-closed）
-                if (!string.IsNullOrEmpty(plain) && !plain.StartsWith("DPAPI:", StringComparison.Ordinal))
-                    XtreamPassword = EncryptSecret(plain);
-                if (!string.IsNullOrEmpty(plainOl) && !plainOl.StartsWith("DPAPI:", StringComparison.Ordinal))
-                    OpenListPassword = EncryptSecret(plainOl);
-                // 纵深防御：序列化前剥离 Playlists[].Url 中的凭据参数，仅影响落盘内容。
-                if (Playlists != null)
+                var plain = XtreamPassword;
+                var plainOl = OpenListPassword;
+                var originalUrls = new Dictionary<PlaylistSource, string>();
+                var path = ConfigPath;
+                string? tmp = null;
+                try
                 {
-                    foreach (var p in Playlists)
+                    // 按对象身份快照原始 Url：保存放后台线程时 UI 线程可能增删播放列表，
+                    // 按下标恢复会把 Url 写到错位的条目上（甚至把已剥离的凭据写回别的条目）；
+                    // PlaylistSource 未重写 Equals，用对象引用做键；保存期间新增的条目不在表里、
+                    // 不会被误恢复，删除的条目自然失效。
+                    if (Playlists != null)
+                        foreach (var p in Playlists) originalUrls[p] = p.Url;
+                    tmp = Path.Combine(Dir, $"config.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+                    Directory.CreateDirectory(Dir);
+                    // 保存前加密密码（若已是加密值则不重复加密）；加密失败由 EncryptSecret 抛错（fail-closed）
+                    if (!string.IsNullOrEmpty(plain) && !plain.StartsWith("DPAPI:", StringComparison.Ordinal))
+                        XtreamPassword = EncryptSecret(plain);
+                    if (!string.IsNullOrEmpty(plainOl) && !plainOl.StartsWith("DPAPI:", StringComparison.Ordinal))
+                        OpenListPassword = EncryptSecret(plainOl);
+                    // 纵深防御：序列化前剥离 Playlists[].Url 中的凭据参数，仅影响落盘内容。
+                    if (Playlists != null)
                     {
-                        if (!string.IsNullOrEmpty(p.Url) &&
-                            p.Url.Contains("password=", StringComparison.OrdinalIgnoreCase))
-                            p.Url = StripCredentialQuery(p.Url);
+                        foreach (var p in Playlists)
+                        {
+                            if (!string.IsNullOrEmpty(p.Url) &&
+                                p.Url.Contains("password=", StringComparison.OrdinalIgnoreCase))
+                                p.Url = StripCredentialQuery(p.Url);
+                        }
+                    }
+                    // 原子写：先写同目录（同卷）临时文件，再 File.Replace 原子换名——与 ChannelCache 同一模式，
+                    // 不存在「旧文件写一半被截断」的窗口；替换失败时旧文件保持原样。
+                    File.WriteAllText(tmp,
+                        JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+                    if (File.Exists(path))
+                    {
+                        var bak = path + ".bak";
+                        File.Replace(tmp, path, bak);
+                        try { File.Delete(bak); } catch { }
+                    }
+                    else
+                    {
+                        File.Move(tmp, path);
+                    }
+                    return true;
+                }
+                catch (InvalidOperationException ex) when (attempt < 2)
+                {
+                    // 集合被 UI 线程并发修改：finally 已恢复内存状态，下一轮重拍快照再试。
+                    AppLog.Error($"配置保存重试 (集合被并发修改): {ex.Message}");
+                    try { if (tmp != null && File.Exists(tmp)) File.Delete(tmp); } catch { }
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error($"配置保存失败: {ex.Message}");
+                    try { if (tmp != null && File.Exists(tmp)) File.Delete(tmp); } catch { }
+                    return false;
+                }
+                finally
+                {
+                    XtreamPassword = plain; // 恢复明文，供本次会话继续使用（成功、失败都执行）
+                    OpenListPassword = plainOl; // 同上
+                    try
+                    {
+                        if (Playlists != null)
+                        {
+                            foreach (var p in Playlists)
+                            {
+                                if (originalUrls.TryGetValue(p, out var orig)) p.Url = orig;
+                            }
+                        }
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // 恢复期又被 UI 线程改了列表：个别条目的内存 Url 可能仍是剥离后
+                        // 的版本，下次保存会重拍快照、不影响落盘；不因此丢掉本次保存结果。
                     }
                 }
-                // 原子写：先写同目录（同卷）临时文件，再 File.Replace 原子换名——与 ChannelCache 同一模式，
-                // 不存在「旧文件写一半被截断」的窗口；替换失败时旧文件保持原样。
-                File.WriteAllText(tmp,
-                    JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-                if (File.Exists(path))
-                {
-                    var bak = path + ".bak";
-                    File.Replace(tmp, path, bak);
-                    try { File.Delete(bak); } catch { }
-                }
-                else
-                {
-                    File.Move(tmp, path);
-                }
-                return true;
             }
-            catch (Exception ex)
-            {
-                AppLog.Error($"配置保存失败: {ex.Message}");
-                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
-                return false;
-            }
-            finally
-            {
-                XtreamPassword = plain; // 恢复明文，供本次会话继续使用（成功、失败都执行）
-                OpenListPassword = plainOl; // 同上
-                if (Playlists != null)
-                {
-                    foreach (var p in Playlists)
-                    {
-                        if (originalUrls.TryGetValue(p, out var orig)) p.Url = orig;
-                    }
-                }
-            }
+            return false;
         }
     }
 }
