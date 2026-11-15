@@ -156,6 +156,29 @@ public static class SelfTest
             lines.Add(epgNoChan.Count == 1 && epgNoChanNames.Count == 0
                 ? "PASS EPG解析-无channel元素兼容旧行为" : "FAIL EPG解析-无channel元素兼容旧行为");
 
+            // --- EPG 查询回退（深查第 4 轮 R4-A；纯逻辑） ---
+            // GetPrograms 旧实现在 tvg-id 为空时直接返回空，第 3 轮建的名称回退索引
+            // 对这类频道永远走不到；抽出的纯函数 LookupPrograms 须先查 id、
+            // 再查名称回退，且 id 大小写不敏感（_epg 是 OrdinalIgnoreCase）。
+            var lookupById = new Dictionary<string, List<EpgProgram>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["cctv1"] = epgNamed["cctv1"]
+            };
+            var lookupByName = new Dictionary<string, List<EpgProgram>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["CCTV-1 综合"] = epgNamed["cctv1"]
+            };
+            lines.Add(MainWindow.LookupPrograms("", "CCTV-1 综合", lookupById, lookupByName).Count == 1
+                ? "PASS EPG查询-空tvg-id走名称回退" : "FAIL EPG查询-空tvg-id走名称回退");
+            lines.Add(MainWindow.LookupPrograms(null, "CCTV-1 综合", lookupById, lookupByName).Count == 1
+                ? "PASS EPG查询-null tvg-id走名称回退" : "FAIL EPG查询-null tvg-id走名称回退");
+            lines.Add(MainWindow.LookupPrograms("CCTV1", "CCTV-1 综合", lookupById, lookupByName)[0].Title == "新闻联播"
+                ? "PASS EPG查询-id大小写不敏感" : "FAIL EPG查询-id大小写不敏感");
+            lines.Add(MainWindow.LookupPrograms("cctv1", "别的频道名", lookupById, lookupByName)[0].Title == "新闻联播"
+                ? "PASS EPG查询-id命中优先于名称" : "FAIL EPG查询-id命中优先于名称");
+            lines.Add(MainWindow.LookupPrograms("cctv9", "不存在的频道", lookupById, lookupByName).Count == 0
+                ? "PASS EPG查询-无匹配返回空" : "FAIL EPG查询-无匹配返回空");
+
             // --- EPG 源地址提取（深查第 10 轮；纯逻辑） ---
             // 清单首行是空行时旧实现只看 [0] 行，url-tvg 永远取不到，EPG 静默缺失。
             lines.Add(MainWindow.ExtractEpgUrl("#EXTM3U url-tvg=\"http://epg.example.com/epg.xml\"\n#EXTINF:-1,A\nhttp://a.m3u8") == "http://epg.example.com/epg.xml"
@@ -258,6 +281,21 @@ public static class SelfTest
             var logoBig = LogoService.ReadCappedAsync(logoBigStream, LogoService.MaxLogoBytes).GetAwaiter().GetResult();
             lines.Add(logoBig == null && logoBigStream.Position <= LogoService.MaxLogoBytes + 8192
                 ? "PASS Logo限长-超限提前停读" : $"FAIL Logo限长-超限提前停读 实际消费={logoBigStream.Position}");
+
+            // --- Logo SVG 识别与光栅化（深查第 4 轮 R4-E；真实走 Svg.Skia 解码） ---
+            // WPF 的 BitmapImage 解不了 SVG，旧实现里 SVG 台标永远是首字符占位。
+            var svgBytes = System.Text.Encoding.UTF8.GetBytes("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"50\"><rect width=\"100\" height=\"50\" fill=\"red\"/></svg>");
+            var pngBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D };
+            lines.Add(LogoService.LooksLikeSvg(svgBytes) && !LogoService.LooksLikeSvg(pngBytes) && !LogoService.LooksLikeSvg(Array.Empty<byte>())
+                ? "PASS Logo SVG识别-SVG/PNG/空" : "FAIL Logo SVG识别-SVG/PNG/空");
+            var svgBom = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(System.Text.Encoding.UTF8.GetBytes("<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>")).ToArray();
+            lines.Add(LogoService.LooksLikeSvg(svgBom)
+                ? "PASS Logo SVG识别-BOM前缀" : "FAIL Logo SVG识别-BOM前缀");
+            var svgBmp = LogoService.Decode(svgBytes);
+            lines.Add(svgBmp != null && svgBmp.PixelWidth == 40
+                ? "PASS Logo SVG光栅化-40px缩略图" : "FAIL Logo SVG光栅化-40px缩略图");
+            var svgBad = LogoService.Decode(System.Text.Encoding.UTF8.GetBytes("<svg><unclosed>"));
+            lines.Add(svgBad == null ? "PASS Logo SVG光栅化-损坏文件返回空" : "FAIL Logo SVG光栅化-损坏文件返回空");
 
             // --- 缓存读写（隔离目录，不污染真实缓存） ---
             var testCacheDir = Path.Combine(Path.GetTempPath(), "tivimate_cache_selftest");

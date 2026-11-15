@@ -406,12 +406,29 @@ public class AppConfig
             //（"Collection was modified"）：旧代码在 try 外快照 Url、try 内序列化——
             // try 内抛错被 catch 吃掉返回 false 静默丢改动，try 外抛错直接冲到
             // Task.Run 成为未观察异常、保存也丢了。改为整轮重试（最多 3 次）：
-            // 快照与序列化都在 try 内，每次重拍快照、重做剥离/加密；UI 的增删是
+            // 快照与序列化都在 try 内，每次重拍快照、重做剥离；UI 的增删是
             // 单次 Add/Remove，瞬间即完成，重试几乎必然成功；3 次都撞上才返回 false。
+            // 第 4 轮 R4-B：DPAPI 加密只做一次（循环外）——加密失败是确定性错误
+            // （如用户配置文件损坏），重试多少次都一样，且会被重试 catch 当成
+            // “集合被并发修改”误记日志；加密失败直接记日志返回 false，不进重试。
+            var plain = XtreamPassword;
+            var plainOl = OpenListPassword;
+            string? encXtream;
+            string? encOl;
+            try
+            {
+                encXtream = !string.IsNullOrEmpty(plain) && !plain.StartsWith("DPAPI:", StringComparison.Ordinal)
+                    ? EncryptSecret(plain) : plain;
+                encOl = !string.IsNullOrEmpty(plainOl) && !plainOl.StartsWith("DPAPI:", StringComparison.Ordinal)
+                    ? EncryptSecret(plainOl) : plainOl;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error($"配置保存失败: {ex.Message}");
+                return false;
+            }
             for (var attempt = 0; attempt < 3; attempt++)
             {
-                var plain = XtreamPassword;
-                var plainOl = OpenListPassword;
                 var originalUrls = new Dictionary<PlaylistSource, string>();
                 var path = ConfigPath;
                 string? tmp = null;
@@ -425,11 +442,10 @@ public class AppConfig
                         foreach (var p in Playlists) originalUrls[p] = p.Url;
                     tmp = Path.Combine(Dir, $"config.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
                     Directory.CreateDirectory(Dir);
-                    // 保存前加密密码（若已是加密值则不重复加密）；加密失败由 EncryptSecret 抛错（fail-closed）
-                    if (!string.IsNullOrEmpty(plain) && !plain.StartsWith("DPAPI:", StringComparison.Ordinal))
-                        XtreamPassword = EncryptSecret(plain);
-                    if (!string.IsNullOrEmpty(plainOl) && !plainOl.StartsWith("DPAPI:", StringComparison.Ordinal))
-                        OpenListPassword = EncryptSecret(plainOl);
+                    // 加密值已在循环外算好，这里只赋值（若已是加密值则不重复加密）；
+                    // 循环内不再调 EncryptSecret，避免确定性加密失败被当成集合竞争重试。
+                    XtreamPassword = encXtream;
+                    OpenListPassword = encOl;
                     // 纵深防御：序列化前剥离 Playlists[].Url 中的凭据参数，仅影响落盘内容。
                     if (Playlists != null)
                     {
@@ -472,21 +488,12 @@ public class AppConfig
                 {
                     XtreamPassword = plain; // 恢复明文，供本次会话继续使用（成功、失败都执行）
                     OpenListPassword = plainOl; // 同上
-                    try
-                    {
-                        if (Playlists != null)
-                        {
-                            foreach (var p in Playlists)
-                            {
-                                if (originalUrls.TryGetValue(p, out var orig)) p.Url = orig;
-                            }
-                        }
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // 恢复期又被 UI 线程改了列表：个别条目的内存 Url 可能仍是剥离后
-                        // 的版本，下次保存会重拍快照、不影响落盘；不因此丢掉本次保存结果。
-                    }
+                    // 第 4 轮 R4-B：从快照字典的键恢复，不再枚举正在被 UI 线程修改的
+                    // Playlists 列表——旧代码枚举活列表，恢复中途也可能抛
+                    // InvalidOperationException（注释里承认了这一点）；快照字典是本轮
+                    // 私有的，UI 线程碰不到，枚举它不会竞争。新增条目不在表里不恢复，
+                    // 删除条目自然失效，与旧语义一致。
+                    foreach (var (p, orig) in originalUrls) p.Url = orig;
                 }
             }
             return false;

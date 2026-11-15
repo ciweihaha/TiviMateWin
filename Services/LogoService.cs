@@ -4,6 +4,8 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Windows.Media.Imaging;
+using SkiaSharp;
+using Svg.Skia;
 
 namespace TiviMateWin.Services;
 
@@ -185,10 +187,18 @@ public static class LogoService
         return ms.ToArray();
     }
 
-    /// <summary>PNG/JPG 解码为 40px 宽缩略图并 Freeze（可跨线程使用）。</summary>
-    private static BitmapImage? Decode(byte[] bytes)
+    /// <summary>PNG/JPG 解码为 40px 宽缩略图并 Freeze（可跨线程使用）。
+    /// SVG 先由 Svg.Skia 光栅化为 PNG 再解码（WPF 的 BitmapImage 解不了 SVG）；
+    /// 光栅化失败时回落到 BitmapImage，避免误判导致有图变无图。
+    /// internal：SelfTest 覆盖 SVG 光栅化用（与 ReadCappedAsync 同一口径）。</summary>
+    internal static BitmapImage? Decode(byte[] bytes)
     {
         if (bytes.Length == 0 || bytes.Length > MaxLogoBytes) return null;   // >5MB 视为异常文件
+        if (LooksLikeSvg(bytes))
+        {
+            var svgBmp = DecodeSvg(bytes);
+            if (svgBmp != null) return svgBmp;
+        }
         try
         {
             var bmp = new BitmapImage();
@@ -197,6 +207,59 @@ public static class LogoService
             bmp.CacheOption = BitmapCacheOption.OnLoad;
             bmp.DecodePixelWidth = 40;
             bmp.StreamSource = ms;
+            bmp.EndInit();
+            bmp.Freeze();
+            return bmp;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>内容嗅探是否为 SVG：跳过 UTF-8 BOM 与前导空白后，文件须以“&lt;”开头，
+    /// 且前 2KB 内出现“&lt;svg”。不依赖 URL 扩展名（部分源的地址不带扩展名，
+    /// Wikimedia 缩略图地址里 .svg 还出现在路径中间）。</summary>
+    internal static bool LooksLikeSvg(byte[] bytes)
+    {
+        var i = 0;
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) i = 3;
+        while (i < bytes.Length && bytes[i] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n') i++;
+        if (i >= bytes.Length || bytes[i] != (byte)'<') return false;
+        var head = System.Text.Encoding.UTF8.GetString(bytes, i, Math.Min(2048, bytes.Length - i));
+        return head.Contains("<svg", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>SVG 光栅化为 40px 宽 BitmapImage：按矢量等比缩放到 80px 宽渲染
+    /// （2x 密度），再以 BitmapImage 的 DecodePixelWidth 压到 40px；透明底保留。
+    /// 失败返回 null（调用方回落到 BitmapImage 直解）。</summary>
+    private static BitmapImage? DecodeSvg(byte[] bytes)
+    {
+        try
+        {
+            var svg = new SKSvg();
+            using var ms = new MemoryStream(bytes);
+            svg.Load(ms);
+            var picture = svg.Picture;
+            if (picture == null) return null;
+            var rect = picture.CullRect;
+            if (rect.Width <= 0 || rect.Height <= 0) return null;
+            const int renderWidth = 80;
+            var scale = renderWidth / rect.Width;
+            var renderHeight = Math.Max(1, (int)Math.Round(rect.Height * scale));
+            using var surface = SKSurface.Create(new SKImageInfo(renderWidth, renderHeight));
+            var canvas = surface.Canvas;
+            canvas.Clear(SKColors.Transparent);
+            canvas.Scale((float)scale);
+            canvas.DrawPicture(picture);
+            canvas.Flush();
+            using var image = surface.Snapshot();
+            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+            using var png = new MemoryStream();
+            data.SaveTo(png);
+            png.Position = 0;
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.DecodePixelWidth = 40;
+            bmp.StreamSource = png;
             bmp.EndInit();
             bmp.Freeze();
             return bmp;
