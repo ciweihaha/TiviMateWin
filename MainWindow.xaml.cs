@@ -1450,7 +1450,7 @@ public partial class MainWindow : Window
             _fullscreen = true;
             StatusBar.Visibility = Visibility.Collapsed;  // 全屏沉浸：隐藏状态栏
             SideToggleBtn.Visibility = Visibility.Collapsed; // 全屏隐藏侧栏按钮
-            if (_pipWindow != null) _pipWindow.Visibility = Visibility.Hidden; // 全屏隐藏小窗
+            if (_pipWindow != null) _pipWindow.HidePipForFullscreen(); // 全屏隐藏小窗（不触动托盘图标）
             // 全屏控制浮层：鼠标移动显示，静止自动隐藏
             MouseMove += Fullscreen_MouseMove;
             ShowFullscreenOverlay();
@@ -1502,7 +1502,7 @@ public partial class MainWindow : Window
             StatusBar.Visibility = Visibility.Visible;    // 退出全屏恢复状态栏
             SideToggleBtn.Visibility = Visibility.Visible; // 恢复侧栏按钮
             SideToggleBtn.SetValue(TextBlock.TextProperty, _sideCollapsed ? "▶" : "◀"); // 箭头跟随侧栏实际状态
-            if (_pipWindow != null && _pipChannel != null) _pipWindow.Visibility = Visibility.Visible; // 恢复小窗
+            if (_pipWindow != null && _pipChannel != null) _pipWindow.ShowPip(); // 恢复小窗（顺带撤掉托盘图标）
             ReattachVideoSurface(); // 同上：样式改完重挂视频面，否则 libvlc 往已销毁的 HWND 送帧导致黑屏
             ApplyPipMainEffect(); // 小窗开着：退出全屏后主窗口仍应黑+最小化（重挂的延迟回调会被效果标志拦住）
         }
@@ -1831,9 +1831,8 @@ public partial class MainWindow : Window
         {
             if (!_fullscreen && (_pipWindow.WindowState == WindowState.Minimized || !_pipWindow.IsVisible))
             {
-                _pipWindow.WindowState = WindowState.Normal;
-                _pipWindow.Show();
-                _pipWindow.Activate();
+                // 小窗已最小化（隐藏 + 托盘图标）：恢复而不是关闭，走 RestorePip 以撤掉托盘图标。
+                _pipWindow.RestorePip();
                 return;
             }
             ClosePip(); return;
@@ -1916,10 +1915,17 @@ public partial class MainWindow : Window
         {
             // 已最小化：先恢复成普通窗口再换台，否则只换台不显示；
             // 全屏隐藏的小窗只换台不显示，避免全屏时小窗弹出来盖住画面。
-            _pipWindow.WindowState = WindowState.Normal;
-            _pipWindow.Show();
-            if (_fullscreen) _pipWindow.Visibility = Visibility.Hidden;
-            else _pipWindow.Activate();
+            // 全屏时不走 RestorePip（它会显示窗口并抢焦点），保持隐藏、托盘图标不动。
+            if (_fullscreen)
+            {
+                _pipWindow.WindowState = WindowState.Normal;
+                _pipWindow.Show();
+                _pipWindow.Visibility = Visibility.Hidden;
+            }
+            else
+            {
+                _pipWindow.RestorePip();
+            }
         }
 
         _pipWindow.Play(ch);

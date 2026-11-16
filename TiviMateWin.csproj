@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms> <!-- 小窗托盘图标用 WinForms NotifyIcon（WPF 无托盘组件） -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
     <!-- 应用图标：exe 文件图标（任务栏/桌面快捷方式/资源管理器） -->

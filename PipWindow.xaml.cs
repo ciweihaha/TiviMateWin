@@ -35,10 +35,13 @@ public partial class PipWindow : Window
     // 避免主窗口异步续体在小窗关闭后继续对已释放的播放器 Play。
     private volatile bool _closing;
     private bool _teardownStarted; // 后台释放只启动一次：Window_Closing 里置位，避免重复 Dispose
+    // 小窗最小化托盘图标：小窗隐藏后唯一的恢复入口（小窗不进任务栏、无托盘图标时用户找不到窗口）。
+    private readonly PipTrayIcon _tray;
 
     public PipWindow(LibVLC libvlc, int volume, int networkCache)
     {
         InitializeComponent();
+        _tray = new PipTrayIcon(RestorePip, Close);
         _libvlc = libvlc;
         _networkCache = networkCache;
         _player = new MediaPlayer(_libvlc) { Volume = volume };
@@ -61,16 +64,42 @@ public partial class PipWindow : Window
         };
         // 兜底：Win+M / 系统菜单 / 任务栏等旁路最小化也会进 Minimized 态，
         // 同样会漂出一条白色标题栏；一律改成隐藏窗口并把状态复位为 Normal，
-        // 恢复入口仍在主窗口。
+        // 恢复入口在系统托盘图标（单击/双击恢复，右键菜单“显示小窗”）和主窗口。
         StateChanged += (_, _) =>
         {
             if (WindowState == WindowState.Minimized)
             {
                 Visibility = Visibility.Hidden;   // 先藏起来：不再漂出白色标题栏
                 WindowState = WindowState.Normal; // 再复位状态，避免一直停在 Minimized
+                _tray.Show(); // 托盘图标是最小化后的恢复入口
                 AppLog.Info("pip window hidden (minimized via system)");
             }
         };
+    }
+
+    /// <summary>恢复小窗显示（托盘图标/主窗口小窗按钮共用）：显示窗口、撤掉托盘图标、抢回焦点。</summary>
+    public void RestorePip()
+    {
+        if (_closing) return;
+        _tray.Hide();
+        WindowState = WindowState.Normal;
+        Show();
+        Activate();
+    }
+
+    /// <summary>仅恢复可见（主窗口退出全屏共用）：显示窗口并撤掉托盘图标，不改窗口状态、不抢焦点。</summary>
+    public void ShowPip()
+    {
+        if (_closing) return;
+        _tray.Hide();
+        Visibility = Visibility.Visible;
+    }
+
+    /// <summary>全屏时临时隐藏小窗（主窗口全屏进出共用）：只改可见性，不触动托盘图标
+    /// （全屏隐藏不是最小化，托盘图标不应出现；全屏退出时由 ShowPip 恢复）。</summary>
+    public void HidePipForFullscreen()
+    {
+        Visibility = Visibility.Hidden;
     }
 
     /// <summary>小窗全屏切换：只改 WindowState（不改 WindowStyle），视频 HWND 不重建，
@@ -118,9 +147,10 @@ public partial class PipWindow : Window
         // 直接 WindowState=Minimized 时，Win32 会把窗口画成一条漂在桌面左下角的
         // 白色标题栏（内容区消失；最小化画成斜杠；还原/最大化同时出现），
         // 且系统菜单“还原”点按后窗口也回不来。改成隐藏窗口：流继续播，
-        // 恢复入口仍在主窗口：工具栏小窗按钮、右键“小窗播放”
-        // 都会把已隐藏的小窗恢复出来（见 MainWindow）。
+        // 恢复入口在系统托盘图标（单击/双击恢复，右键菜单“显示小窗”）
+        // 和主窗口：工具栏小窗按钮、右键“小窗播放”都会把已隐藏的小窗恢复出来（见 MainWindow）。
         Visibility = Visibility.Hidden;
+        _tray.Show(); // 托盘图标是最小化后的恢复入口
         AppLog.Info("pip window hidden (minimized)");
     }
 
@@ -463,6 +493,8 @@ public partial class PipWindow : Window
     {
         // 播放器释放已交给后台 StartTeardown：UI 线程在这里 Dispose 会阻塞
         // （等卡住的流拆掉），就是 v1.4.13 关小窗卡死的根因。
+        // 托盘图标也在这里撤掉，否则图标残留在托盘里要点一下才消失。
+        try { _tray.Dispose(); } catch { }
         AppLog.Info("pip window closed");
     }
 }

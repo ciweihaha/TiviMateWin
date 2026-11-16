@@ -23,6 +23,9 @@ jobs:
         with:
           dotnet-version: '11.0.x'
 
+      - name: Test
+        run: dotnet test TiviMateWin.Tests/TiviMateWin.Tests.csproj -c Release
+
       - name: Publish (win-x64 self-contained)
         # F9（v1.4.27，M30）：版本号唯一来源是 csproj 的 <Version>——非 tag 构建也从
         # csproj 读，禁止再硬编码；tag 构建时取 tag 名去掉前缀 v 后的版本号。

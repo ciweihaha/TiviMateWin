@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <!-- 只链接纯逻辑文件，不引用 WPF 主工程（Linux 上编不了 WPF）；托盘状态机无 UI 依赖 -->
+  <ItemGroup>
+    <Compile Include="..\Services\PipTrayIconState.cs" Link="PipTrayIconState.cs" />
+  </ItemGroup>
+
+</Project>
