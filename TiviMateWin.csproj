@@ -7,6 +7,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms> <!-- 小窗托盘图标用 WinForms NotifyIcon（WPF 无托盘组件） -->
+    <!-- 测试工程在主工程目录下：默认 glob 会把测试文件编进主工程（CI 曾因此报 Xunit 找不到
+         与重复程序集属性），从默认项里排除整个测试目录。 -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);TiviMateWin.Tests\**</DefaultItemExcludes>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
     <!-- 应用图标：exe 文件图标（任务栏/桌面快捷方式/资源管理器） -->
@@ -17,6 +20,14 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Optimize>true</Optimize>
   </PropertyGroup>
+
+  <!-- UseWindowsForms 会给隐式 using 加 System.Windows.Forms / System.Drawing，
+       与 WPF 的同名类型冲突（Application/Button/Point 等二义性）；主工程只在
+       PipTrayIcon.cs 一个文件里用 WinForms（已有显式 using），把这两个隐式 using 拿掉。 -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
 
   <!-- 窗口图标：供 MainWindow/PipWindow 的 Icon 属性引用（pack URI 资源） -->
   <ItemGroup>
