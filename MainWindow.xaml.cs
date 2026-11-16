@@ -1946,6 +1946,9 @@ public partial class MainWindow : Window
     {
         var (l, t, w, h) = (_config.PipLeft, _config.PipTop, _config.PipWidth, _config.PipHeight);
         if (l is null || t is null || w is null || h is null) return;
+        // 小窗最小化 bug 的遗留：旧版把最小化后的白色标题栏尺寸（约 100×27）也存了下来，
+        // 下次开小窗会恢复成一条细条，看着像 bug 还在。小于可用下限的直接忽略，用默认尺寸。
+        if (w.Value < 160 || h.Value < 100) return;
         if (!WindowPlacement.CanRestore(l.Value, t.Value, w.Value, h.Value)) return;
         var c = WindowPlacement.ClampToVisible(l.Value, t.Value, w.Value, h.Value);
         win.Left = c.Left;
