@@ -59,6 +59,18 @@ public partial class PipWindow : Window
             var source = PresentationSource.FromVisual(this) as HwndSource;
             source?.AddHook(PipWndProc);
         };
+        // 兜底：Win+M / 系统菜单 / 任务栏等旁路最小化也会进 Minimized 态，
+        // 同样会漂出一条白色标题栏；一律改成隐藏窗口并把状态复位为 Normal，
+        // 恢复入口仍在主窗口。
+        StateChanged += (_, _) =>
+        {
+            if (WindowState == WindowState.Minimized)
+            {
+                Visibility = Visibility.Hidden;   // 先藏起来：不再漂出白色标题栏
+                WindowState = WindowState.Normal; // 再复位状态，避免一直停在 Minimized
+                AppLog.Info("pip window hidden (minimized via system)");
+            }
+        };
     }
 
     /// <summary>小窗全屏切换：只改 WindowState（不改 WindowStyle），视频 HWND 不重建，
@@ -102,10 +114,14 @@ public partial class PipWindow : Window
 
     private void Minimize_Click(object sender, RoutedEventArgs e)
     {
-        // 最小化小窗：只改 WindowState，不碰播放器/视频面（播着的流继续播，
-        // 只是窗口收起来）。恢复入口在主窗口：工具栏小窗按钮、右键“小窗播放”
-        // 都会把已最小化的小窗恢复出来（见 MainWindow），小窗本身不进任务栏。
-        WindowState = WindowState.Minimized;
+        // 小窗不进任务栏（ShowInTaskbar=False）且无边框（WindowStyle=None）：
+        // 直接 WindowState=Minimized 时，Win32 会把窗口画成一条漂在桌面左下角的
+        // 白色标题栏（内容区消失；最小化画成斜杠；还原/最大化同时出现），
+        // 且系统菜单“还原”点按后窗口也回不来。改成隐藏窗口：流继续播，
+        // 恢复入口仍在主窗口：工具栏小窗按钮、右键“小窗播放”
+        // 都会把已隐藏的小窗恢复出来（见 MainWindow）。
+        Visibility = Visibility.Hidden;
+        AppLog.Info("pip window hidden (minimized)");
     }
 
     private void Fullscreen_Click(object sender, RoutedEventArgs e) => TogglePipFullscreen();
@@ -376,7 +392,7 @@ public partial class PipWindow : Window
     private void Root_MouseDown(object sender, MouseButtonEventArgs e)
     {
         if (e.LeftButton != MouseButtonState.Pressed) return;
-        if (e.OriginalSource is System.Windows.Controls.Button) return; // 点按钮不拖动
+        if (IsInsideButton(e.OriginalSource as DependencyObject)) return; // 点按钮不拖动
         try
         {
             var hwnd = new WindowInteropHelper(this).Handle;
@@ -390,6 +406,18 @@ public partial class PipWindow : Window
         {
             AppLog.Error($"pip drag failed: {ex.Message}");
         }
+    }
+
+    /// <summary>点按是否落在按钮内：按钮 Content 是字符串时 OriginalSource 是内容里的 TextBlock 而非 Button 本身，
+    /// 直接 is Button 判不到，标题栏按钮点按会同时触发拖动（日志里出现 pip drag start）。沿视觉树向上找 Button。</summary>
+    private static bool IsInsideButton(DependencyObject? obj)
+    {
+        while (obj != null)
+        {
+            if (obj is System.Windows.Controls.Button) return true;
+            obj = System.Windows.Media.VisualTreeHelper.GetParent(obj);
+        }
+        return false;
     }
 
     private void Window_Closing(object sender, CancelEventArgs e)

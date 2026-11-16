@@ -1826,12 +1826,13 @@ public partial class MainWindow : Window
     {
         // 工具栏小窗按钮：若小窗开着则关闭，否则小窗播放当前选中/正在播放的频道。
         // 全屏时小窗只是隐藏（IsVisible 为假），仍算开着，点按钮应关闭而不是重开。
-        // 小窗已最小化时则是恢复而不是关闭——小窗不进任务栏，最小化后没有别的恢复入口。
+        // 小窗已最小化（隐藏）时则是恢复而不是关闭——小窗不进任务栏，最小化后没有别的恢复入口。
         if (_pipWindow != null)
         {
-            if (_pipWindow.WindowState == WindowState.Minimized)
+            if (!_fullscreen && (_pipWindow.WindowState == WindowState.Minimized || !_pipWindow.IsVisible))
             {
                 _pipWindow.WindowState = WindowState.Normal;
+                _pipWindow.Show();
                 _pipWindow.Activate();
                 return;
             }
