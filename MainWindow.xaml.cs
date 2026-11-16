@@ -176,6 +176,14 @@ public partial class MainWindow : Window
     // 连续 5 次都没播起来就停手等用户，避免死流无限循环重播。
     private int _stopTicks;
     private int _autoReconnectCount;
+    // 直播断线恢复（CCTV-6 云电脑软解黑屏修复）：
+    // 根因——SCF 分片下载偶发被截断（连接在响应头后即断，TS 报 Can't read TS packet），
+    // libvlc 自适应模块不重试该分片、直接停到 EndReached；旧逻辑立即重播（清单还没轮换，
+    // 仍是同一批坏分片）且 5 次后永久停手，看门狗再调也进不来，只能手动重进。
+    // _lastAutoReconnectUtc：上次排重连的时间；超过 60 秒没再失败则计数清零（播稳后偶发
+    // 断一次不再算进旧的失败链）；_reconnectPending：延迟重连排队中，避免看门狗重复排。
+    private DateTime _lastAutoReconnectUtc = DateTime.MinValue;
+    private bool _reconnectPending;
     // 硬件解码自动回退：硬解失败时连续失败会触发回退到软解并重启；每会话只触发一次。
     private bool _hwFallbackDone;
     // 持续播放判定：Playing 触发时只记时间，连续播满 10 秒才算真正播起来、清零失败计数。
@@ -2697,10 +2705,18 @@ public partial class MainWindow : Window
     }
 
     /// <summary>自动重连同一频道（v1.4.16）：EndReached / 意外停播共用；连续 5 次都没播起来
-    /// 就停手（流可能真死了），显示文案等用户手动处理，避免无限循环重播。</summary>
+    /// 就停手（流可能真死了），显示文案等用户手动处理，避免无限循环重播。
+    /// CCTV-6 云电脑修复：重播前等 4 秒（3 秒分片至少轮换 1 个，避开刚失败的那批分片，
+    /// 也给 SCF/CDN 一个恢复窗口）；上次重连已是 60 秒前的事则计数清零——播稳后偶发
+    /// 断一次不再累计进旧失败链；真死流仍会在 5 次内停手（HW 回退照常），60 秒冷却后
+    /// 看门狗会再试一次（直播流值得等它恢复，而不是永久黑屏）。</summary>
     private bool TryAutoReconnect(ChannelItem ch)
     {
         if (_closing || _isPaused || _pipEffectActive) return false;
+        if (_reconnectPending) return true;   // 已有一次延迟重连在排队，不重复排
+        // 冷却重置：上次重连超过 60 秒，旧失败链清零
+        if ((DateTime.UtcNow - _lastAutoReconnectUtc).TotalSeconds > 60)
+            _autoReconnectCount = 0;
         if (++_autoReconnectCount > 5)
         {
             // 硬解失败回退：连续 5 次都没播起来、且当前用的是硬件解码，
@@ -2710,8 +2726,24 @@ public partial class MainWindow : Window
             AppLog.Error($"auto-reconnect stopped after limit: [{ch.Name}]");
             return false;
         }
-        _ = PlayAsync(ch, true);
+        _lastAutoReconnectUtc = DateTime.UtcNow;
+        _reconnectPending = true;
+        _ = ReconnectAfterDelayAsync(ch);
         return true;
+    }
+
+    /// <summary>延迟重连：等 4 秒再重播同一直播频道。HLS 清单 3 秒一刷，4 秒足够轮换掉
+    /// 刚失败的分片；立即重播只会重新下到同一批坏分片、秒断。等待期间用户换台或已恢复
+    /// 播放则取消本次重连。</summary>
+    private async Task ReconnectAfterDelayAsync(ChannelItem ch)
+    {
+        await Task.Delay(4000);
+        _reconnectPending = false;
+        if (_closing || _isPaused || _pipEffectActive) return;
+        if (_current?.Url != ch.Url) return;          // 用户已换台
+        if (_player is { IsPlaying: true }) return;   // 已恢复播放
+        PlayState.Text = "直播中断，自动重连…";
+        await PlayAsync(ch, true);
     }
 
     /// <summary>硬件解码自动回退：连续失败且当前用硬件解码时，

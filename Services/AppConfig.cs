@@ -311,9 +311,11 @@ public class AppConfig
                     p.Url = StripCredentialQuery(p.Url);
             }
             // L5：数值钳制——手改 config.json 的越界值不得直接传入 libVLC；
-            // 与 SettingsWindow 滑条/UI 约束一致：Volume 0–125，NetworkCache 200–5000ms。
+            // 与 SettingsWindow 滑条/UI 约束一致：Volume 0–125，NetworkCache 200–10000ms。
+            // 上限 10000：CCTV-6 这类 3 秒短分片 HLS 在云电脑上偶发分片下载被截断，
+            // 大缓存能多扛几次失败再断（实测 800ms 不到 1 秒就断、5000ms 能撑 100–146 秒）。
             cfg.Volume = Math.Clamp(cfg.Volume, 0, 125);
-            cfg.NetworkCache = Math.Clamp(cfg.NetworkCache, 200, 5000);
+            cfg.NetworkCache = Math.Clamp(cfg.NetworkCache, 200, 10000);
             return cfg;
         }
         catch (JsonException ex)

@@ -17,7 +17,7 @@
             <StackPanel>
                 <!-- 网络缓存 -->
                 <TextBlock Text="网络缓存（毫秒）" Foreground="#FFB9C4CE" FontSize="12" Margin="0,4,0,4"/>
-                <Slider x:Name="CacheSlider" Minimum="200" Maximum="5000" TickFrequency="100"
+                <Slider x:Name="CacheSlider" Minimum="200" Maximum="10000" TickFrequency="100"
                         ValueChanged="CacheSlider_ValueChanged"/>
                 <TextBlock x:Name="CacheValue" Text="800 ms" Foreground="#FF7A8896" FontSize="11" Margin="0,2,0,12"/>
 
