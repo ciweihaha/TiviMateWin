@@ -654,8 +654,19 @@ public partial class MainWindow : Window
                 // no-osd 不显示标题水印；avcodec-hw 按用户设置启用/禁用硬件解码
                 var args = new List<string> { "--no-osd" };
                 args.Add(_config.HardwareDecode ? "--avcodec-hw=any" : "--avcodec-hw=disabled");
+                // 诊断用：VlcVerbose 开启时输出 LibVLC 详细日志（写 vlc-log.txt）
+                if (_config.VlcVerbose) args.Add("--verbose=2");
                 return new LibVLC(args.ToArray());
             });
+            // 诊断用：VlcVerbose 开启时订阅 LibVLC 日志，写 vlc-log.txt（独立文件，不污染主日志）
+            if (_config.VlcVerbose)
+            {
+                _libvlc.Log += (_, e) =>
+                {
+                    try { VlcLog.Write(e.Level.ToString(), e.Module ?? "", e.Message ?? ""); } catch { }
+                };
+                AppLog.Info("vlc verbose logging enabled");
+            }
             _player = new MediaPlayer(_libvlc) { Volume = _config.Volume };
             _player.Playing += (_, _) => Dispatcher.BeginInvoke(() =>
             {

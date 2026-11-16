@@ -27,6 +27,7 @@ public class AppConfig
     // 播放器高级设置
     public int NetworkCache { get; set; } = 800;      // 网络缓存 ms（libVLC network-caching）
     public bool HardwareDecode { get; set; } = true;  // 硬件解码开关
+    public bool VlcVerbose { get; set; } = false;     // LibVLC 详细日志开关（诊断用，写 vlc-log.txt）
     public string AspectRatio { get; set; } = "";      // 画面比例（空=原始，16:9/4:3/拉伸）
     public double PlaybackRate { get; set; } = 1.0;    // 倍速
     public string Theme { get; set; } = "深色";         // 主题：深色/浅色
