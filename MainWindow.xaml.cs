@@ -184,6 +184,10 @@ public partial class MainWindow : Window
     // 断一次不再算进旧的失败链）；_reconnectPending：延迟重连排队中，避免看门狗重复排。
     private DateTime _lastAutoReconnectUtc = DateTime.MinValue;
     private bool _reconnectPending;
+    // 防重复重播：同一次失败可能同时触发 EndReached 与 EncounteredError，两条重连路径
+    // 各调一次 PlayAsync；3 秒内同一 URL 只播一次，避免两个 Media 互相顶掉、秒断连锁。
+    private DateTime _lastAutoPlayUtc = DateTime.MinValue;
+    private string? _lastAutoPlayUrl;
     // 硬件解码自动回退：硬解失败时连续失败会触发回退到软解并重启；每会话只触发一次。
     private bool _hwFallbackDone;
     // 持续播放判定：Playing 触发时只记时间，连续播满 10 秒才算真正播起来、清零失败计数。
@@ -1054,6 +1058,15 @@ public partial class MainWindow : Window
     private async Task PlayAsync(ChannelItem ch, bool watchdogReconnect)
     {
         if (_closing) return;                 // 窗口关闭中，不再启动播放
+        if (watchdogReconnect)
+        {
+            // 防重复重播（CCTV-6 云电脑修复）：EndReached 与 EncounteredError 可能为同一次
+            // 失败各触发一次重连，3 秒内同一 URL 只播一次，避免两个 Media 互相顶掉、秒断连锁。
+            var now = DateTime.UtcNow;
+            if (_lastAutoPlayUrl == ch.Url && (now - _lastAutoPlayUtc).TotalSeconds < 3) return;
+            _lastAutoPlayUrl = ch.Url;
+            _lastAutoPlayUtc = now;
+        }
         await EnsureEngineAsync();
         if (_player is null || _libvlc is null) return;
 
