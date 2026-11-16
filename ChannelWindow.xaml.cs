@@ -118,8 +118,9 @@ public partial class ChannelWindow : Window
         // 避免关窗口时 UI 卡死；不要在 Window_Closed 里同步 Dispose 播放器——
         // Dispose → libvlc_media_player_release() → 销毁时 input_Stop + input_Close
         //（join 输入线程），和同步 Stop() 是同一处等待，UI 线程一样会堵死
-        //（小窗 v1.4.13 关窗卡死的根因同款）。先断开视频面再后台释放。
-        try { VideoView.MediaPlayer = null; } catch { }
+        //（小窗 v1.4.13 关窗卡死的根因同款）。断面也不在 UI 线程先做：
+        // 断面与后台 Stop 并发触同一个 native 播放器，11-12 关小窗崩在 Stop 即这一竞态，
+        // 改成 Stop 完成后再回 UI 线程断面（见 StartTeardown）。
         StartTeardown();
     }
 
@@ -135,6 +136,15 @@ public partial class ChannelWindow : Window
             try { playerToStop.Stop(); } catch { }
             try { mediaToDispose?.Dispose(); } catch { }
             try { playerToStop.Dispose(); } catch { }
+            // Stop 完成后再回 UI 线程断开视频面：断面与 Stop 不再并发触同一个 native 播放器。
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { VideoView.MediaPlayer = null; } catch { }
+                }));
+            }
+            catch { }
             AppLog.Info("channel player released on background thread");
         });
     }

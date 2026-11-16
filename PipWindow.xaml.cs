@@ -459,8 +459,9 @@ public partial class PipWindow : Window
         try { _pipOpenCheckTimer.Stop(); } catch { }
         try { _pipFsCheckTimer.Stop(); } catch { }
         try { _pipStallTimer.Stop(); } catch { } // v1.4.15 2-6：停滞看门狗也停掉
-        // 先在 UI 线程断开视频面（快操作，只改 HWND 挂接），再在后台释放播放器。
-        try { VideoView.MediaPlayer = null; } catch { }
+        // 不再先在 UI 线程断开视频面：断面（set Hwnd=0）与后台 Stop 并发触同一个
+        // native 播放器，11-12 两次关小窗崩在 Stop 即这一竞态。改成后台 Stop 完成
+        // 后再回 UI 线程断面（见 StartTeardown）；窗口正在关闭，断面晚一点不影响显示。
         StartTeardown();
     }
 
@@ -485,6 +486,15 @@ public partial class PipWindow : Window
             try { playerToStop.Stop(); } catch { }
             try { mediaToDispose?.Dispose(); } catch { }
             try { playerToStop.Dispose(); } catch { }
+            // Stop 完成后再回 UI 线程断开视频面：断面与 Stop 不再并发触同一个 native 播放器。
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { VideoView.MediaPlayer = null; } catch { }
+                }));
+            }
+            catch { }
             AppLog.Info("pip player released on background thread");
         });
     }

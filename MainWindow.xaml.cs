@@ -1070,11 +1070,6 @@ public partial class MainWindow : Window
         await EnsureEngineAsync();
         if (_player is null || _libvlc is null) return;
 
-        // v1.4.26：停止时 VideoView 被隐藏（防白屏，见 StopPlayback），重播前先恢复可见
-        // 再挂回视频面，否则只有声音没有画面；小窗效果进行中不恢复不挂（主窗口应保持黑屏）。
-        if (!_pipEffectActive && VideoView.Visibility != Visibility.Visible) VideoView.Visibility = Visibility.Visible;
-        if (!_pipEffectActive && VideoView.MediaPlayer != _player) VideoView.MediaPlayer = _player;
-
         _switchDebounce.Stop();               // 新播放请求使挂起的防抖播放失效
         _pendingPlay = null;
         if (!watchdogReconnect)              // 用户主动播放：看门狗计数与失败计数重新开始
@@ -1114,6 +1109,12 @@ public partial class MainWindow : Window
                 // （_current 已指向另一 Url），此时不再启动本次播放——否则停止后流又自己起播。
                 // 按 Url 比对：列表刷新后 _current 会换成同 Url 的新对象，引用比对会误判。
                 if (_closing || _current?.Url != ch.Url) return;
+                // v1.4.26：停止时 VideoView 被隐藏（防白屏），重播前先恢复可见再挂回视频面，
+                // 否则只有声音没有画面；小窗效果进行中不恢复不挂（主窗口应保持黑屏）。
+                // 挂面必须放在拿锁之后：挂面（set Hwnd）与后台 Play 拆建输入并发触同一个
+                // native 播放器，03:55 长时间播放崩溃即此类竞态；拿锁后同一时间只有一个 Play 在跑。
+                if (!_pipEffectActive && VideoView.Visibility != Visibility.Visible) VideoView.Visibility = Visibility.Visible;
+                if (!_pipEffectActive && VideoView.MediaPlayer != _player) VideoView.MediaPlayer = _player;
                 await Task.Run(() =>
                 {
                     // 与后台 Stop 用同一把 _mainPlayerLock 串行化：锁内再校验一次，
@@ -1239,7 +1240,10 @@ public partial class MainWindow : Window
     private void ClearVideoSurface()
     {
         try { _osdHideTimer.Stop(); ChannelOsd.Visibility = Visibility.Collapsed; } catch { }
-        try { VideoView.MediaPlayer = null; } catch { }
+        // 只隐藏不拆面：VideoView.MediaPlayer = null（set Hwnd=0）与后台 Stop/Play
+        // 拆建输入并发触同一个 native 播放器，长时间播放崩溃即此类竞态；
+        // 隐藏已足够黑屏（子 HWND 还在、只是看不见，帧送到隐藏窗口无害），
+        // 拆面只在后台 Stop 完成后的关闭/小窗路径里做（见 StartMainTeardown / ApplyPipMainEffect）。
         try { VideoView.Visibility = Visibility.Hidden; } catch { }
     }
 
@@ -1260,7 +1264,9 @@ public partial class MainWindow : Window
         _current = null;
         _ = Task.Run(() =>
         {
-            try { lock (_mainPlayerLock) { if (seqAtStop == _playSeq) playerToStop.Stop(); } } catch { }
+            // 关闭后排队的过期 Stop 不再执行：后台释放可能已 Dispose 播放器，
+            // 再 Stop 就是释放后使用；_closing 置位即停手。
+            try { lock (_mainPlayerLock) { if (_closing || seqAtStop != _playSeq) return; playerToStop.Stop(); } } catch { }
         });
         // v1.4.26：只断开 MediaPlayer 不够——VideoView.MediaPlayer = null 只清 libvlc
         // 的 Hwnd 指针（VideoView.cs：mediaPlayer.Hwnd = IntPtr.Zero），VideoHwndHost
@@ -2011,19 +2017,36 @@ public partial class MainWindow : Window
             var seqAtEffect = _playSeq;
             _ = Task.Run(() =>
             {
+                var stopped = false;
                 try
                 {
                     lock (_mainPlayerLock)
                     {
-                        if (seqAtEffect == _playSeq && _pipEffectActive) mainPlayer.Stop();
+                        // 关闭后排队的过期 Stop 不再执行（后台释放可能已 Dispose 播放器）。
+                        if (seqAtEffect == _playSeq && _pipEffectActive && !_closing)
+                        {
+                            mainPlayer.Stop();
+                            stopped = true;
+                        }
                     }
+                }
+                catch { }
+                // Stop 完成后再回 UI 线程断开视频面：断面与 Stop 不再并发触同一个 native 播放器。
+                // 主窗口已靠隐藏 VideoView 变黑，断面晚一点不影响显示；Stop 没跑就不拆面。
+                if (!stopped) return;
+                try
+                {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        try { VideoView.MediaPlayer = null; } catch { }
+                    }));
                 }
                 catch { }
             });
         }
-        try { VideoView.MediaPlayer = null; } catch { }
-        // v1.4.26：断开只清 libvlc 的 Hwnd 指针，原生 STATIC 子窗口仍在；主窗口若被手动
-        // 还原（未关小窗）会露白，直接隐藏 VideoView 保证主窗口真黑。关小窗后由
+        // 只隐藏不拆面（见 ClearVideoSurface 的注释）：拆面等后台 Stop 完成后再做。
+        // v1.4.26：只拆面不够——原生 STATIC 子窗口仍在，主窗口若被手动还原（未关小窗）
+        // 会露白，直接隐藏 VideoView 保证主窗口真黑。关小窗后由
         // RestoreMainAfterPip → ReattachVideoSurface 恢复可见。
         try { VideoView.Visibility = Visibility.Hidden; } catch { }
         PlayState.Text = "小窗播放中";
@@ -2978,6 +3001,7 @@ public partial class MainWindow : Window
         _netCts.Cancel();                  // 取消挂起的网络拉取（播放列表/EPG/Xtream）
         _stallWatch.Stop();
         _progressTimer.Stop();              // L1：此前漏停，关闭后仍每 500ms 读已释放播放器的 Length/Time
+        _reattachCheckTimer.Stop();         // 崩溃修复：此前漏停，关闭后仍会触发重播
         _switchDebounce.Stop();
         _osdTimer.Stop();
         _fsHideTimer.Stop();
@@ -3005,11 +3029,13 @@ public partial class MainWindow : Window
             _pipWindow = null;
         }
 
-        // v1.4.15 1-1：主播放器释放放后台——先在 UI 线程断开视频面（快操作），
-        // 再由 StartMainTeardown 在后台做 Stop → Dispose Media → Dispose Player；
+        // v1.4.15 1-1：主播放器释放放后台——Stop → Dispose Media → Dispose Player
+        // 全部在后台做，UI 线程绝不碰播放器释放；拆面（VideoView.MediaPlayer = null）
+        // 不再先在 UI 线程做：断面与后台 Stop 并发触同一个 native 播放器，
+        // 11-12 两次关小窗崩在 Stop 即这一竞态，改成 Stop 完成后再回 UI 线程断面
+        // （见 StartMainTeardown）；窗口正在关闭，断面晚一点不影响显示。
         // Window_Closed 里同步 Dispose 会等卡住的直播流拆掉（和 v1.4.12/1.4.13 关小窗
         // 卡死同一根因），进程退出时后台释放不用等，系统回收。
-        try { VideoView.MediaPlayer = null; } catch { }
         StartMainTeardown();
 
         // v1.4.15 迭代 3：退出时的最后一次保存仍同步（关掉进程前把本次改动落盘），
@@ -3044,6 +3070,15 @@ public partial class MainWindow : Window
                     try { mediaToDispose?.Dispose(); } catch { }
                     try { playerToStop.Dispose(); } catch { }
                 }
+                // Stop 完成后再回 UI 线程断开视频面：断面与 Stop 不再并发触同一个 native 播放器。
+                try
+                {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        try { VideoView.MediaPlayer = null; } catch { }
+                    }));
+                }
+                catch { }
                 AppLog.Info("main player released on background thread");
             }
             catch (Exception ex) { AppLog.Error($"main player release failed: {ex.Message}"); }
