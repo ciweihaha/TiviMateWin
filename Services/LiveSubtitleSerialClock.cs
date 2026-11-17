@@ -11,14 +11,14 @@ public static class LiveSubtitleSerialClock
     /// windowsCompleted 含当前窗（窗的音频在起点后 windowsCompleted × 窗长处结束）。
     /// </summary>
     public static double WindowStalenessSeconds(DateTimeOffset? audioStartWall, long windowsCompleted,
-        int windowSeconds, DateTimeOffset now)
+        double windowSeconds, DateTimeOffset now)
     {
         if (audioStartWall is null) return 0;
         return (now - audioStartWall.Value).TotalSeconds - windowsCompleted * windowSeconds;
     }
 
     /// <summary>窗陈旧到该丢：音频结束至今超过一窗长，处理已追不上说话速度。</summary>
-    public static bool IsStaleWindow(double stalenessSeconds, int windowSeconds) =>
+    public static bool IsStaleWindow(double stalenessSeconds, double windowSeconds) =>
         stalenessSeconds > windowSeconds;
 
     /// <summary>
