@@ -46,7 +46,7 @@ public sealed class LiveSubtitleTranslator : IDisposable
     private const int EvictBatch = 100;
     private const int MaxConsecutiveFailures = 3;   // 熔断阈值：连续失败这么多次即停字幕
     private const int InferenceTimeoutSeconds = 8;  // 单行推理超时（毫秒级行一般 1–2 秒）
-    private const int MaxTokens = 64;               // 字幕行短，64 token 够译两三句话，同时截住模型跑题续写
+    private const int MaxTokens = 32;               // 1.5 秒窗的短句一般 10–20 个中文 token，32 够译两三句，同时截住模型跑题续写（64 时长句多耗约 1 秒）
     private const float Temperature = 0.2f;
     private const int ContextSize = 1024;           // 提示词约 100 token，1024 绰绰有余
 
@@ -151,6 +151,8 @@ public sealed class LiveSubtitleTranslator : IDisposable
     /// <summary>
     /// 下载（如需）并加载模型到内存。失败返回 false，不抛异常；加载失败会被记住，
     /// 同一服务实例内不再重试（重开开关重建服务才会再试）。
+    /// 模型路径含中文时先解析成原生加载器能打开的纯英文路径（短路径或复制副本，
+    /// 见 LiveSubtitleModelPath），否则 llama.cpp 打不开、翻译静默回退英文。
     /// </summary>
     public async Task<bool> EnsureLoadedAsync(CancellationToken ct)
     {
@@ -158,13 +160,14 @@ public sealed class LiveSubtitleTranslator : IDisposable
         if (_loadFailed) return false;
         if (_generateOverride != null) return true; // 测试注入：不需要真模型
         if (!await EnsureModelAsync(ct).ConfigureAwait(false)) return false;
+        var loadPath = LiveSubtitleModelPath.ResolveForNativeLoad(_modelPath);
         try
         {
             await _engineGate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 if (_executor is not null) return true;
-                var parameters = new ModelParams(_modelPath)
+                var parameters = new ModelParams(loadPath)
                 {
                     ContextSize = ContextSize,
                     Threads = Threads,
@@ -172,7 +175,7 @@ public sealed class LiveSubtitleTranslator : IDisposable
                 _weights = await LLamaWeights.LoadFromFileAsync(parameters, ct, new Progress<float>())
                     .ConfigureAwait(false);
                 _executor = new StatelessExecutor(_weights, parameters);
-                AppLog.Info($"translate model loaded ({Path.GetFileName(_modelPath)}, threads {Threads})");
+                AppLog.Info($"translate model loaded ({Path.GetFileName(loadPath)}, threads {Threads})");
                 return true;
             }
             finally
