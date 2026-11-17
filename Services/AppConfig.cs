@@ -28,6 +28,20 @@ public class AppConfig
     public int NetworkCache { get; set; } = 800;      // 网络缓存 ms（libVLC network-caching）
     public bool HardwareDecode { get; set; } = true;  // 硬件解码开关
     public bool VlcVerbose { get; set; } = false;     // LibVLC 详细日志开关（诊断用，写 vlc-log.txt）
+
+    // 直播实时字幕（听写+翻译）：默认关；模型不塞进应用，调本机 Ollama。
+    public bool LiveSubtitleEnabled { get; set; } = false;
+    public bool LiveSubtitleShowEnglish { get; set; } = true;  // 字幕条同时显示英文原文
+    public string LiveSubtitleModel { get; set; } = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
+    public string LiveSubtitleWhisperModel { get; set; } = "ggml-tiny.en.bin"; // 听写模型文件名；tiny.en 更快（base.en 在台式机上 3 秒窗要 5–6 秒，队列一满端到端就到 10 秒），base.en 更准、可配回
+    public double LiveSubtitleWindowSeconds { get; set; } = 1.5; // 切块窗口（秒），1–10；1.5 秒是延迟与质量的平衡点（UnBox 同款默认）
+    // 两级流水线分核（0=自动：留 1 核给播放与界面，其余按 2:1 分给听写与翻译；
+    // >0 手动指定，云电脑上改 config.json 就能调，不用重编）。
+    public int LiveSubtitleTranscribeThreads { get; set; } = 0;
+    public int LiveSubtitleTranslateThreads { get; set; } = 0;
+    // 串行管线：听写与翻译同一线程依次跑，各用全部核（留 1 核给播放与界面）；
+    // false=两级流水线（听写与翻译分核并行）。改了需重建服务（重开字幕开关）才生效。
+    public bool LiveSubtitleSerial { get; set; } = true; // 串行（听写→翻译依次跑，各用全核）；第三轮实测比两级流水线更快更稳
     public string AspectRatio { get; set; } = "";      // 画面比例（空=原始，16:9/4:3/拉伸）
     public double PlaybackRate { get; set; } = 1.0;    // 倍速
     public string Theme { get; set; } = "深色";         // 主题：深色/浅色
@@ -316,6 +330,9 @@ public class AppConfig
             // 大缓存能多扛几次失败再断（实测 800ms 不到 1 秒就断、5000ms 能撑 100–146 秒）。
             cfg.Volume = Math.Clamp(cfg.Volume, 0, 125);
             cfg.NetworkCache = Math.Clamp(cfg.NetworkCache, 200, 10000);
+            cfg.LiveSubtitleWindowSeconds = Math.Clamp(cfg.LiveSubtitleWindowSeconds, 1, 10);
+            cfg.LiveSubtitleTranscribeThreads = Math.Clamp(cfg.LiveSubtitleTranscribeThreads, 0, 16);
+            cfg.LiveSubtitleTranslateThreads = Math.Clamp(cfg.LiveSubtitleTranslateThreads, 0, 16);
             return cfg;
         }
         catch (JsonException ex)

@@ -14,7 +14,7 @@
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
     <!-- 应用图标：exe 文件图标（任务栏/桌面快捷方式/资源管理器） -->
     <ApplicationIcon>Assets\tivimate-icon.ico</ApplicationIcon>
-    <Version>1.4.28</Version>
+    <Version>1.4.29</Version>
     <!-- F9（v1.4.27，M30）：<Version> 是版本号唯一来源；CI 非 tag 构建也从这里读
          （见 .github/workflows/build.yml），tag 构建由 CI 在 Publish 时以 -p:Version 注入 tag 名。 -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
@@ -40,6 +40,16 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="11.0.0" />
     <!-- 第 4 轮 R4-E：SVG 台标光栅化（WPF 的 BitmapImage 解不了 SVG） -->
     <PackageReference Include="Svg.Skia" Version="1.0.0" />
+    <!-- 直播实时字幕（听写+翻译）：Whisper.NET 本地语音识别 + NAudio 音频回放
+         （LibVLC 音频回调接管输出后，声音须由应用自己播出）。Whisper.net.Runtime
+         是原生运行时，缺了它编译过、运行时加载失败。
+         翻译改进程内推理（v2）：LLamaSharp + Backend.Cpu（llama.cpp 原生库），
+         加载 Qwen2.5-1.5B-Instruct GGUF，不再走 Ollama HTTP。 -->
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <PackageReference Include="NAudio" Version="3.3.0" />
+    <PackageReference Include="LLamaSharp" Version="0.30.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.30.0" />
   </ItemGroup>
 
   <!-- 主题资源字典：不作为 Page 编译进程序集，而是作为 Content 复制到输出目录，运行时按相对路径加载 -->

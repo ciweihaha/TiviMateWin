@@ -51,6 +51,12 @@ public partial class SettingsWindow : Window
         // 主题
         SelectCombo(ThemeCombo, config.Theme == "浅色" ? "浅色" : "深色");
 
+        // 直播实时字幕（听写+翻译）
+        LiveSubtitleChk.IsChecked = config.LiveSubtitleEnabled;
+        LiveSubtitleEnglishChk.IsChecked = config.LiveSubtitleShowEnglish;
+        LiveSubtitleSerialChk.IsChecked = config.LiveSubtitleSerial;
+        LiveSubtitleModelBox.Text = config.LiveSubtitleModel ?? "";
+
         // Xtream
         XtreamServerBox.Text = config.XtreamServer ?? "";
         XtreamUserBox.Text = config.XtreamUsername ?? "";
@@ -131,6 +137,14 @@ public partial class SettingsWindow : Window
         };
 
         _config.Theme = (ThemeCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "深色";
+
+        // 直播实时字幕（听写+翻译）
+        _config.LiveSubtitleEnabled = LiveSubtitleChk.IsChecked == true;
+        _config.LiveSubtitleShowEnglish = LiveSubtitleEnglishChk.IsChecked == true;
+        _config.LiveSubtitleSerial = LiveSubtitleSerialChk.IsChecked == true;
+        var subtitleModel = LiveSubtitleModelBox.Text.Trim();
+        _config.LiveSubtitleModel = subtitleModel.Length > 0
+            ? subtitleModel : "qwen2.5-1.5b-instruct-q4_k_m.gguf";
 
         var server = XtreamServerBox.Text.Trim();
         _config.XtreamServer = server;

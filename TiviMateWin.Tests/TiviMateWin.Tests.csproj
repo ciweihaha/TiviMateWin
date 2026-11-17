@@ -11,11 +11,20 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- 翻译器链接的源码引用了 LLamaSharp 类型，测试工程也要引核心包才能编译；
+         后端原生包不需要（测试用注入的假推理，不加载真模型）。 -->
+    <PackageReference Include="LLamaSharp" Version="0.30.0" />
   </ItemGroup>
 
   <!-- 只链接纯逻辑文件，不引用 WPF 主工程（Linux 上编不了 WPF）；托盘状态机无 UI 依赖 -->
   <ItemGroup>
     <Compile Include="..\Services\PipTrayIconState.cs" Link="PipTrayIconState.cs" />
+    <Compile Include="..\Services\AppLog.cs" Link="AppLog.cs" />
+    <Compile Include="..\Services\LiveSubtitleChunker.cs" Link="LiveSubtitleChunker.cs" />
+    <Compile Include="..\Services\LiveSubtitlePipeline.cs" Link="LiveSubtitlePipeline.cs" />
+    <Compile Include="..\Services\LiveSubtitleSerialClock.cs" Link="LiveSubtitleSerialClock.cs" />
+    <Compile Include="..\Services\LiveSubtitleTranslator.cs" Link="LiveSubtitleTranslator.cs" />
+    <Compile Include="..\Services\LiveSubtitleModelPath.cs" Link="LiveSubtitleModelPath.cs" />
   </ItemGroup>
 
 </Project>
