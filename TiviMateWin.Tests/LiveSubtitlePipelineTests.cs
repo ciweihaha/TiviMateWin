@@ -80,14 +80,15 @@ public class LiveSubtitlePipelineTests
     public async Task Pipeline_TranslateQueueFull_DropsOldest_KeepsNewest()
     {
         // 听写 50ms、翻译 300ms：翻译跟不上，队列满时丢最旧，保最新。
+        // 窗编号写进音频数据本身（首样点 = 编号 × 1000），听写从窗里读编号——
+        // 这样“line N”标识的是第 N 个入队的窗，而不是第 N 个被听写的窗。
         var emitted = new List<string>();
         var allDone = new TaskCompletionSource();
-        var seq = 0;
         var pipeline = new LiveSubtitlePipeline(
-            transcribe: async (_, ct) =>
+            transcribe: async (window, ct) =>
             {
                 await Task.Delay(50, ct);
-                return "line " + Interlocked.Increment(ref seq);
+                return "line " + (window[0] / 1000);
             },
             translate: async (text, ct) =>
             {
@@ -103,7 +104,12 @@ public class LiveSubtitlePipelineTests
             }
         };
         pipeline.Start();
-        for (var i = 0; i < 6; i++) pipeline.EnqueueWindow(LoudWindow());
+        for (var i = 1; i <= 6; i++)
+        {
+            var mono = new short[16000 * 3];
+            for (var j = 0; j < mono.Length; j++) mono[j] = (short)(i * 1000);
+            pipeline.EnqueueWindow(mono);
+        }
         await Task.WhenAny(allDone.Task, Task.Delay(8000));
         pipeline.Stop();
         Assert.True(pipeline.WindowsDropped > 0, "翻译跟不上时应丢窗");
