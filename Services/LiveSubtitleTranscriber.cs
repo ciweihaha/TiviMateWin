@@ -7,13 +7,15 @@ using Whisper.net;
 namespace TiviMateWin.Services;
 
 /// <summary>
-/// 本地语音识别：Whisper.NET（whisper.cpp），英文专用 base.en 模型。
+/// 本地语音识别：Whisper.NET（whisper.cpp），英文专用 tiny.en 模型。
 /// 模型首次使用时下载到本机（不进安装包）；工厂常驻内存、每窗一个处理器、串行听写。
-/// </summary>
+/// tiny.en 是默认：3 秒窗在云电脑上 base.en 要 3 秒、台式机 5–6 秒，队列一满
+/// 端到端就到 10 秒；tiny.en 快 3–4 倍、广播新闻口音识别够用，base.en 仍可配回。
+/// 模型路径含中文时同样先解析成纯英文路径再传给原生加载器（见 LiveSubtitleModelPath）。</summary>
 public sealed class LiveSubtitleTranscriber : IDisposable
 {
-    /// <summary>默认听写模型文件名（英文专用 base.en）；可配 tiny.en（更快、识别稍差）。</summary>
-    public const string ModelFileName = "ggml-base.en.bin";
+    /// <summary>默认听写模型文件名（英文专用 tiny.en）；可配 base.en（更准、更慢）。</summary>
+    public const string ModelFileName = "ggml-tiny.en.bin";
 
     // 模型下载地址：Hugging Face 主站 + 国内镜像兜底（ggerganov/whisper.cpp 仓库，
     // ggml-base.en.bin / ggml-tiny.en.bin 等都在同一仓库同一路径下）。
@@ -33,6 +35,7 @@ public sealed class LiveSubtitleTranscriber : IDisposable
 
     private readonly string _modelPath;
     private readonly string _modelFileName;
+    private string? _loadPath; // 传给原生加载器的路径（中文路径解析成纯英文后缓存，避免每窗重算）
     private readonly HttpClient _http;
     private WhisperFactory? _factory;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -56,7 +59,7 @@ public sealed class LiveSubtitleTranscriber : IDisposable
     public LiveSubtitleTranscriber(string? modelPath = null, HttpClient? http = null, int? threads = null,
         string? modelFileName = null)
     {
-        // 模型文件：文件名决定下载地址（同一仓库）；不传用默认 base.en。
+        // 模型文件：文件名决定下载地址（同一仓库）；不传用默认 tiny.en。
         // 传完整路径时直接用（测试用临时路径），文件名取路径里的名字。
         var fileName = string.IsNullOrWhiteSpace(modelFileName)
             ? (string.IsNullOrWhiteSpace(modelPath) ? ModelFileName : Path.GetFileName(modelPath))
@@ -120,7 +123,8 @@ public sealed class LiveSubtitleTranscriber : IDisposable
         try
         {
             var sw = Stopwatch.StartNew();
-            _factory ??= WhisperFactory.FromPath(_modelPath);
+            _loadPath ??= LiveSubtitleModelPath.ResolveForNativeLoad(_modelPath);
+            _factory ??= WhisperFactory.FromPath(_loadPath);
             sw.Stop();
             AppLog.Info($"whisper factory ready {sw.ElapsedMilliseconds}ms");
             return true;
@@ -141,7 +145,8 @@ public sealed class LiveSubtitleTranscriber : IDisposable
         {
             // 首调用建工厂+处理器（读模型、建原生上下文）：单独计时，区分“加载慢”还是“推理慢”。
             var setupSw = Stopwatch.StartNew();
-            _factory ??= WhisperFactory.FromPath(_modelPath);
+            _loadPath ??= LiveSubtitleModelPath.ResolveForNativeLoad(_modelPath);
+            _factory ??= WhisperFactory.FromPath(_loadPath);
             using var processor = _factory.CreateBuilder()
                 .WithLanguage("en")
                 .WithThreads(Threads)
