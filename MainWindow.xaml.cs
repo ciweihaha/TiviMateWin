@@ -287,6 +287,10 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _digitTimer = new() { Interval = TimeSpan.FromMilliseconds(1200) };
     // 换台信息条（V1.4）：左下角频道名 + 正在播放 / 稍后播放卡片，3 秒自动隐藏
     private readonly DispatcherTimer _osdHideTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+
+    // 直播实时字幕（听写+翻译）：服务只在设置开启时创建；字幕条 5 秒无新字幕自动隐藏。
+    private LiveSubtitleService? _subtitleService;
+    private readonly DispatcherTimer _subtitleHideTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     // EPG 时效刷新（V1.4）：每分钟刷新本地正在播放显示，避免长时间停留时节目过期
     private readonly DispatcherTimer _epgRefreshTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     // 当前处于播放态的列表项引用（列表高亮用；AdoptChannels 整体替换列表后按 Url 恢复）
@@ -323,6 +327,7 @@ public partial class MainWindow : Window
         _progressTimer.Tick += (_, _) => UpdateProgress();
         _digitTimer.Tick += (_, _) => CommitDigits();
         _osdHideTimer.Tick += (_, _) => { _osdHideTimer.Stop(); ChannelOsd.Visibility = Visibility.Collapsed; };
+        _subtitleHideTimer.Tick += (_, _) => { _subtitleHideTimer.Stop(); SubtitleBar.Visibility = Visibility.Collapsed; };
         _epgRefreshTimer.Tick += (_, _) => OnEpgRefreshTick();
         _reattachCheckTimer.Tick += (_, _) => { _reattachCheckTimer.Stop(); OnReattachCheckTick(); };
         // v1.4.27（轻微 5）：拉伸模式的 DAR 按视频区实时尺寸算，窗口尺寸变了要重算，
@@ -703,6 +708,8 @@ public partial class MainWindow : Window
             _engineReady = true;
             _stallWatch.Start();
             AppLog.Info($"engine ready libVLC {_libvlc.Version}");
+            // 直播实时字幕：设置里开着时随引擎就绪启动（播放器只建一次，服务也只建一次）。
+            if (_config.LiveSubtitleEnabled) EnsureSubtitleService();
             if (PlayState.Text == "引擎初始化…") PlayState.Text = "就绪";
         }
         catch (Exception ex)
@@ -1122,6 +1129,9 @@ public partial class MainWindow : Window
                     lock (_mainPlayerLock)
                     {
                         if (_closing || _current?.Url != ch.Url) return;
+                        // 直播实时字幕：音频回调须在 Play 之前挂上（格式协商在流启动时进行，
+                        // 播起来之后再挂要等下次 Play 才生效）；挂接本身幂等，只挂一次。
+                        _subtitleService?.EnsureAudioAttached();
                         // 创建新 Media 并播放，然后释放旧的（顺序：先播新的，再释放旧的，避免黑屏）
                         var media = url.Contains("://")
                             ? new Media(_libvlc!, new Uri(url))
@@ -1277,6 +1287,7 @@ public partial class MainWindow : Window
         // v1.4.27：抽到 ClearVideoSurface（切源/删源/空源共用），并顺手立即隐藏信息条
         // （轻微 7：覆盖窗口不跟随 VideoView 隐藏，否则在黑屏上再漂最多 3 秒）。
         ClearVideoSurface();
+        HideLiveSubtitle();   // 停止时字幕条立即隐藏（覆盖窗口不跟随 VideoView 隐藏）
         try
         {
             _isPaused = false;
@@ -2276,6 +2287,8 @@ public partial class MainWindow : Window
             ApplyAspectRatio(_aspectRatio);
             if (_player != null) { try { _player.SetRate(_playbackRate); } catch (Exception ex) { AppLog.Error($"apply rate from settings failed: {ex.Message}"); } }
             ApplyTheme(_config.Theme);
+            // 直播实时字幕：开关/模型/地址改了立即生效（开→建服务并重播当前频道挂回调；关→停服务藏字幕）。
+            ApplyLiveSubtitleSettings();
             // Xtream：配好凭据后要让源列表里出现 Xtream 项。旧代码只在没有任何播放列表时
             // 才加载，已有 M3U 源的用户填了 Xtream、保存后什么也不会发生（功能静默失效，
             // 也没有任何提示）。本处：无源、当前就是 Xtream、或未激活任何源时直接加载
@@ -2309,6 +2322,93 @@ public partial class MainWindow : Window
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// 直播实时字幕：建服务并启动（只建一次；引擎未就绪时不建，由 EnsureEngineAsync 就绪后补建）。
+    /// 服务事件在后台线程触发，显示一律切回 UI 线程。
+    /// </summary>
+    private void EnsureSubtitleService()
+    {
+        if (_subtitleService != null || _player is null || _closing) return;
+        var service = new LiveSubtitleService(_player, _config);
+        service.SubtitleReady += line => Dispatcher.BeginInvoke(() => ShowLiveSubtitle(line));
+        service.StatusChanged += status => Dispatcher.BeginInvoke(() => ShowLiveSubtitleStatus(status));
+        _subtitleService = service;
+        service.Start();
+    }
+
+    /// <summary>
+    /// 设置保存后应用实时字幕开关：开→建服务，重播当前频道让音频回调生效；
+    /// 关→停服务、藏字幕条。模型/地址/窗口改了要重建服务才生效（翻译器与切块器在构造时定死）。
+    /// </summary>
+    private void ApplyLiveSubtitleSettings()
+    {
+        if (_config.LiveSubtitleEnabled)
+        {
+            if (_subtitleService != null &&
+                (_subtitleService.Model != _config.LiveSubtitleModel ||
+                 _subtitleService.Endpoint != _config.LiveSubtitleOllamaEndpoint ||
+                 _subtitleService.WindowSeconds != _config.LiveSubtitleWindowSeconds))
+            {
+                _subtitleService.Stop();
+                _subtitleService.Dispose();
+                _subtitleService = null;
+                HideLiveSubtitle();
+            }
+            var wasRunning = _subtitleService != null;
+            EnsureSubtitleService();
+            // 刚开启：音频回调须在 Play 之前挂上，重播当前频道让格式协商在回调生效的状态下进行。
+            if (!wasRunning && _current != null && _player != null && !_closing)
+                _ = PlayAsync(_current);
+        }
+        else if (_subtitleService != null)
+        {
+            _subtitleService.Stop();
+            _subtitleService.Dispose();
+            _subtitleService = null;
+            HideLiveSubtitle();
+        }
+    }
+
+    /// <summary>显示一条实时字幕：中文大字 + 英文原文（按设置），5 秒无新字幕自动隐藏。</summary>
+    private void ShowLiveSubtitle(LiveSubtitleLine line)
+    {
+        if (_closing) return;
+        SubtitleChinese.Text = line.Chinese;
+        SubtitleEnglish.Text = line.English;
+        SubtitleEnglish.Visibility = _config.LiveSubtitleShowEnglish ? Visibility.Visible : Visibility.Collapsed;
+        SubtitleBar.Visibility = Visibility.Visible;
+        _subtitleHideTimer.Stop();
+        _subtitleHideTimer.Start();
+    }
+
+    /// <summary>字幕状态提示（模型下载中、翻译服务连不上等）：空字符串 = 清除提示。</summary>
+    private void ShowLiveSubtitleStatus(string status)
+    {
+        if (_closing) return;
+        if (string.IsNullOrEmpty(status))
+        {
+            SubtitleStatus.Visibility = Visibility.Collapsed;
+            SubtitleStatus.Text = "";
+            return;
+        }
+        SubtitleStatus.Text = status;
+        SubtitleStatus.Visibility = Visibility.Visible;
+        // 有状态无字幕时也把字幕条露出来，否则提示没地方显示。
+        if (SubtitleBar.Visibility != Visibility.Visible)
+        {
+            SubtitleChinese.Text = "";
+            SubtitleEnglish.Text = "";
+            SubtitleEnglish.Visibility = Visibility.Collapsed;
+            SubtitleBar.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void HideLiveSubtitle()
+    {
+        _subtitleHideTimer.Stop();
+        SubtitleBar.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>从 M3U 头部解析 EPG 源地址（#EXTM3U url-tvg="..."）</summary>
@@ -3003,6 +3103,10 @@ public partial class MainWindow : Window
         _progressTimer.Stop();              // L1：此前漏停，关闭后仍每 500ms 读已释放播放器的 Length/Time
         _reattachCheckTimer.Stop();         // 崩溃修复：此前漏停，关闭后仍会触发重播
         _switchDebounce.Stop();
+        // 直播实时字幕：先停流水线与音频播出，再释放播放器——回调线程不再往已停的服务里送样本。
+        _subtitleService?.Stop();
+        _subtitleService?.Dispose();
+        _subtitleService = null;
         _osdTimer.Stop();
         _fsHideTimer.Stop();
         _searchDebounce.Stop();

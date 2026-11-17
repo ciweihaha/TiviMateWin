@@ -363,6 +363,22 @@
                             Click="BtnFull_Click" ToolTip="退出全屏（Esc / F11）"/>
                 </StackPanel>
             </Border>
+
+            <!-- 直播实时字幕条：必须放 VideoView.Content 里（同 ChannelOsd 的空域规则），
+                 否则原生视频 HWND 会盖住它。底部贴边、上留 70px 避开全屏控制条；
+                 在 Content 里后声明，绘制在控制条之上。 -->
+            <Border x:Name="SubtitleBar" VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                    Margin="0,0,0,70" Background="#CC151B24" CornerRadius="8" Padding="14,8"
+                    Visibility="Collapsed" IsHitTestVisible="False" MaxWidth="760">
+                <StackPanel>
+                    <TextBlock x:Name="SubtitleChinese" Text="" FontSize="20" FontWeight="Bold"
+                               Foreground="#FFFFFFFF" TextAlignment="Center" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="SubtitleEnglish" Text="" FontSize="13" Foreground="#FFC8D4DE"
+                               TextAlignment="Center" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="SubtitleStatus" Text="" FontSize="11" Foreground="#FF8FA3B0"
+                               TextAlignment="Center" Margin="0,4,0,0" Visibility="Collapsed"/>
+                </StackPanel>
+            </Border>
             </Grid>
             </lvc:VideoView>
 

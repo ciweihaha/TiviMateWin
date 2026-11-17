@@ -28,6 +28,13 @@ public class AppConfig
     public int NetworkCache { get; set; } = 800;      // 网络缓存 ms（libVLC network-caching）
     public bool HardwareDecode { get; set; } = true;  // 硬件解码开关
     public bool VlcVerbose { get; set; } = false;     // LibVLC 详细日志开关（诊断用，写 vlc-log.txt）
+
+    // 直播实时字幕（听写+翻译）：默认关；模型不塞进应用，调本机 Ollama。
+    public bool LiveSubtitleEnabled { get; set; } = false;
+    public bool LiveSubtitleShowEnglish { get; set; } = true;  // 字幕条同时显示英文原文
+    public string LiveSubtitleModel { get; set; } = "qwen2.5:1.5b";
+    public string LiveSubtitleOllamaEndpoint { get; set; } = "http://127.0.0.1:11434";
+    public int LiveSubtitleWindowSeconds { get; set; } = 3;    // 切块窗口（秒），1–10
     public string AspectRatio { get; set; } = "";      // 画面比例（空=原始，16:9/4:3/拉伸）
     public double PlaybackRate { get; set; } = 1.0;    // 倍速
     public string Theme { get; set; } = "深色";         // 主题：深色/浅色
