@@ -169,6 +169,7 @@ public sealed class LiveSubtitleService : IDisposable
             return;
         }
         SubtitleReady?.Invoke(new LiveSubtitleLine(english, chinese ?? english, DateTimeOffset.UtcNow));
+        AppLog.Info($"live subtitle: [{english}] => [{chinese ?? english}]");
         AppLog.Info($"live subtitle: transcribe {_transcriber.LastTranscribeMs}ms " +
                     $"translate {LastTranslateMs}ms window {window.Length / 16000}s");
     }

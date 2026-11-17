@@ -30,6 +30,9 @@ public sealed class LiveSubtitleTranscriber : IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _disposed;
 
+    /// <summary>听写线程数：与翻译一样，流水线串行时各用全部核（留 1 核给播放与界面）。</summary>
+    public static int TranscribeThreads => Math.Clamp(Environment.ProcessorCount - 1, 2, 8);
+
     public bool ModelReady => File.Exists(_modelPath);
 
     /// <summary>最近一次听写的耗时（毫秒），供延迟实测。</summary>
@@ -92,7 +95,10 @@ public sealed class LiveSubtitleTranscriber : IDisposable
         try
         {
             _factory ??= WhisperFactory.FromPath(_modelPath);
-            using var processor = _factory.CreateBuilder().WithLanguage("en").Build();
+            using var processor = _factory.CreateBuilder()
+                .WithLanguage("en")
+                .WithThreads(TranscribeThreads)
+                .Build();
             using var wav = new MemoryStream(LiveSubtitleChunker.BuildWav(mono16k));
             var sw = Stopwatch.StartNew();
             var sb = new StringBuilder();

@@ -35,7 +35,7 @@ public sealed class LiveSubtitleTranslator : IDisposable
     private const int EvictBatch = 100;
     private const int MaxConsecutiveFailures = 3;   // 熔断阈值：连续失败这么多次即停字幕
     private const int InferenceTimeoutSeconds = 8;  // 单行推理超时（毫秒级行一般 1–2 秒）
-    private const int MaxTokens = 128;              // 字幕行短，128 token 够译两三句话
+    private const int MaxTokens = 64;               // 字幕行短，64 token 够译两三句话，同时截住模型跑题续写
     private const float Temperature = 0.2f;
     private const int ContextSize = 1024;           // 提示词约 100 token，1024 绰绰有余
 
@@ -47,10 +47,10 @@ public sealed class LiveSubtitleTranslator : IDisposable
     public static string DefaultModelPath => Path.Combine(DefaultModelDir, DefaultModelFileName);
 
     /// <summary>
-    /// 推理线程数：留一半 CPU 给播放、听写和界面。8 核云电脑上是 4 线程，
-    /// 4 核机器上是 2 线程；实测后再调。
+    /// 推理线程数：流水线串行（听写与翻译不同时跑），各用全部核才最快；
+    /// 留 1 核给播放与界面。8 核云电脑上是 7 线程，4 核机器上是 3 线程。
     /// </summary>
-    public static int InferenceThreads => Math.Clamp(Environment.ProcessorCount / 2, 2, 4);
+    public static int InferenceThreads => Math.Clamp(Environment.ProcessorCount - 1, 2, 8);
 
     private readonly string _modelPath;
     private readonly HttpClient _http;
