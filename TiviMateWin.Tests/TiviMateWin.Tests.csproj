@@ -24,6 +24,7 @@
     <Compile Include="..\Services\LiveSubtitlePipeline.cs" Link="LiveSubtitlePipeline.cs" />
     <Compile Include="..\Services\LiveSubtitleSerialClock.cs" Link="LiveSubtitleSerialClock.cs" />
     <Compile Include="..\Services\LiveSubtitleTranslator.cs" Link="LiveSubtitleTranslator.cs" />
+    <Compile Include="..\Services\LiveSubtitleModelPath.cs" Link="LiveSubtitleModelPath.cs" />
   </ItemGroup>
 
 </Project>
