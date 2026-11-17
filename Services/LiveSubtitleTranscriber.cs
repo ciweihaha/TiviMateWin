@@ -33,6 +33,9 @@ public sealed class LiveSubtitleTranscriber : IDisposable
     /// <summary>听写线程数：与翻译一样，流水线串行时各用全部核（留 1 核给播放与界面）。</summary>
     public static int TranscribeThreads => Math.Clamp(Environment.ProcessorCount - 1, 2, 8);
 
+    /// <summary>本实例听写用的线程数（两级流水线分核时由服务指定；不指定则用默认值）。</summary>
+    public int Threads { get; }
+
     public bool ModelReady => File.Exists(_modelPath);
 
     /// <summary>最近一次听写的耗时（毫秒），供延迟实测。</summary>
@@ -41,10 +44,11 @@ public sealed class LiveSubtitleTranscriber : IDisposable
     /// <summary>模型下载进度（已下载字节、总字节；总字节未知时为 -1）。</summary>
     public event Action<long, long>? ModelDownloadProgress;
 
-    public LiveSubtitleTranscriber(string? modelPath = null, HttpClient? http = null)
+    public LiveSubtitleTranscriber(string? modelPath = null, HttpClient? http = null, int? threads = null)
     {
         _modelPath = string.IsNullOrWhiteSpace(modelPath) ? DefaultModelPath : modelPath;
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        Threads = threads.HasValue ? Math.Clamp(threads.Value, 1, 16) : TranscribeThreads;
     }
 
     /// <summary>模型已在返回 true；否则下载（主站失败走镜像），成功返回 true，失败返回 false。</summary>
@@ -97,7 +101,7 @@ public sealed class LiveSubtitleTranscriber : IDisposable
             _factory ??= WhisperFactory.FromPath(_modelPath);
             using var processor = _factory.CreateBuilder()
                 .WithLanguage("en")
-                .WithThreads(TranscribeThreads)
+                .WithThreads(Threads)
                 .Build();
             using var wav = new MemoryStream(LiveSubtitleChunker.BuildWav(mono16k));
             var sw = Stopwatch.StartNew();

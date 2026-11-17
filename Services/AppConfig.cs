@@ -34,6 +34,10 @@ public class AppConfig
     public bool LiveSubtitleShowEnglish { get; set; } = true;  // 字幕条同时显示英文原文
     public string LiveSubtitleModel { get; set; } = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
     public int LiveSubtitleWindowSeconds { get; set; } = 3;    // 切块窗口（秒），1–10
+    // 两级流水线分核（0=自动：留 1 核给播放与界面，其余按 2:1 分给听写与翻译；
+    // >0 手动指定，云电脑上改 config.json 就能调，不用重编）。
+    public int LiveSubtitleTranscribeThreads { get; set; } = 0;
+    public int LiveSubtitleTranslateThreads { get; set; } = 0;
     public string AspectRatio { get; set; } = "";      // 画面比例（空=原始，16:9/4:3/拉伸）
     public double PlaybackRate { get; set; } = 1.0;    // 倍速
     public string Theme { get; set; } = "深色";         // 主题：深色/浅色
@@ -322,6 +326,9 @@ public class AppConfig
             // 大缓存能多扛几次失败再断（实测 800ms 不到 1 秒就断、5000ms 能撑 100–146 秒）。
             cfg.Volume = Math.Clamp(cfg.Volume, 0, 125);
             cfg.NetworkCache = Math.Clamp(cfg.NetworkCache, 200, 10000);
+            cfg.LiveSubtitleWindowSeconds = Math.Clamp(cfg.LiveSubtitleWindowSeconds, 1, 10);
+            cfg.LiveSubtitleTranscribeThreads = Math.Clamp(cfg.LiveSubtitleTranscribeThreads, 0, 16);
+            cfg.LiveSubtitleTranslateThreads = Math.Clamp(cfg.LiveSubtitleTranslateThreads, 0, 16);
             return cfg;
         }
         catch (JsonException ex)

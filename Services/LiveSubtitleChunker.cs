@@ -114,12 +114,14 @@ public sealed class LiveSubtitleChunker
         return wav;
     }
 
-    /// <summary>Whisper 常出的非语音标记（[music]、[applause] 等）与空白：应丢弃，不显示、不翻译。</summary>
+    /// <summary>Whisper 常出的非语音标记（[music]、[applause]、(upbeat music) 等）与空白：应丢弃，不显示、不翻译。
+    /// 只认整段被括号包住的标记；括号只在句中出现时不算（如 "Hello (world)" 照常显示）。</summary>
     public static bool IsNonSpeechMarker(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return true;
         var t = text.Trim();
-        return t.Length >= 2 && t[0] == '[' && t[^1] == ']';
+        if (t.Length < 2) return false;
+        return (t[0] == '[' && t[^1] == ']') || (t[0] == '(' && t[^1] == ')');
     }
 
     private static void WriteAscii(byte[] buf, int offset, string s)

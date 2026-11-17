@@ -21,6 +21,7 @@
     <Compile Include="..\Services\PipTrayIconState.cs" Link="PipTrayIconState.cs" />
     <Compile Include="..\Services\AppLog.cs" Link="AppLog.cs" />
     <Compile Include="..\Services\LiveSubtitleChunker.cs" Link="LiveSubtitleChunker.cs" />
+    <Compile Include="..\Services\LiveSubtitlePipeline.cs" Link="LiveSubtitlePipeline.cs" />
     <Compile Include="..\Services\LiveSubtitleTranslator.cs" Link="LiveSubtitleTranslator.cs" />
   </ItemGroup>
 

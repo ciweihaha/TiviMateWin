@@ -52,6 +52,9 @@ public sealed class LiveSubtitleTranslator : IDisposable
     /// </summary>
     public static int InferenceThreads => Math.Clamp(Environment.ProcessorCount - 1, 2, 8);
 
+    /// <summary>本实例推理用的线程数（两级流水线分核时由服务指定；不指定则用默认值）。</summary>
+    public int Threads { get; }
+
     private readonly string _modelPath;
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
@@ -78,7 +81,7 @@ public sealed class LiveSubtitleTranslator : IDisposable
     public event Action<long, long>? ModelDownloadProgress;
 
     public LiveSubtitleTranslator(string? modelPath = null, HttpClient? http = null,
-        Func<string, CancellationToken, Task<string?>>? generateOverride = null)
+        Func<string, CancellationToken, Task<string?>>? generateOverride = null, int? threads = null)
     {
         // 配置里存的是文件名（如 qwen2.5-1.5b-instruct-q4_k_m.gguf），拼到模型目录下；
         // 传完整路径时直接用（测试用临时路径）。
@@ -88,6 +91,7 @@ public sealed class LiveSubtitleTranslator : IDisposable
         _ownsHttp = http is null;
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
         _generateOverride = generateOverride;
+        Threads = threads.HasValue ? Math.Clamp(threads.Value, 1, 16) : InferenceThreads;
     }
 
     /// <summary>模型已在返回 true；否则下载（主站失败走镜像），成功返回 true，失败返回 false。</summary>
@@ -149,12 +153,12 @@ public sealed class LiveSubtitleTranslator : IDisposable
                 var parameters = new ModelParams(_modelPath)
                 {
                     ContextSize = ContextSize,
-                    Threads = InferenceThreads,
+                    Threads = Threads,
                 };
                 _weights = await LLamaWeights.LoadFromFileAsync(parameters, ct, new Progress<float>())
                     .ConfigureAwait(false);
                 _executor = new StatelessExecutor(_weights, parameters);
-                AppLog.Info($"translate model loaded ({DefaultModelFileName}, threads {InferenceThreads})");
+                AppLog.Info($"translate model loaded ({DefaultModelFileName}, threads {Threads})");
                 return true;
             }
             finally

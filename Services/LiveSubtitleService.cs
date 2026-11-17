@@ -1,15 +1,12 @@
-using System.Diagnostics;
 using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace TiviMateWin.Services;
 
-/// <summary>一条实时字幕：英文原文 + 中文译文（翻译失败时中文即英文原文）。</summary>
-public sealed record LiveSubtitleLine(string English, string Chinese, DateTimeOffset At);
-
 /// <summary>
-/// 直播实时字幕编排：音频 → 切块 → 听写 → 翻译 → 字幕事件。
-/// 流水线单线程串行（Whisper 处理器一次只跑一窗）；任何一步失败只记日志、
-/// 当窗跳过，永不挡播放。延迟实测值（听写/翻译/合计）暴露给调用方。
+/// 直播实时字幕编排：音频 → 切块 → 两级流水线（听写与翻译并行）→ 字幕事件。
+/// 听写下一窗的同时翻译上一窗，吞吐由最慢的一级决定，不再像串行那样
+/// 每窗耗时 = 听写 + 翻译（3 秒窗约 3.9 秒 &gt; 窗长，越跑越掉队）。
+/// 任何一步失败只记日志、当窗跳过，永不挡播放。延迟实测值暴露给调用方。
 /// </summary>
 public sealed class LiveSubtitleService : IDisposable
 {
@@ -19,8 +16,9 @@ public sealed class LiveSubtitleService : IDisposable
     private readonly LiveSubtitleChunker _chunker;
     private readonly LiveSubtitleTranscriber _transcriber;
     private readonly LiveSubtitleTranslator _translator;
+    private LiveSubtitlePipeline? _pipeline;
     private CancellationTokenSource? _cts;
-    private Task? _pipelineTask;
+    private Task? _feederTask;
     private bool _audioAttached;
     private bool _modelReady;
     private bool _translatorReady;
@@ -40,14 +38,45 @@ public sealed class LiveSubtitleService : IDisposable
     /// <summary>当前切块窗口（秒，设置改了需重建服务才生效）。</summary>
     public int WindowSeconds => _config.LiveSubtitleWindowSeconds;
 
+    /// <summary>听写实际用的线程数（设置改了需重建服务才生效）。</summary>
+    public int TranscribeThreads { get; }
+
+    /// <summary>翻译实际用的线程数（设置改了需重建服务才生效）。</summary>
+    public int TranslateThreads { get; }
+
     /// <summary>最近一窗听写耗时（毫秒）。</summary>
-    public long LastTranscribeMs => _transcriber.LastTranscribeMs;
+    public long LastTranscribeMs => _pipeline?.LastTranscribeMs ?? 0;
 
     /// <summary>最近一窗翻译耗时（毫秒）。</summary>
-    public long LastTranslateMs { get; private set; }
+    public long LastTranslateMs => _pipeline?.LastTranslateMs ?? 0;
 
-    /// <summary>最近一窗听写+翻译合计耗时（毫秒，不含切块等待）。</summary>
-    public long LastPipelineMs { get; private set; }
+    /// <summary>最近一窗听写+翻译合计耗时（毫秒，不含切块等待与排队）。</summary>
+    public long LastPipelineMs => LastTranscribeMs + LastTranslateMs;
+
+    /// <summary>最近一窗端到端延迟（毫秒：窗口入队 → 字幕发出）。</summary>
+    public long LastEndToEndMs => _pipeline?.LastEndToEndMs ?? 0;
+
+    /// <summary>累计收到的窗口数。</summary>
+    public long WindowsReceived => _pipeline?.WindowsReceived ?? 0;
+
+    /// <summary>累计丢掉的窗口数（队列满时丢最旧）。</summary>
+    public long WindowsDropped => _pipeline?.WindowsDropped ?? 0;
+
+    /// <summary>
+    /// 两级流水线分核：留 1 核给播放与界面，其余按 2:1 分给听写与翻译
+    /// （听写是更慢的一级）；配置里 &gt;0 的值手动覆盖（0=自动）。
+    /// </summary>
+    public static (int Transcribe, int Translate) ResolveThreads(AppConfig config)
+    {
+        var total = Math.Max(2, Environment.ProcessorCount - 1);
+        var transcribe = config.LiveSubtitleTranscribeThreads > 0
+            ? Math.Clamp(config.LiveSubtitleTranscribeThreads, 1, 16)
+            : Math.Max(2, total * 2 / 3);
+        var translate = config.LiveSubtitleTranslateThreads > 0
+            ? Math.Clamp(config.LiveSubtitleTranslateThreads, 1, 16)
+            : Math.Max(2, total - transcribe);
+        return (transcribe, translate);
+    }
 
     public LiveSubtitleService(MediaPlayer player, AppConfig config)
     {
@@ -55,8 +84,11 @@ public sealed class LiveSubtitleService : IDisposable
         _config = config;
         _capture = new LiveSubtitleAudioCapture(player);
         _chunker = new LiveSubtitleChunker(Math.Clamp(config.LiveSubtitleWindowSeconds, 1, 10));
-        _transcriber = new LiveSubtitleTranscriber();
-        _translator = new LiveSubtitleTranslator(config.LiveSubtitleModel);
+        var (transcribeThreads, translateThreads) = ResolveThreads(config);
+        TranscribeThreads = transcribeThreads;
+        TranslateThreads = translateThreads;
+        _transcriber = new LiveSubtitleTranscriber(threads: transcribeThreads);
+        _translator = new LiveSubtitleTranslator(config.LiveSubtitleModel, threads: translateThreads);
         _transcriber.ModelDownloadProgress += (downloaded, total) =>
         {
             if (total > 0)
@@ -86,8 +118,23 @@ public sealed class LiveSubtitleService : IDisposable
         if (IsRunning || _disposed) return;
         IsRunning = true;
         _cts = new CancellationTokenSource();
-        _pipelineTask = Task.Run(() => PipelineLoopAsync(_cts.Token));
+        _pipeline = new LiveSubtitlePipeline(
+            transcribe: (window, ct) => _transcriber.TranscribeAsync(window, ct),
+            translate: (text, ct) => _translator.TranslateAsync(text, ct),
+            isTranslatorBroken: () => _translator.IsBroken);
+        _pipeline.SubtitleReady += line => SubtitleReady?.Invoke(line);
+        _pipeline.TranslatorBroken += OnTranslatorBroken;
+        _pipeline.Start();
+        _feederTask = Task.Run(() => PipelineLoopAsync(_cts.Token));
         _ = PrepareAsync(_cts.Token);
+    }
+
+    private void OnTranslatorBroken()
+    {
+        // 熔断：推理连续失败，字幕停掉、播放继续（重开开关重建服务才会再试）。
+        StatusChanged?.Invoke("翻译连续失败，实时字幕已停（播放不受影响）");
+        AppLog.Error("live subtitle stopped: translator broken");
+        Stop();
     }
 
     private async Task PrepareAsync(CancellationToken ct)
@@ -110,9 +157,13 @@ public sealed class LiveSubtitleService : IDisposable
         if (!IsRunning) return;
         IsRunning = false;
         try { _cts?.Cancel(); } catch { }
+        try { _pipeline?.Stop(); } catch { }
+        try { _pipeline?.Dispose(); } catch { }
+        _pipeline = null;
         _capture.Stop();
     }
 
+    /// <summary>喂音频的循环：PCM → 重采样 → 切块 → 送进流水线；模型未就绪时直接丢窗，不积压。</summary>
     private async Task PipelineLoopAsync(CancellationToken ct)
     {
         var reader = _capture.PcmReader;
@@ -129,7 +180,12 @@ public sealed class LiveSubtitleService : IDisposable
                     var mono = LiveSubtitleChunker.ResampleStereo48kToMono16k(shorts);
                     var window = _chunker.Feed(mono);
                     if (window is null) continue;
-                    await ProcessWindowAsync(window, ct).ConfigureAwait(false);
+                    if (!_modelReady)
+                    {
+                        // 模型未就绪：直播追不上旧音频，直接丢窗，不积压。
+                        continue;
+                    }
+                    _pipeline?.EnqueueWindow(window);
                 }
             }
         }
@@ -141,37 +197,6 @@ public sealed class LiveSubtitleService : IDisposable
         {
             AppLog.Error($"live subtitle pipeline failed: {ex.Message}");
         }
-    }
-
-    private async Task ProcessWindowAsync(short[] window, CancellationToken ct)
-    {
-        var sw = Stopwatch.StartNew();
-        if (!_modelReady)
-        {
-            // 模型未就绪：直播追不上旧音频，直接丢窗，不积压。
-            return;
-        }
-        if (LiveSubtitleChunker.IsSilent(window)) return;
-        var english = await _transcriber.TranscribeAsync(window, ct).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(english)) return;
-        var translateSw = Stopwatch.StartNew();
-        var chinese = await _translator.TranslateAsync(english, ct).ConfigureAwait(false);
-        translateSw.Stop();
-        LastTranslateMs = translateSw.ElapsedMilliseconds;
-        sw.Stop();
-        LastPipelineMs = sw.ElapsedMilliseconds;
-        if (_translator.IsBroken)
-        {
-            // 熔断：推理连续失败，字幕停掉、播放继续（重开开关重建服务才会再试）。
-            StatusChanged?.Invoke("翻译连续失败，实时字幕已停（播放不受影响）");
-            AppLog.Error("live subtitle stopped: translator broken");
-            Stop();
-            return;
-        }
-        SubtitleReady?.Invoke(new LiveSubtitleLine(english, chinese ?? english, DateTimeOffset.UtcNow));
-        AppLog.Info($"live subtitle: [{english}] => [{chinese ?? english}]");
-        AppLog.Info($"live subtitle: transcribe {_transcriber.LastTranscribeMs}ms " +
-                    $"translate {LastTranslateMs}ms window {window.Length / 16000}s");
     }
 
     public void Dispose()

@@ -2346,9 +2346,12 @@ public partial class MainWindow : Window
     {
         if (_config.LiveSubtitleEnabled)
         {
+            var (transcribeThreads, translateThreads) = LiveSubtitleService.ResolveThreads(_config);
             if (_subtitleService != null &&
                 (_subtitleService.Model != _config.LiveSubtitleModel ||
-                 _subtitleService.WindowSeconds != _config.LiveSubtitleWindowSeconds))
+                 _subtitleService.WindowSeconds != _config.LiveSubtitleWindowSeconds ||
+                 _subtitleService.TranscribeThreads != transcribeThreads ||
+                 _subtitleService.TranslateThreads != translateThreads))
             {
                 _subtitleService.Stop();
                 _subtitleService.Dispose();

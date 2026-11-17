@@ -131,7 +131,12 @@ public class LiveSubtitleChunkerTests
     [InlineData("[music]", true)]
     [InlineData("[applause]", true)]
     [InlineData("[inaudible]", true)]
+    [InlineData("(upbeat music)", true)]
+    [InlineData("(music)", true)]
+    [InlineData("(applause)", true)]
     [InlineData("Hello world", false)]
+    [InlineData("Hello (world)", false)]
+    [InlineData("(hello) world", false)]
     [InlineData("", true)]
     [InlineData("   ", true)]
     public void IsNonSpeechMarker_FiltersBracketedMarkers(string text, bool expected)
