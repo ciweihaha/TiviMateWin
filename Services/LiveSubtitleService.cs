@@ -214,14 +214,42 @@ public sealed class LiveSubtitleService : IDisposable
         _capture.Stop();
     }
 
-    /// <summary>喂音频的循环：PCM → 重采样 → 切块 → 送进流水线；模型未就绪时直接丢窗，不积压。</summary>
+    /// <summary>喂音频的循环：PCM → 重采样 → 切块 → 送进流水线；模型未就绪时直接丢窗，不积压。
+    /// 等 PCM 带 1 秒超时：断流时每超时 1 秒就把音频时钟往前拨 1 秒（断流不算落后），
+    /// 否则墙钟照走、音频不走，时钟落后越拉越大，重连后每窗都判陈旧、串行模式永久丢窗。</summary>
     private async Task PipelineLoopAsync(CancellationToken ct)
     {
         var reader = _capture.PcmReader;
+        var stalledSeconds = 0; // 连续等不到 PCM 的秒数（断流时长，恢复后记日志）
         try
         {
-            while (await reader.WaitToReadAsync(ct).ConfigureAwait(false))
+            while (!ct.IsCancellationRequested)
             {
+                bool hasData;
+                using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(1));
+                    try
+                    {
+                        hasData = await reader.WaitToReadAsync(timeoutCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        // 1 秒没等到 PCM：断流，音频时钟往前拨 1 秒。
+                        _audioStartWall = LiveSubtitleSerialClock.AdvanceForIdleTime(
+                            _audioStartWall, TimeSpan.FromSeconds(1));
+                        if (stalledSeconds == 0)
+                            AppLog.Info("live subtitle: audio stalled, advancing audio clock");
+                        stalledSeconds++;
+                        continue;
+                    }
+                }
+                if (!hasData) break; // 音频通道已关闭
+                if (stalledSeconds > 0)
+                {
+                    AppLog.Info($"live subtitle: audio resumed after {stalledSeconds}s stall");
+                    stalledSeconds = 0;
+                }
                 while (reader.TryRead(out var pcm))
                 {
                     if (ct.IsCancellationRequested) return;
