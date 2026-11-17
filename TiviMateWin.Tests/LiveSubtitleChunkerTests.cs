@@ -77,6 +77,23 @@ public class LiveSubtitleChunkerTests
     }
 
     [Fact]
+    public void Feed_MultiWindowInput_QueuesSecondWindow()
+    {
+        var chunker = new LiveSubtitleChunker(windowSeconds: 3);
+        // 7 秒一次喂入：满两窗，余 1 秒在缓冲里
+        var first = chunker.Feed(new short[16000 * 7]);
+        Assert.NotNull(first);
+        Assert.Equal(48000, first!.Length);
+        // 第二窗已排队：喂空数据也能取出来（不丢）
+        var second = chunker.Feed(Array.Empty<short>());
+        Assert.NotNull(second);
+        Assert.Equal(48000, second!.Length);
+        // 余 1 秒，再喂 2 秒满第三窗
+        Assert.Null(chunker.Feed(new short[16000]));
+        Assert.NotNull(chunker.Feed(new short[16000]));
+    }
+
+    [Fact]
     public void IsSilent_AllZero_ReturnsTrue()
     {
         Assert.True(LiveSubtitleChunker.IsSilent(new short[16000]));

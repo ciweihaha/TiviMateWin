@@ -16,6 +16,8 @@ public sealed class LiveSubtitleChunker
     private readonly int _windowSamples;
     private readonly short[] _window;
     private int _filled;
+    // 同一调用内满出多窗时依次排队（实际管线里单次喂入远小于一窗，队列基本是空的）。
+    private readonly Queue<short[]> _ready = new();
 
     public LiveSubtitleChunker(int windowSeconds = 3)
     {
@@ -48,7 +50,8 @@ public sealed class LiveSubtitleChunker
 
     /// <summary>
     /// 喂入 16kHz 单声道样点；窗口满时返回完整窗口（新数组），未满返回 null。
-    /// 一次喂入超过一窗时只返回一窗，余量留待下次（调用方循环喂入即可）。
+    /// 一次喂入超过一窗时，超出的部分继续累积进下一窗（不丢数据）；同一调用内
+    /// 满出多窗时依次排队，下次调用（哪怕喂空数据）返回下一窗。
     /// </summary>
     public short[]? Feed(ReadOnlySpan<short> mono16k)
     {
@@ -62,10 +65,10 @@ public sealed class LiveSubtitleChunker
             if (_filled >= _windowSamples)
             {
                 _filled = 0;
-                return _window.ToArray();
+                _ready.Enqueue(_window.ToArray());
             }
         }
-        return null;
+        return _ready.Count > 0 ? _ready.Dequeue() : null;
     }
 
     /// <summary>能量门：窗内 RMS 低于阈值视为静音/无语音，跳过听写（省 CPU、防 Whisper 幻觉）。</summary>
