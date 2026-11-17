@@ -67,44 +67,69 @@ public sealed class LiveSubtitleTranscriber : IDisposable
         Threads = threads.HasValue ? Math.Clamp(threads.Value, 1, 16) : TranscribeThreads;
     }
 
-    /// <summary>模型已在返回 true；否则下载（主站失败走镜像），成功返回 true，失败返回 false。</summary>
+    /// <summary>模型已在返回 true；否则下载（主站失败走镜像），成功返回 true，失败返回 false。
+    /// 模型在本地后立即建工厂（读模型 + 建原生上下文，首调用约 30 秒）：不预热的话
+    /// 这 30 秒会卡在第一窗听写里，喂音频循环被堵住、通道积压溢出丢 PCM，串行模式永久掉队。</summary>
     public async Task<bool> EnsureModelAsync(CancellationToken ct)
     {
-        if (ModelReady) return true;
-        Directory.CreateDirectory(Path.GetDirectoryName(_modelPath)!);
-        foreach (var url in new[] { ModelPrimaryUrl(_modelFileName), ModelMirrorUrl(_modelFileName) })
+        if (!ModelReady)
         {
-            try
+            Directory.CreateDirectory(Path.GetDirectoryName(_modelPath)!);
+            var downloaded = false;
+            foreach (var url in new[] { ModelPrimaryUrl(_modelFileName), ModelMirrorUrl(_modelFileName) })
             {
-                using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
-                    .ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                var total = response.Content.Headers.ContentLength ?? -1;
-                var tmp = _modelPath + ".tmp";
-                await using (var file = File.Create(tmp))
-                await using (var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+                try
                 {
-                    var buffer = new byte[81920];
-                    long downloaded = 0;
-                    int read;
-                    while ((read = await stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                    using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
+                        .ConfigureAwait(false);
+                    response.EnsureSuccessStatusCode();
+                    var total = response.Content.Headers.ContentLength ?? -1;
+                    var tmp = _modelPath + ".tmp";
+                    await using (var file = File.Create(tmp))
+                    await using (var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
                     {
-                        await file.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
-                        downloaded += read;
-                        ModelDownloadProgress?.Invoke(downloaded, total);
+                        var buffer = new byte[81920];
+                        long downloadedBytes = 0;
+                        int read;
+                        while ((read = await stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                        {
+                            await file.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                            downloadedBytes += read;
+                            ModelDownloadProgress?.Invoke(downloadedBytes, total);
+                        }
                     }
+                    File.Move(tmp, _modelPath, overwrite: true);
+                    AppLog.Info($"whisper model downloaded ({new FileInfo(_modelPath).Length} bytes)");
+                    downloaded = true;
+                    break;
                 }
-                File.Move(tmp, _modelPath, overwrite: true);
-                AppLog.Info($"whisper model downloaded ({new FileInfo(_modelPath).Length} bytes)");
-                return true;
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    AppLog.Error($"whisper model download failed [{url}]: {ex.Message}");
+                    // 换下一个镜像重试
+                }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                AppLog.Error($"whisper model download failed [{url}]: {ex.Message}");
-                // 换下一个镜像重试
-            }
+            if (!downloaded) return false;
         }
-        return false;
+        return EnsureFactory();
+    }
+
+    /// <summary>建 Whisper 工厂（常驻，供每窗建处理器复用）；失败返回 false。</summary>
+    private bool EnsureFactory()
+    {
+        try
+        {
+            var sw = Stopwatch.StartNew();
+            _factory ??= WhisperFactory.FromPath(_modelPath);
+            sw.Stop();
+            AppLog.Info($"whisper factory ready {sw.ElapsedMilliseconds}ms");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"whisper factory init failed: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>听写一窗 16kHz 单声道音频，返回英文文本；无语音/失败返回 null（不抛异常）。</summary>

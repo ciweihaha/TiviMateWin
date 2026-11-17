@@ -273,8 +273,18 @@ public sealed class LiveSubtitleService : IDisposable
                     if (_serialMode)
                     {
                         // 串行：本循环里听写 → 翻译依次跑（期间 PCM 在有界队列里等，满了丢最旧）。
-                        await ProcessWindowSerialAsync(window, DateTimeOffset.UtcNow, ct)
+                        var droppedStale = await ProcessWindowSerialAsync(window, DateTimeOffset.UtcNow, ct)
                             .ConfigureAwait(false);
+                        if (droppedStale)
+                        {
+                            // 掉队已无法追回（堵住时通道丢过 PCM，音频时钟永久落后）：丢掉通道里
+                            // 积压的旧 PCM、清空切块器队列、音频时钟重同步到当前，从直播点重新开始。
+                            while (reader.TryRead(out _)) { }
+                            _chunker.Clear();
+                            _audioStartWall = null;
+                            _windowsCompleted = 0;
+                            AppLog.Info("live subtitle: resynced to live audio after stale drop");
+                        }
                         continue;
                     }
                     _pipeline?.EnqueueWindow(window);
@@ -315,8 +325,9 @@ public sealed class LiveSubtitleService : IDisposable
     /// 说明处理速度跟不上说话速度，追新不追旧（与流水线队列满丢最旧同理）。
     /// 端到端 = 窗攒满（Feed 吐出时）→ 字幕发出，含排队等待，与流水线口径一致。
     /// 日志格式与流水线相同，便于同一口径横向比。
+    /// 返回 true 表示本窗因陈旧被丢弃（调用方应重同步到直播点）。
     /// </summary>
-    private async Task ProcessWindowSerialAsync(short[] window, DateTimeOffset windowCompletedAt, CancellationToken ct)
+    private async Task<bool> ProcessWindowSerialAsync(short[] window, DateTimeOffset windowCompletedAt, CancellationToken ct)
     {
         Interlocked.Increment(ref _serialReceived);
         var staleness = LiveSubtitleSerialClock.WindowStalenessSeconds(
@@ -325,18 +336,18 @@ public sealed class LiveSubtitleService : IDisposable
         {
             Interlocked.Increment(ref _serialDropped);
             AppLog.Info($"live subtitle: stale window dropped (staleness {staleness:F1}s, window #{WindowsReceived})");
-            return;
+            return true;
         }
-        if (LiveSubtitleChunker.IsSilent(window)) return;
+        if (LiveSubtitleChunker.IsSilent(window)) return false;
         _serialStage = "transcribing";
         var sw = Stopwatch.StartNew();
         var english = await _transcriber.TranscribeAsync(window, ct).ConfigureAwait(false);
         sw.Stop();
         var transcribeMs = sw.ElapsedMilliseconds;
         Interlocked.Exchange(ref _serialLastTranscribeMs, transcribeMs);
-        if (string.IsNullOrWhiteSpace(english)) { _serialStage = "idle"; return; }
+        if (string.IsNullOrWhiteSpace(english)) { _serialStage = "idle"; return false; }
         // 整窗只是非语音标记（如 "(upbeat music)"）：不显示、不翻译。
-        if (LiveSubtitleChunker.IsNonSpeechMarker(english)) { _serialStage = "idle"; return; }
+        if (LiveSubtitleChunker.IsNonSpeechMarker(english)) { _serialStage = "idle"; return false; }
         Interlocked.Increment(ref _serialTranscribed);
         _serialStage = "translating";
         sw.Restart();
@@ -349,7 +360,7 @@ public sealed class LiveSubtitleService : IDisposable
             // 熔断：推理连续失败，字幕停掉、播放继续。
             _serialStage = "idle";
             OnTranslatorBroken();
-            return;
+            return false;
         }
         Interlocked.Increment(ref _serialTranslated);
         var endToEndMs = (long)(DateTimeOffset.UtcNow - windowCompletedAt).TotalMilliseconds;
@@ -358,6 +369,7 @@ public sealed class LiveSubtitleService : IDisposable
         SubtitleReady?.Invoke(new LiveSubtitleLine(english, chinese ?? english, DateTimeOffset.UtcNow));
         AppLog.Info($"live subtitle: [{english}] => [{chinese ?? english}]");
         AppLog.Info($"live subtitle: transcribe {transcribeMs}ms (infer {_transcriber.LastTranscribeMs}ms) translate {translateMs}ms end-to-end {endToEndMs}ms");
+        return false;
     }
 
     public void Dispose()

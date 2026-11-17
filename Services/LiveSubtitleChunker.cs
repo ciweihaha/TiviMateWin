@@ -48,6 +48,13 @@ public sealed class LiveSubtitleChunker
         return mono;
     }
 
+    /// <summary>清空已排队窗口与未满的窗口余量（掉队重同步时用：丢掉旧音频，从当前重新攒窗）。</summary>
+    public void Clear()
+    {
+        _ready.Clear();
+        _filled = 0;
+    }
+
     /// <summary>
     /// 喂入 16kHz 单声道样点；窗口满时返回完整窗口（新数组），未满返回 null。
     /// 一次喂入超过一窗时，超出的部分继续累积进下一窗（不丢数据）；同一调用内
