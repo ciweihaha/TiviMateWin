@@ -5,10 +5,12 @@ namespace TiviMateWin.Services;
 
 /// <summary>
 /// 直播实时字幕编排：音频 → 切块 → 听写 → 翻译 → 字幕事件。
-/// 默认两级流水线（听写与翻译分核并行）；串行模式（LiveSubtitleSerial）
-/// 则同一线程依次跑，听写与翻译各用全部核——流水线省的是吞吐不是延迟，
-/// 一窗仍要依次过听写+翻译，分核后每级都变慢时串行反而更快。
+/// 默认串行模式（LiveSubtitleSerial）：同一线程依次跑，听写与翻译各用全部核——
+/// 流水线省的是吞吐不是延迟，一窗仍要依次过听写+翻译，分核后每级都变慢时串行反而更快；
+/// 且串行没有级间队列，处理跟不上时只丢陈旧窗、不积压出越来越慢的字幕。
 /// 任何一步失败只记日志、当窗跳过，永不挡播放。延迟实测值暴露给调用方。
+/// 默认 tiny.en + 1.5 秒窗：base.en + 3 秒窗在两台机器上端到端约 11 秒（目标 6 秒内），
+/// 瓶颈是 CPU 推理吞吐（云电脑听写 3 秒 + 翻译 2.5 秒，台式机听写 5–6 秒）。
 /// </summary>
 public sealed class LiveSubtitleService : IDisposable
 {
@@ -55,7 +57,7 @@ public sealed class LiveSubtitleService : IDisposable
     public string WhisperModel => _config.LiveSubtitleWhisperModel;
 
     /// <summary>当前切块窗口（秒，设置改了需重建服务才生效）。</summary>
-    public int WindowSeconds => _config.LiveSubtitleWindowSeconds;
+    public double WindowSeconds => _config.LiveSubtitleWindowSeconds;
 
     /// <summary>听写实际用的线程数（设置改了需重建服务才生效）。</summary>
     public int TranscribeThreads { get; }
