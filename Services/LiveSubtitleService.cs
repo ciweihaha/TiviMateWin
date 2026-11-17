@@ -35,6 +35,9 @@ public sealed class LiveSubtitleService : IDisposable
     /// <summary>当前用的翻译模型文件名（设置改了需重建服务才生效）。</summary>
     public string Model => _config.LiveSubtitleModel;
 
+    /// <summary>当前用的听写模型文件名（设置改了需重建服务才生效）。</summary>
+    public string WhisperModel => _config.LiveSubtitleWhisperModel;
+
     /// <summary>当前切块窗口（秒，设置改了需重建服务才生效）。</summary>
     public int WindowSeconds => _config.LiveSubtitleWindowSeconds;
 
@@ -87,7 +90,8 @@ public sealed class LiveSubtitleService : IDisposable
         var (transcribeThreads, translateThreads) = ResolveThreads(config);
         TranscribeThreads = transcribeThreads;
         TranslateThreads = translateThreads;
-        _transcriber = new LiveSubtitleTranscriber(threads: transcribeThreads);
+        _transcriber = new LiveSubtitleTranscriber(threads: transcribeThreads,
+            modelFileName: config.LiveSubtitleWhisperModel);
         _translator = new LiveSubtitleTranslator(config.LiveSubtitleModel, threads: translateThreads);
         _transcriber.ModelDownloadProgress += (downloaded, total) =>
         {

@@ -12,19 +12,27 @@ namespace TiviMateWin.Services;
 /// </summary>
 public sealed class LiveSubtitleTranscriber : IDisposable
 {
+    /// <summary>默认听写模型文件名（英文专用 base.en）；可配 tiny.en（更快、识别稍差）。</summary>
     public const string ModelFileName = "ggml-base.en.bin";
 
-    // 模型下载地址：Hugging Face 主站 + 国内镜像兜底。
-    private const string ModelPrimaryUrl =
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
-    private const string ModelMirrorUrl =
-        "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
+    // 模型下载地址：Hugging Face 主站 + 国内镜像兜底（ggerganov/whisper.cpp 仓库，
+    // ggml-base.en.bin / ggml-tiny.en.bin 等都在同一仓库同一路径下）。
+    private static string ModelPrimaryUrl(string fileName) =>
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" + fileName;
+    private static string ModelMirrorUrl(string fileName) =>
+        "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/" + fileName;
 
     public static string DefaultModelPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "TiviMateWin", "models", ModelFileName);
 
+    /// <summary>指定模型文件的本机路径（与默认文件名同一目录）。</summary>
+    public static string ModelPathFor(string fileName) => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "TiviMateWin", "models", fileName);
+
     private readonly string _modelPath;
+    private readonly string _modelFileName;
     private readonly HttpClient _http;
     private WhisperFactory? _factory;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -44,9 +52,16 @@ public sealed class LiveSubtitleTranscriber : IDisposable
     /// <summary>模型下载进度（已下载字节、总字节；总字节未知时为 -1）。</summary>
     public event Action<long, long>? ModelDownloadProgress;
 
-    public LiveSubtitleTranscriber(string? modelPath = null, HttpClient? http = null, int? threads = null)
+    public LiveSubtitleTranscriber(string? modelPath = null, HttpClient? http = null, int? threads = null,
+        string? modelFileName = null)
     {
-        _modelPath = string.IsNullOrWhiteSpace(modelPath) ? DefaultModelPath : modelPath;
+        // 模型文件：文件名决定下载地址（同一仓库）；不传用默认 base.en。
+        // 传完整路径时直接用（测试用临时路径），文件名取路径里的名字。
+        var fileName = string.IsNullOrWhiteSpace(modelFileName)
+            ? (string.IsNullOrWhiteSpace(modelPath) ? ModelFileName : Path.GetFileName(modelPath))
+            : modelFileName.Trim();
+        _modelFileName = string.IsNullOrWhiteSpace(fileName) ? ModelFileName : fileName;
+        _modelPath = string.IsNullOrWhiteSpace(modelPath) ? ModelPathFor(_modelFileName) : modelPath;
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         Threads = threads.HasValue ? Math.Clamp(threads.Value, 1, 16) : TranscribeThreads;
     }
@@ -56,7 +71,7 @@ public sealed class LiveSubtitleTranscriber : IDisposable
     {
         if (ModelReady) return true;
         Directory.CreateDirectory(Path.GetDirectoryName(_modelPath)!);
-        foreach (var url in new[] { ModelPrimaryUrl, ModelMirrorUrl })
+        foreach (var url in new[] { ModelPrimaryUrl(_modelFileName), ModelMirrorUrl(_modelFileName) })
         {
             try
             {

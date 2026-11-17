@@ -2349,6 +2349,7 @@ public partial class MainWindow : Window
             var (transcribeThreads, translateThreads) = LiveSubtitleService.ResolveThreads(_config);
             if (_subtitleService != null &&
                 (_subtitleService.Model != _config.LiveSubtitleModel ||
+                 _subtitleService.WhisperModel != _config.LiveSubtitleWhisperModel ||
                  _subtitleService.WindowSeconds != _config.LiveSubtitleWindowSeconds ||
                  _subtitleService.TranscribeThreads != transcribeThreads ||
                  _subtitleService.TranslateThreads != translateThreads))
