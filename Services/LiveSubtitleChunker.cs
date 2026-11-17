@@ -19,11 +19,11 @@ public sealed class LiveSubtitleChunker
     // 同一调用内满出多窗时依次排队（实际管线里单次喂入远小于一窗，队列基本是空的）。
     private readonly Queue<short[]> _ready = new();
 
-    public LiveSubtitleChunker(int windowSeconds = 3)
+    public LiveSubtitleChunker(double windowSeconds = 1.5)
     {
         if (windowSeconds < 1 || windowSeconds > 10)
             throw new ArgumentOutOfRangeException(nameof(windowSeconds), "切块窗口须在 1–10 秒之间");
-        _windowSamples = TargetSampleRate * windowSeconds;
+        _windowSamples = (int)Math.Round(TargetSampleRate * windowSeconds);
         _window = new short[_windowSamples];
     }
 
