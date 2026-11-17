@@ -1,19 +1,31 @@
+using System.IO;
 using System.Net.Http;
-using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Text;
+using LLama;
+using LLama.Common;
+using LLama.Sampling;
 
 namespace TiviMateWin.Services;
 
 /// <summary>
-/// 实时字幕翻译器：调本机 Ollama（/api/chat）把英文字幕翻成中文。
-/// 思路复用 UnBox 的 translate 包：只翻短句、只输出译文、失败回退原文、FIFO 缓存。
-/// 不依赖 WPF，可进单元测试工程（HttpClient 可注入假 handler）。
+/// 实时字幕翻译器：进程内推理（LLamaSharp + llama.cpp CPU 后端），加载
+/// Qwen2.5-1.5B-Instruct GGUF（Q4_K_M）把英文字幕翻成中文。
+/// 模型首次使用时下载到本机（不进安装包）；思路复用 UnBox 的 translate 包：
+/// 只翻短句、只输出译文、失败回退原文、FIFO 缓存。
+/// 推理失败永不抛异常；连续失败触发熔断（IsBroken），调用方停掉字幕、播放继续。
+/// 注意：llama.cpp 是原生代码，进程内段错误无法用 try/catch 兜住——那是改成
+/// 后台子进程方案的信号，不是靠这里加 try 能解决的。
 /// </summary>
-public sealed class LiveSubtitleTranslator
+public sealed class LiveSubtitleTranslator : IDisposable
 {
-    public const string DefaultEndpoint = "http://127.0.0.1:11434";
-    public const string DefaultModel = "qwen2.5:1.5b";
+    public const string DefaultModelFileName = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
+
+    // 模型下载地址：Hugging Face 主站 + 国内镜像兜底（Qwen 官方仓库）。
+    // 文件 1,117,320,736 字节（约 1.04 GiB，HF 实测 Content-Length）。
+    private const string ModelPrimaryUrl =
+        "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf";
+    private const string ModelMirrorUrl =
+        "https://hf-mirror.com/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf";
 
     // 系统提示词：短句翻译不需要解释，解释性文字会直接混进字幕显示出来。
     private const string SystemPrompt =
@@ -21,30 +33,154 @@ public sealed class LiveSubtitleTranslator
 
     private const int MaxCacheEntries = 500;
     private const int EvictBatch = 100;
+    private const int MaxConsecutiveFailures = 3;   // 熔断阈值：连续失败这么多次即停字幕
+    private const int InferenceTimeoutSeconds = 8;  // 单行推理超时（毫秒级行一般 1–2 秒）
+    private const int MaxTokens = 128;              // 字幕行短，128 token 够译两三句话
+    private const float Temperature = 0.2f;
+    private const int ContextSize = 1024;           // 提示词约 100 token，1024 绰绰有余
 
-    private readonly string _endpoint;
-    private readonly string _model;
+    /// <summary>模型存放目录（与 Whisper 模型同一目录）。</summary>
+    public static string DefaultModelDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "TiviMateWin", "models");
+
+    public static string DefaultModelPath => Path.Combine(DefaultModelDir, DefaultModelFileName);
+
+    /// <summary>
+    /// 推理线程数：留一半 CPU 给播放、听写和界面。8 核云电脑上是 4 线程，
+    /// 4 核机器上是 2 线程；实测后再调。
+    /// </summary>
+    public static int InferenceThreads => Math.Clamp(Environment.ProcessorCount / 2, 2, 4);
+
+    private readonly string _modelPath;
     private readonly HttpClient _http;
+    private readonly bool _ownsHttp;
+    private readonly Func<string, CancellationToken, Task<string?>>? _generateOverride;
     private readonly Dictionary<string, string> _cache = new(StringComparer.Ordinal);
     private readonly Queue<string> _order = new();
     private readonly object _cacheGate = new();
+    private readonly SemaphoreSlim _engineGate = new(1, 1);
+    private LLamaWeights? _weights;
+    private StatelessExecutor? _executor;
+    private int _consecutiveFailures;
+    private bool _loadFailed;
+    private bool _disposed;
 
-    public LiveSubtitleTranslator(string endpoint, string model, HttpClient? http = null)
+    /// <summary>模型文件是否已下载到本机。</summary>
+    public bool ModelReady => File.Exists(_modelPath);
+
+    /// <summary>熔断：连续失败达到阈值，翻译已不可用（调用方应停掉字幕）。</summary>
+    public bool IsBroken => _consecutiveFailures >= MaxConsecutiveFailures;
+
+    public int ConsecutiveFailures => _consecutiveFailures;
+
+    /// <summary>模型下载进度（已下载字节、总字节；总字节未知时为 -1）。</summary>
+    public event Action<long, long>? ModelDownloadProgress;
+
+    public LiveSubtitleTranslator(string? modelPath = null, HttpClient? http = null,
+        Func<string, CancellationToken, Task<string?>>? generateOverride = null)
     {
-        _endpoint = string.IsNullOrWhiteSpace(endpoint) ? DefaultEndpoint : endpoint.TrimEnd('/');
-        _model = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
-        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+        // 配置里存的是文件名（如 qwen2.5-1.5b-instruct-q4_k_m.gguf），拼到模型目录下；
+        // 传完整路径时直接用（测试用临时路径）。
+        _modelPath = string.IsNullOrWhiteSpace(modelPath)
+            ? DefaultModelPath
+            : Path.IsPathRooted(modelPath) ? modelPath : Path.Combine(DefaultModelDir, modelPath);
+        _ownsHttp = http is null;
+        _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+        _generateOverride = generateOverride;
+    }
+
+    /// <summary>模型已在返回 true；否则下载（主站失败走镜像），成功返回 true，失败返回 false。</summary>
+    public async Task<bool> EnsureModelAsync(CancellationToken ct)
+    {
+        if (ModelReady) return true;
+        Directory.CreateDirectory(Path.GetDirectoryName(_modelPath)!);
+        foreach (var url in new[] { ModelPrimaryUrl, ModelMirrorUrl })
+        {
+            try
+            {
+                using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)
+                    .ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                var total = response.Content.Headers.ContentLength ?? -1;
+                var tmp = _modelPath + ".tmp";
+                await using (var file = File.Create(tmp))
+                await using (var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+                {
+                    var buffer = new byte[81920];
+                    long downloaded = 0;
+                    int read;
+                    while ((read = await stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                    {
+                        await file.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                        downloaded += read;
+                        ModelDownloadProgress?.Invoke(downloaded, total);
+                    }
+                }
+                File.Move(tmp, _modelPath, overwrite: true);
+                AppLog.Info($"translate model downloaded ({new FileInfo(_modelPath).Length} bytes)");
+                return true;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                AppLog.Error($"translate model download failed [{url}]: {ex.Message}");
+                // 换下一个镜像重试
+            }
+        }
+        return false;
     }
 
     /// <summary>
-    /// 把一条英文字幕翻成中文。空文本返回 ""（不发请求）；含中文返回原文（不发请求）；
+    /// 下载（如需）并加载模型到内存。失败返回 false，不抛异常；加载失败会被记住，
+    /// 同一服务实例内不再重试（重开开关重建服务才会再试）。
+    /// </summary>
+    public async Task<bool> EnsureLoadedAsync(CancellationToken ct)
+    {
+        if (_executor is not null) return true;
+        if (_loadFailed) return false;
+        if (_generateOverride != null) return true; // 测试注入：不需要真模型
+        if (!await EnsureModelAsync(ct).ConfigureAwait(false)) return false;
+        try
+        {
+            await _engineGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                if (_executor is not null) return true;
+                var parameters = new ModelParams(_modelPath)
+                {
+                    ContextSize = ContextSize,
+                    Threads = InferenceThreads,
+                };
+                _weights = await LLamaWeights.LoadFromFileAsync(parameters, ct, new Progress<float>())
+                    .ConfigureAwait(false);
+                _executor = new StatelessExecutor(_weights, parameters);
+                AppLog.Info($"translate model loaded ({DefaultModelFileName}, threads {InferenceThreads})");
+                return true;
+            }
+            finally
+            {
+                _engineGate.Release();
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _loadFailed = true;
+            AppLog.Error($"translate model load failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 把一条英文字幕翻成中文。空文本返回 ""（不推理）；含中文返回原文（不推理）；
     /// 翻译失败返回 null（调用方回退显示英文原文），失败永远不抛异常。
+    /// 模型文件缺失时直接返回 null（Prepare 阶段已试过下载，不再每窗重试）。
     /// </summary>
     public async Task<string?> TranslateAsync(string text, CancellationToken ct)
     {
         text = text.Trim();
         if (text.Length == 0) return "";
         if (IsChineseText(text)) return text;
+        if (IsBroken) return null;
 
         lock (_cacheGate)
         {
@@ -53,25 +189,26 @@ public sealed class LiveSubtitleTranslator
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint + "/api/chat");
-            request.Content = JsonContent.Create(new
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(InferenceTimeoutSeconds));
+            string? raw;
+            if (_generateOverride != null)
             {
-                model = _model,
-                messages = new[]
-                {
-                    new { role = "system", content = SystemPrompt },
-                    new { role = "user", content = text },
-                },
-                stream = false,
-                options = new { temperature = 0.2 },
-            });
-            using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;
-            var body = await response.Content.ReadFromJsonAsync<ChatResponse>(cancellationToken: ct)
-                .ConfigureAwait(false);
-            var cleaned = CleanTranslation(body?.Message?.Content ?? "");
-            if (cleaned.Length == 0) return null;
-
+                raw = await _generateOverride(text, timeout.Token).ConfigureAwait(false);
+            }
+            else
+            {
+                if (!ModelReady || _loadFailed) return null;
+                if (!await EnsureEngineAsync(timeout.Token).ConfigureAwait(false)) return null;
+                raw = await GenerateAsync(text, timeout.Token).ConfigureAwait(false);
+            }
+            var cleaned = CleanTranslation(raw ?? "");
+            if (cleaned.Length == 0)
+            {
+                NoteFailure();
+                return null;
+            }
+            NoteSuccess();
             lock (_cacheGate)
             {
                 if (_cache.Count >= MaxCacheEntries)
@@ -89,40 +226,76 @@ public sealed class LiveSubtitleTranslator
             }
             return cleaned;
         }
-        catch (Exception)
+        catch (OperationCanceledException)
         {
-            // 服务没起、模型没拉、超时：都返回 null，调用方回退英文原文。
+            // 超时（推理 8 秒未出结果）记一次失败；服务停止时的取消也走这里，
+            // 此时服务正在关，计数无所谓。
+            NoteFailure();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // 推理异常只记日志、当行跳过，永不挡播放。
+            AppLog.Error($"subtitle translate failed: {ex.Message}");
+            NoteFailure();
             return null;
         }
     }
 
-    /// <summary>检查本地 Ollama 是否已拉取当前模型：服务没起、模型没拉取都返回 false。</summary>
-    public async Task<bool> CheckModelAsync(CancellationToken ct)
+    /// <summary>确保推理引擎就绪（已加载返回 true）。加载失败返回 false，不抛异常。</summary>
+    private async Task<bool> EnsureEngineAsync(CancellationToken ct)
     {
+        if (_executor is not null) return true;
+        return await EnsureLoadedAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>调模型生成译文（调用方保证引擎已就绪；推理串行，一次只跑一行）。</summary>
+    private async Task<string?> GenerateAsync(string text, CancellationToken ct)
+    {
+        await _engineGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            using var response = await _http.GetAsync(_endpoint + "/api/tags", ct).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return false;
-            var body = await response.Content.ReadFromJsonAsync<TagsResponse>(cancellationToken: ct)
-                .ConfigureAwait(false);
-            if (body?.Models is null) return false;
-            foreach (var m in body.Models)
+            if (_executor is null) return null;
+            var inferenceParams = new InferenceParams
             {
-                if (m.Name == _model || m.Name.StartsWith(_model + ":", StringComparison.Ordinal))
-                    return true;
+                MaxTokens = MaxTokens,
+                AntiPrompts = new List<string> { "<|im_end|>" },
+                SamplingPipeline = new DefaultSamplingPipeline { Temperature = Temperature },
+            };
+            var sb = new StringBuilder();
+            await foreach (var token in _executor
+                .InferAsync(BuildPrompt(text), inferenceParams, ct).ConfigureAwait(false))
+            {
+                sb.Append(token);
             }
-            return false;
+            return sb.ToString();
         }
-        catch (Exception)
+        finally
         {
-            return false;
+            _engineGate.Release();
         }
     }
 
-    /// <summary>去掉模型常带的多余包装：首尾空白、整句引号（英文 " 与中文 “”）、「翻译：」前缀。</summary>
+    /// <summary>
+    /// 手动拼 ChatML 提示词（不依赖模型的 chat template 解析，行为确定）：
+    /// system 写翻译要求，user 放英文行，assistant 处开始生成。
+    /// </summary>
+    public static string BuildPrompt(string englishLine)
+    {
+        return "<|im_start|>system\n" + SystemPrompt + "<|im_end|>\n" +
+               "<|im_start|>user\n" + englishLine + "<|im_end|>\n" +
+               "<|im_start|>assistant\n";
+    }
+
+    /// <summary>去掉模型常带的多余包装：首尾空白、整句引号（英文 " 与中文 “”）、「翻译：」前缀、残留的特殊 token。</summary>
     public static string CleanTranslation(string s)
     {
         s = s.Trim();
+        foreach (var token in new[] { "<|im_end|>", "<|endoftext|>" })
+        {
+            var idx = s.IndexOf(token, StringComparison.Ordinal);
+            if (idx >= 0) s = s[..idx].Trim();
+        }
         foreach (var prefix in new[] { "翻译：", "翻译:", "Translation:", "translation:" })
         {
             if (s.StartsWith(prefix, StringComparison.Ordinal))
@@ -153,27 +326,23 @@ public sealed class LiveSubtitleTranslator
         return false;
     }
 
-    private sealed class ChatResponse
+    private void NoteFailure()
     {
-        [JsonPropertyName("message")]
-        public ChatMessage? Message { get; set; }
+        var n = Interlocked.Increment(ref _consecutiveFailures);
+        if (n == MaxConsecutiveFailures)
+            AppLog.Error("subtitle translator broken after 3 consecutive failures; subtitles will stop");
     }
 
-    private sealed class ChatMessage
-    {
-        [JsonPropertyName("content")]
-        public string? Content { get; set; }
-    }
+    private void NoteSuccess() => Interlocked.Exchange(ref _consecutiveFailures, 0);
 
-    private sealed class TagsResponse
+    public void Dispose()
     {
-        [JsonPropertyName("models")]
-        public List<TagModel>? Models { get; set; }
-    }
-
-    private sealed class TagModel
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = "";
+        if (_disposed) return;
+        _disposed = true;
+        // StatelessExecutor 没有 Dispose（上下文由它内部持有，随权重释放由终结器回收）；
+        // 只释放权重与同步对象。
+        _weights?.Dispose();
+        _engineGate.Dispose();
+        if (_ownsHttp) _http.Dispose();
     }
 }

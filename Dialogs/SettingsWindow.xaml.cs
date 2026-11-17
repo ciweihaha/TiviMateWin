@@ -55,7 +55,6 @@ public partial class SettingsWindow : Window
         LiveSubtitleChk.IsChecked = config.LiveSubtitleEnabled;
         LiveSubtitleEnglishChk.IsChecked = config.LiveSubtitleShowEnglish;
         LiveSubtitleModelBox.Text = config.LiveSubtitleModel ?? "";
-        LiveSubtitleEndpointBox.Text = config.LiveSubtitleOllamaEndpoint ?? "";
 
         // Xtream
         XtreamServerBox.Text = config.XtreamServer ?? "";
@@ -142,10 +141,8 @@ public partial class SettingsWindow : Window
         _config.LiveSubtitleEnabled = LiveSubtitleChk.IsChecked == true;
         _config.LiveSubtitleShowEnglish = LiveSubtitleEnglishChk.IsChecked == true;
         var subtitleModel = LiveSubtitleModelBox.Text.Trim();
-        _config.LiveSubtitleModel = subtitleModel.Length > 0 ? subtitleModel : "qwen2.5:1.5b";
-        var subtitleEndpoint = LiveSubtitleEndpointBox.Text.Trim();
-        _config.LiveSubtitleOllamaEndpoint = subtitleEndpoint.Length > 0
-            ? subtitleEndpoint : "http://127.0.0.1:11434";
+        _config.LiveSubtitleModel = subtitleModel.Length > 0
+            ? subtitleModel : "qwen2.5-1.5b-instruct-q4_k_m.gguf";
 
         var server = XtreamServerBox.Text.Trim();
         _config.XtreamServer = server;

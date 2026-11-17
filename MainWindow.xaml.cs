@@ -2348,7 +2348,6 @@ public partial class MainWindow : Window
         {
             if (_subtitleService != null &&
                 (_subtitleService.Model != _config.LiveSubtitleModel ||
-                 _subtitleService.Endpoint != _config.LiveSubtitleOllamaEndpoint ||
                  _subtitleService.WindowSeconds != _config.LiveSubtitleWindowSeconds))
             {
                 _subtitleService.Stop();

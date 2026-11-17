@@ -32,8 +32,7 @@ public class AppConfig
     // 直播实时字幕（听写+翻译）：默认关；模型不塞进应用，调本机 Ollama。
     public bool LiveSubtitleEnabled { get; set; } = false;
     public bool LiveSubtitleShowEnglish { get; set; } = true;  // 字幕条同时显示英文原文
-    public string LiveSubtitleModel { get; set; } = "qwen2.5:1.5b";
-    public string LiveSubtitleOllamaEndpoint { get; set; } = "http://127.0.0.1:11434";
+    public string LiveSubtitleModel { get; set; } = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
     public int LiveSubtitleWindowSeconds { get; set; } = 3;    // 切块窗口（秒），1–10
     public string AspectRatio { get; set; } = "";      // 画面比例（空=原始，16:9/4:3/拉伸）
     public double PlaybackRate { get; set; } = 1.0;    // 倍速

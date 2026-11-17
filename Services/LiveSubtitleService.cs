@@ -23,7 +23,7 @@ public sealed class LiveSubtitleService : IDisposable
     private Task? _pipelineTask;
     private bool _audioAttached;
     private bool _modelReady;
-    private bool _ollamaOk;
+    private bool _translatorReady;
     private bool _disposed;
 
     /// <summary>新字幕就绪（UI 线程外触发，调用方自行切回 UI 线程）。</summary>
@@ -34,11 +34,8 @@ public sealed class LiveSubtitleService : IDisposable
 
     public bool IsRunning { get; private set; }
 
-    /// <summary>当前用的翻译模型名（设置改了需重建服务才生效）。</summary>
+    /// <summary>当前用的翻译模型文件名（设置改了需重建服务才生效）。</summary>
     public string Model => _config.LiveSubtitleModel;
-
-    /// <summary>当前用的 Ollama 地址（设置改了需重建服务才生效）。</summary>
-    public string Endpoint => _config.LiveSubtitleOllamaEndpoint;
 
     /// <summary>当前切块窗口（秒，设置改了需重建服务才生效）。</summary>
     public int WindowSeconds => _config.LiveSubtitleWindowSeconds;
@@ -59,11 +56,16 @@ public sealed class LiveSubtitleService : IDisposable
         _capture = new LiveSubtitleAudioCapture(player);
         _chunker = new LiveSubtitleChunker(Math.Clamp(config.LiveSubtitleWindowSeconds, 1, 10));
         _transcriber = new LiveSubtitleTranscriber();
-        _translator = new LiveSubtitleTranslator(config.LiveSubtitleOllamaEndpoint, config.LiveSubtitleModel);
+        _translator = new LiveSubtitleTranslator(config.LiveSubtitleModel);
         _transcriber.ModelDownloadProgress += (downloaded, total) =>
         {
             if (total > 0)
                 StatusChanged?.Invoke($"正在下载语音模型 {downloaded * 100 / total}%");
+        };
+        _translator.ModelDownloadProgress += (downloaded, total) =>
+        {
+            if (total > 0)
+                StatusChanged?.Invoke($"正在下载翻译模型 {downloaded * 100 / total}%");
         };
     }
 
@@ -78,7 +80,7 @@ public sealed class LiveSubtitleService : IDisposable
         _audioAttached = true;
     }
 
-    /// <summary>启动流水线；模型下载与 Ollama 检查在后台进行，未就绪前收到的窗直接丢弃。</summary>
+    /// <summary>启动流水线；两个模型下载/加载在后台进行，未就绪前收到的窗直接丢弃。</summary>
     public void Start()
     {
         if (IsRunning || _disposed) return;
@@ -97,8 +99,9 @@ public sealed class LiveSubtitleService : IDisposable
             StatusChanged?.Invoke("语音模型下载失败，实时字幕暂不可用");
             return;
         }
-        _ollamaOk = await _translator.CheckModelAsync(ct).ConfigureAwait(false);
-        StatusChanged?.Invoke(_ollamaOk ? "" : "翻译服务连不上，显示英文原文");
+        StatusChanged?.Invoke("正在准备翻译模型…");
+        _translatorReady = await _translator.EnsureLoadedAsync(ct).ConfigureAwait(false);
+        StatusChanged?.Invoke(_translatorReady ? "" : "翻译模型下载/加载失败，只显示英文原文");
     }
 
     /// <summary>停止流水线与音频播出。回调保持挂接（音频继续走 NAudio），下次启用无需重挂。</summary>
@@ -157,6 +160,14 @@ public sealed class LiveSubtitleService : IDisposable
         LastTranslateMs = translateSw.ElapsedMilliseconds;
         sw.Stop();
         LastPipelineMs = sw.ElapsedMilliseconds;
+        if (_translator.IsBroken)
+        {
+            // 熔断：推理连续失败，字幕停掉、播放继续（重开开关重建服务才会再试）。
+            StatusChanged?.Invoke("翻译连续失败，实时字幕已停（播放不受影响）");
+            AppLog.Error("live subtitle stopped: translator broken");
+            Stop();
+            return;
+        }
         SubtitleReady?.Invoke(new LiveSubtitleLine(english, chinese ?? english, DateTimeOffset.UtcNow));
         AppLog.Info($"live subtitle: transcribe {_transcriber.LastTranscribeMs}ms " +
                     $"translate {LastTranslateMs}ms window {window.Length / 16000}s");
@@ -169,6 +180,7 @@ public sealed class LiveSubtitleService : IDisposable
         Stop();
         _capture.Dispose();
         _transcriber.Dispose();
+        _translator.Dispose();
         try { _cts?.Dispose(); } catch { }
     }
 }
