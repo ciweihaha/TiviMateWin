@@ -22,6 +22,7 @@
     <Compile Include="..\Services\AppLog.cs" Link="AppLog.cs" />
     <Compile Include="..\Services\LiveSubtitleChunker.cs" Link="LiveSubtitleChunker.cs" />
     <Compile Include="..\Services\LiveSubtitlePipeline.cs" Link="LiveSubtitlePipeline.cs" />
+    <Compile Include="..\Services\LiveSubtitleSerialClock.cs" Link="LiveSubtitleSerialClock.cs" />
     <Compile Include="..\Services\LiveSubtitleTranslator.cs" Link="LiveSubtitleTranslator.cs" />
   </ItemGroup>
 

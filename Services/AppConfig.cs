@@ -39,6 +39,9 @@ public class AppConfig
     // >0 手动指定，云电脑上改 config.json 就能调，不用重编）。
     public int LiveSubtitleTranscribeThreads { get; set; } = 0;
     public int LiveSubtitleTranslateThreads { get; set; } = 0;
+    // 串行管线：听写与翻译同一线程依次跑，各用全部核（留 1 核给播放与界面）；
+    // false=两级流水线（听写与翻译分核并行）。改了需重建服务（重开字幕开关）才生效。
+    public bool LiveSubtitleSerial { get; set; } = false;
     public string AspectRatio { get; set; } = "";      // 画面比例（空=原始，16:9/4:3/拉伸）
     public double PlaybackRate { get; set; } = 1.0;    // 倍速
     public string Theme { get; set; } = "深色";         // 主题：深色/浅色

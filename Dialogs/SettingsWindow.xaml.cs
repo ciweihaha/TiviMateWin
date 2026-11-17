@@ -54,6 +54,7 @@ public partial class SettingsWindow : Window
         // 直播实时字幕（听写+翻译）
         LiveSubtitleChk.IsChecked = config.LiveSubtitleEnabled;
         LiveSubtitleEnglishChk.IsChecked = config.LiveSubtitleShowEnglish;
+        LiveSubtitleSerialChk.IsChecked = config.LiveSubtitleSerial;
         LiveSubtitleModelBox.Text = config.LiveSubtitleModel ?? "";
 
         // Xtream
@@ -140,6 +141,7 @@ public partial class SettingsWindow : Window
         // 直播实时字幕（听写+翻译）
         _config.LiveSubtitleEnabled = LiveSubtitleChk.IsChecked == true;
         _config.LiveSubtitleShowEnglish = LiveSubtitleEnglishChk.IsChecked == true;
+        _config.LiveSubtitleSerial = LiveSubtitleSerialChk.IsChecked == true;
         var subtitleModel = LiveSubtitleModelBox.Text.Trim();
         _config.LiveSubtitleModel = subtitleModel.Length > 0
             ? subtitleModel : "qwen2.5-1.5b-instruct-q4_k_m.gguf";

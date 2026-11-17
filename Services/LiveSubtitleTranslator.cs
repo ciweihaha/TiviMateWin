@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net.Http;
 using System.Text;
+using System.Text.RegularExpressions;
 using LLama;
 using LLama.Common;
 using LLama.Sampling;
@@ -20,12 +21,22 @@ public sealed class LiveSubtitleTranslator : IDisposable
 {
     public const string DefaultModelFileName = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
 
-    // 模型下载地址：Hugging Face 主站 + 国内镜像兜底（Qwen 官方仓库）。
-    // 文件 1,117,320,736 字节（约 1.04 GiB，HF 实测 Content-Length）。
-    private const string ModelPrimaryUrl =
-        "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf";
-    private const string ModelMirrorUrl =
-        "https://hf-mirror.com/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf";
+    /// <summary>
+    /// 翻译模型下载地址：文件名决定仓库（Qwen 官方 GGUF 仓库）。
+    /// qwen2.5-&lt;size&gt;b-instruct-&lt;quant&gt;.gguf → Qwen/Qwen2.5-&lt;Size&gt;B-Instruct-GGUF
+    /// （如 0.5B / 1.5B / 3B）；不合此格式的文件名沿用 1.5B 仓库（旧行为）。
+    /// 返回（主站，国内镜像）。
+    /// </summary>
+    public static (string Primary, string Mirror) ModelUrls(string fileName)
+    {
+        var repo = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"; // 默认：1.5B 仓库
+        var m = Regex.Match(fileName, @"^qwen2\.5-(\d+(?:\.\d+)?)b-instruct-.+\.gguf$",
+            RegexOptions.IgnoreCase);
+        if (m.Success)
+            repo = "Qwen/Qwen2.5-" + m.Groups[1].Value + "B-Instruct-GGUF";
+        var path = repo + "/resolve/main/" + fileName;
+        return ("https://huggingface.co/" + path, "https://hf-mirror.com/" + path);
+    }
 
     // 系统提示词：短句翻译不需要解释，解释性文字会直接混进字幕显示出来。
     private const string SystemPrompt =
@@ -56,6 +67,8 @@ public sealed class LiveSubtitleTranslator : IDisposable
     public int Threads { get; }
 
     private readonly string _modelPath;
+    private readonly string _modelPrimaryUrl;
+    private readonly string _modelMirrorUrl;
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
     private readonly Func<string, CancellationToken, Task<string?>>? _generateOverride;
@@ -88,6 +101,7 @@ public sealed class LiveSubtitleTranslator : IDisposable
         _modelPath = string.IsNullOrWhiteSpace(modelPath)
             ? DefaultModelPath
             : Path.IsPathRooted(modelPath) ? modelPath : Path.Combine(DefaultModelDir, modelPath);
+        (_modelPrimaryUrl, _modelMirrorUrl) = ModelUrls(Path.GetFileName(_modelPath));
         _ownsHttp = http is null;
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
         _generateOverride = generateOverride;
@@ -99,7 +113,7 @@ public sealed class LiveSubtitleTranslator : IDisposable
     {
         if (ModelReady) return true;
         Directory.CreateDirectory(Path.GetDirectoryName(_modelPath)!);
-        foreach (var url in new[] { ModelPrimaryUrl, ModelMirrorUrl })
+        foreach (var url in new[] { _modelPrimaryUrl, _modelMirrorUrl })
         {
             try
             {
@@ -158,7 +172,7 @@ public sealed class LiveSubtitleTranslator : IDisposable
                 _weights = await LLamaWeights.LoadFromFileAsync(parameters, ct, new Progress<float>())
                     .ConfigureAwait(false);
                 _executor = new StatelessExecutor(_weights, parameters);
-                AppLog.Info($"translate model loaded ({DefaultModelFileName}, threads {Threads})");
+                AppLog.Info($"translate model loaded ({Path.GetFileName(_modelPath)}, threads {Threads})");
                 return true;
             }
             finally

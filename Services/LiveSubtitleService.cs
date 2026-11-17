@@ -1,11 +1,13 @@
+using System.Diagnostics;
 using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace TiviMateWin.Services;
 
 /// <summary>
-/// 直播实时字幕编排：音频 → 切块 → 两级流水线（听写与翻译并行）→ 字幕事件。
-/// 听写下一窗的同时翻译上一窗，吞吐由最慢的一级决定，不再像串行那样
-/// 每窗耗时 = 听写 + 翻译（3 秒窗约 3.9 秒 &gt; 窗长，越跑越掉队）。
+/// 直播实时字幕编排：音频 → 切块 → 听写 → 翻译 → 字幕事件。
+/// 默认两级流水线（听写与翻译分核并行）；串行模式（LiveSubtitleSerial）
+/// 则同一线程依次跑，听写与翻译各用全部核——流水线省的是吞吐不是延迟，
+/// 一窗仍要依次过听写+翻译，分核后每级都变慢时串行反而更快。
 /// 任何一步失败只记日志、当窗跳过，永不挡播放。延迟实测值暴露给调用方。
 /// </summary>
 public sealed class LiveSubtitleService : IDisposable
@@ -23,6 +25,18 @@ public sealed class LiveSubtitleService : IDisposable
     private bool _modelReady;
     private bool _translatorReady;
     private bool _disposed;
+
+    // 串行模式的计数与音频时钟（流水线模式不用，走 LiveSubtitlePipeline 的计数）。
+    private readonly bool _serialMode;
+    private long _serialReceived;
+    private long _serialDropped;
+    private long _serialTranscribed;
+    private long _serialTranslated;
+    private long _serialLastTranscribeMs;
+    private long _serialLastTranslateMs;
+    private long _serialLastEndToEndMs;
+    private DateTimeOffset? _audioStartWall; // 第一块 PCM 到达的墙钟（音频时钟起点）
+    private long _windowsCompleted;          // 切块器吐出的窗口数；音频时间 ≈ 数量 × 窗长
 
     /// <summary>新字幕就绪（UI 线程外触发，调用方自行切回 UI 线程）。</summary>
     public event Action<LiveSubtitleLine>? SubtitleReady;
@@ -47,23 +61,32 @@ public sealed class LiveSubtitleService : IDisposable
     /// <summary>翻译实际用的线程数（设置改了需重建服务才生效）。</summary>
     public int TranslateThreads { get; }
 
+    /// <summary>是否串行管线（设置改了需重建服务才生效）。</summary>
+    public bool Serial => _serialMode;
+
     /// <summary>最近一窗听写耗时（毫秒）。</summary>
-    public long LastTranscribeMs => _pipeline?.LastTranscribeMs ?? 0;
+    public long LastTranscribeMs => _pipeline?.LastTranscribeMs ?? Interlocked.Read(ref _serialLastTranscribeMs);
 
     /// <summary>最近一窗翻译耗时（毫秒）。</summary>
-    public long LastTranslateMs => _pipeline?.LastTranslateMs ?? 0;
+    public long LastTranslateMs => _pipeline?.LastTranslateMs ?? Interlocked.Read(ref _serialLastTranslateMs);
 
     /// <summary>最近一窗听写+翻译合计耗时（毫秒，不含切块等待与排队）。</summary>
     public long LastPipelineMs => LastTranscribeMs + LastTranslateMs;
 
-    /// <summary>最近一窗端到端延迟（毫秒：窗口入队 → 字幕发出）。</summary>
-    public long LastEndToEndMs => _pipeline?.LastEndToEndMs ?? 0;
+    /// <summary>最近一窗端到端延迟（毫秒：窗口入队/攒满 → 字幕发出，含排队等待）。</summary>
+    public long LastEndToEndMs => _pipeline?.LastEndToEndMs ?? Interlocked.Read(ref _serialLastEndToEndMs);
 
     /// <summary>累计收到的窗口数。</summary>
-    public long WindowsReceived => _pipeline?.WindowsReceived ?? 0;
+    public long WindowsReceived => _pipeline?.WindowsReceived ?? Interlocked.Read(ref _serialReceived);
 
-    /// <summary>累计丢掉的窗口数（队列满时丢最旧）。</summary>
-    public long WindowsDropped => _pipeline?.WindowsDropped ?? 0;
+    /// <summary>累计丢掉的窗口数（队列满时丢最旧；串行模式为陈旧窗丢弃）。</summary>
+    public long WindowsDropped => _pipeline?.WindowsDropped ?? Interlocked.Read(ref _serialDropped);
+
+    /// <summary>累计听写出英文的窗口数。</summary>
+    public long WindowsTranscribed => _pipeline?.WindowsTranscribed ?? Interlocked.Read(ref _serialTranscribed);
+
+    /// <summary>累计发出字幕的窗口数。</summary>
+    public long WindowsTranslated => _pipeline?.WindowsTranslated ?? Interlocked.Read(ref _serialTranslated);
 
     /// <summary>
     /// 两级流水线分核：留 1 核给播放与界面，其余按 2:1 分给听写与翻译
@@ -87,7 +110,18 @@ public sealed class LiveSubtitleService : IDisposable
         _config = config;
         _capture = new LiveSubtitleAudioCapture(player);
         _chunker = new LiveSubtitleChunker(Math.Clamp(config.LiveSubtitleWindowSeconds, 1, 10));
-        var (transcribeThreads, translateThreads) = ResolveThreads(config);
+        _serialMode = config.LiveSubtitleSerial;
+        int transcribeThreads, translateThreads;
+        if (_serialMode)
+        {
+            // 串行：听写与翻译不同时跑，各用全部核（留 1 核给播放与界面）。
+            transcribeThreads = LiveSubtitleTranscriber.TranscribeThreads;
+            translateThreads = LiveSubtitleTranslator.InferenceThreads;
+        }
+        else
+        {
+            (transcribeThreads, translateThreads) = ResolveThreads(config);
+        }
         TranscribeThreads = transcribeThreads;
         TranslateThreads = translateThreads;
         _transcriber = new LiveSubtitleTranscriber(threads: transcribeThreads,
@@ -122,13 +156,26 @@ public sealed class LiveSubtitleService : IDisposable
         if (IsRunning || _disposed) return;
         IsRunning = true;
         _cts = new CancellationTokenSource();
-        _pipeline = new LiveSubtitlePipeline(
-            transcribe: (window, ct) => _transcriber.TranscribeAsync(window, ct),
-            translate: (text, ct) => _translator.TranslateAsync(text, ct),
-            isTranslatorBroken: () => _translator.IsBroken);
-        _pipeline.SubtitleReady += line => SubtitleReady?.Invoke(line);
-        _pipeline.TranslatorBroken += OnTranslatorBroken;
-        _pipeline.Start();
+        // 串行模式的计数与音频时钟每轮清零（流水线模式走自己的计数）。
+        _audioStartWall = null;
+        _windowsCompleted = 0;
+        Interlocked.Exchange(ref _serialReceived, 0);
+        Interlocked.Exchange(ref _serialDropped, 0);
+        Interlocked.Exchange(ref _serialTranscribed, 0);
+        Interlocked.Exchange(ref _serialTranslated, 0);
+        Interlocked.Exchange(ref _serialLastTranscribeMs, 0);
+        Interlocked.Exchange(ref _serialLastTranslateMs, 0);
+        Interlocked.Exchange(ref _serialLastEndToEndMs, 0);
+        if (!_serialMode)
+        {
+            _pipeline = new LiveSubtitlePipeline(
+                transcribe: (window, ct) => _transcriber.TranscribeAsync(window, ct),
+                translate: (text, ct) => _translator.TranslateAsync(text, ct),
+                isTranslatorBroken: () => _translator.IsBroken);
+            _pipeline.SubtitleReady += line => SubtitleReady?.Invoke(line);
+            _pipeline.TranslatorBroken += OnTranslatorBroken;
+            _pipeline.Start();
+        }
         _feederTask = Task.Run(() => PipelineLoopAsync(_cts.Token));
         _ = PrepareAsync(_cts.Token);
     }
@@ -178,15 +225,25 @@ public sealed class LiveSubtitleService : IDisposable
                 while (reader.TryRead(out var pcm))
                 {
                     if (ct.IsCancellationRequested) return;
+                    _audioStartWall ??= DateTimeOffset.UtcNow;
                     // PCM 是 48kHz 立体声 16 位
                     var shorts = new short[pcm.Length / 2];
                     Buffer.BlockCopy(pcm, 0, shorts, 0, pcm.Length);
                     var mono = LiveSubtitleChunker.ResampleStereo48kToMono16k(shorts);
                     var window = _chunker.Feed(mono);
                     if (window is null) continue;
+                    // 窗计数 = 音频时钟：每出一窗即过去一窗长的音频（模型未就绪丢掉的窗也算）。
+                    Interlocked.Increment(ref _windowsCompleted);
                     if (!_modelReady)
                     {
                         // 模型未就绪：直播追不上旧音频，直接丢窗，不积压。
+                        continue;
+                    }
+                    if (_serialMode)
+                    {
+                        // 串行：本循环里听写 → 翻译依次跑（期间 PCM 在有界队列里等，满了丢最旧）。
+                        await ProcessWindowSerialAsync(window, DateTimeOffset.UtcNow, ct)
+                            .ConfigureAwait(false);
                         continue;
                     }
                     _pipeline?.EnqueueWindow(window);
@@ -201,6 +258,52 @@ public sealed class LiveSubtitleService : IDisposable
         {
             AppLog.Error($"live subtitle pipeline failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 串行处理一窗：听写 → 翻译依次跑（各用全部核）。陈旧窗直接丢：
+    /// 窗的音频在起点后 windowsCompleted × 窗长处结束，若到现在已超过一窗长，
+    /// 说明处理速度跟不上说话速度，追新不追旧（与流水线队列满丢最旧同理）。
+    /// 端到端 = 窗攒满（Feed 吐出时）→ 字幕发出，含排队等待，与流水线口径一致。
+    /// 日志格式与流水线相同，便于同一口径横向比。
+    /// </summary>
+    private async Task ProcessWindowSerialAsync(short[] window, DateTimeOffset windowCompletedAt, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _serialReceived);
+        if (LiveSubtitleSerialClock.IsStaleWindow(
+                LiveSubtitleSerialClock.WindowStalenessSeconds(_audioStartWall, _windowsCompleted, WindowSeconds, windowCompletedAt),
+                WindowSeconds))
+        {
+            Interlocked.Increment(ref _serialDropped);
+            return;
+        }
+        if (LiveSubtitleChunker.IsSilent(window)) return;
+        var sw = Stopwatch.StartNew();
+        var english = await _transcriber.TranscribeAsync(window, ct).ConfigureAwait(false);
+        sw.Stop();
+        var transcribeMs = sw.ElapsedMilliseconds;
+        Interlocked.Exchange(ref _serialLastTranscribeMs, transcribeMs);
+        if (string.IsNullOrWhiteSpace(english)) return;
+        // 整窗只是非语音标记（如 "(upbeat music)"）：不显示、不翻译。
+        if (LiveSubtitleChunker.IsNonSpeechMarker(english)) return;
+        Interlocked.Increment(ref _serialTranscribed);
+        sw.Restart();
+        var chinese = await _translator.TranslateAsync(english, ct).ConfigureAwait(false);
+        sw.Stop();
+        var translateMs = sw.ElapsedMilliseconds;
+        Interlocked.Exchange(ref _serialLastTranslateMs, translateMs);
+        if (_translator.IsBroken)
+        {
+            // 熔断：推理连续失败，字幕停掉、播放继续。
+            OnTranslatorBroken();
+            return;
+        }
+        Interlocked.Increment(ref _serialTranslated);
+        var endToEndMs = (long)(DateTimeOffset.UtcNow - windowCompletedAt).TotalMilliseconds;
+        Interlocked.Exchange(ref _serialLastEndToEndMs, endToEndMs);
+        SubtitleReady?.Invoke(new LiveSubtitleLine(english, chinese ?? english, DateTimeOffset.UtcNow));
+        AppLog.Info($"live subtitle: [{english}] => [{chinese ?? english}]");
+        AppLog.Info($"live subtitle: transcribe {transcribeMs}ms translate {translateMs}ms end-to-end {endToEndMs}ms");
     }
 
     public void Dispose()

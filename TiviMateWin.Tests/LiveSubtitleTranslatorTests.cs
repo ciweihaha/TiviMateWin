@@ -58,6 +58,18 @@ public class LiveSubtitleTranslatorTests
         Assert.Equal(expected, LiveSubtitleTranslator.IsChineseText(input));
     }
 
+    [Theory]
+    [InlineData("qwen2.5-1.5b-instruct-q4_k_m.gguf", "Qwen/Qwen2.5-1.5B-Instruct-GGUF")]
+    [InlineData("qwen2.5-0.5b-instruct-q4_k_m.gguf", "Qwen/Qwen2.5-0.5B-Instruct-GGUF")]
+    [InlineData("qwen2.5-3b-instruct-q4_k_m.gguf", "Qwen/Qwen2.5-3B-Instruct-GGUF")]
+    [InlineData("some-other-model.gguf", "Qwen/Qwen2.5-1.5B-Instruct-GGUF")]
+    public void ModelUrls_FileNameDecidesRepo(string fileName, string repo)
+    {
+        var (primary, mirror) = LiveSubtitleTranslator.ModelUrls(fileName);
+        Assert.Equal("https://huggingface.co/" + repo + "/resolve/main/" + fileName, primary);
+        Assert.Equal("https://hf-mirror.com/" + repo + "/resolve/main/" + fileName, mirror);
+    }
+
     [Fact]
     public async Task TranslateAsync_ReturnsCleanedTranslation()
     {
