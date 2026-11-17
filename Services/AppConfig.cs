@@ -33,8 +33,8 @@ public class AppConfig
     public bool LiveSubtitleEnabled { get; set; } = false;
     public bool LiveSubtitleShowEnglish { get; set; } = true;  // 字幕条同时显示英文原文
     public string LiveSubtitleModel { get; set; } = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
-    public string LiveSubtitleWhisperModel { get; set; } = "ggml-base.en.bin"; // 听写模型文件名；tiny.en 更快、识别稍差
-    public int LiveSubtitleWindowSeconds { get; set; } = 3;    // 切块窗口（秒），1–10
+    public string LiveSubtitleWhisperModel { get; set; } = "ggml-tiny.en.bin"; // 听写模型文件名；tiny.en 更快（base.en 在台式机上 3 秒窗要 5–6 秒，队列一满端到端就到 10 秒），base.en 更准、可配回
+    public double LiveSubtitleWindowSeconds { get; set; } = 1.5; // 切块窗口（秒），1–10；1.5 秒是延迟与质量的平衡点（UnBox 同款默认）
     // 两级流水线分核（0=自动：留 1 核给播放与界面，其余按 2:1 分给听写与翻译；
     // >0 手动指定，云电脑上改 config.json 就能调，不用重编）。
     public int LiveSubtitleTranscribeThreads { get; set; } = 0;
