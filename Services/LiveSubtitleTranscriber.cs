@@ -36,6 +36,7 @@ public sealed class LiveSubtitleTranscriber : IDisposable
     private readonly HttpClient _http;
     private WhisperFactory? _factory;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private bool _setupLogged;
     private bool _disposed;
 
     /// <summary>听写线程数：与翻译一样，流水线串行时各用全部核（留 1 核给播放与界面）。</summary>
@@ -113,11 +114,19 @@ public sealed class LiveSubtitleTranscriber : IDisposable
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            // 首调用建工厂+处理器（读模型、建原生上下文）：单独计时，区分“加载慢”还是“推理慢”。
+            var setupSw = Stopwatch.StartNew();
             _factory ??= WhisperFactory.FromPath(_modelPath);
             using var processor = _factory.CreateBuilder()
                 .WithLanguage("en")
                 .WithThreads(Threads)
                 .Build();
+            setupSw.Stop();
+            if (!_setupLogged)
+            {
+                _setupLogged = true;
+                AppLog.Info($"whisper setup {setupSw.ElapsedMilliseconds}ms (factory+processor, first call)");
+            }
             using var wav = new MemoryStream(LiveSubtitleChunker.BuildWav(mono16k));
             var sw = Stopwatch.StartNew();
             var sb = new StringBuilder();

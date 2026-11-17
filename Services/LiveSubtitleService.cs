@@ -21,6 +21,8 @@ public sealed class LiveSubtitleService : IDisposable
     private LiveSubtitlePipeline? _pipeline;
     private CancellationTokenSource? _cts;
     private Task? _feederTask;
+    private Task? _watchdogTask;
+    private volatile string _serialStage = "idle"; // 串行模式当前阶段（看门狗用）：idle/transcribing/translating
     private bool _audioAttached;
     private bool _modelReady;
     private bool _translatorReady;
@@ -177,6 +179,7 @@ public sealed class LiveSubtitleService : IDisposable
             _pipeline.Start();
         }
         _feederTask = Task.Run(() => PipelineLoopAsync(_cts.Token));
+        _watchdogTask = Task.Run(() => WatchdogLoopAsync(_cts.Token));
         _ = PrepareAsync(_cts.Token);
     }
 
@@ -288,6 +291,24 @@ public sealed class LiveSubtitleService : IDisposable
         }
     }
 
+    /// <summary>看门狗：每 30 秒记一次计数与当前阶段；串行卡在听写/翻译里、或喂音频循环已死，
+    /// 都能从这行日志直接看出来（卡住时 stage 停在 transcribing/translating，循环死时连这行都没了）。</summary>
+    private async Task WatchdogLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+                AppLog.Info($"live subtitle watchdog: stage={_serialStage} received={WindowsReceived} dropped={WindowsDropped} transcribed={WindowsTranscribed} translated={WindowsTranslated} lastTranscribe={LastTranscribeMs}ms lastTranslate={LastTranslateMs}ms lastEndToEnd={LastEndToEndMs}ms");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常停止
+        }
+    }
+
     /// <summary>
     /// 串行处理一窗：听写 → 翻译依次跑（各用全部核）。陈旧窗直接丢：
     /// 窗的音频在起点后 windowsCompleted × 窗长处结束，若到现在已超过一窗长，
@@ -298,23 +319,26 @@ public sealed class LiveSubtitleService : IDisposable
     private async Task ProcessWindowSerialAsync(short[] window, DateTimeOffset windowCompletedAt, CancellationToken ct)
     {
         Interlocked.Increment(ref _serialReceived);
-        if (LiveSubtitleSerialClock.IsStaleWindow(
-                LiveSubtitleSerialClock.WindowStalenessSeconds(_audioStartWall, _windowsCompleted, WindowSeconds, windowCompletedAt),
-                WindowSeconds))
+        var staleness = LiveSubtitleSerialClock.WindowStalenessSeconds(
+            _audioStartWall, _windowsCompleted, WindowSeconds, windowCompletedAt);
+        if (LiveSubtitleSerialClock.IsStaleWindow(staleness, WindowSeconds))
         {
             Interlocked.Increment(ref _serialDropped);
+            AppLog.Info($"live subtitle: stale window dropped (staleness {staleness:F1}s, window #{WindowsReceived})");
             return;
         }
         if (LiveSubtitleChunker.IsSilent(window)) return;
+        _serialStage = "transcribing";
         var sw = Stopwatch.StartNew();
         var english = await _transcriber.TranscribeAsync(window, ct).ConfigureAwait(false);
         sw.Stop();
         var transcribeMs = sw.ElapsedMilliseconds;
         Interlocked.Exchange(ref _serialLastTranscribeMs, transcribeMs);
-        if (string.IsNullOrWhiteSpace(english)) return;
+        if (string.IsNullOrWhiteSpace(english)) { _serialStage = "idle"; return; }
         // 整窗只是非语音标记（如 "(upbeat music)"）：不显示、不翻译。
-        if (LiveSubtitleChunker.IsNonSpeechMarker(english)) return;
+        if (LiveSubtitleChunker.IsNonSpeechMarker(english)) { _serialStage = "idle"; return; }
         Interlocked.Increment(ref _serialTranscribed);
+        _serialStage = "translating";
         sw.Restart();
         var chinese = await _translator.TranslateAsync(english, ct).ConfigureAwait(false);
         sw.Stop();
@@ -323,15 +347,17 @@ public sealed class LiveSubtitleService : IDisposable
         if (_translator.IsBroken)
         {
             // 熔断：推理连续失败，字幕停掉、播放继续。
+            _serialStage = "idle";
             OnTranslatorBroken();
             return;
         }
         Interlocked.Increment(ref _serialTranslated);
         var endToEndMs = (long)(DateTimeOffset.UtcNow - windowCompletedAt).TotalMilliseconds;
         Interlocked.Exchange(ref _serialLastEndToEndMs, endToEndMs);
+        _serialStage = "idle";
         SubtitleReady?.Invoke(new LiveSubtitleLine(english, chinese ?? english, DateTimeOffset.UtcNow));
         AppLog.Info($"live subtitle: [{english}] => [{chinese ?? english}]");
-        AppLog.Info($"live subtitle: transcribe {transcribeMs}ms translate {translateMs}ms end-to-end {endToEndMs}ms");
+        AppLog.Info($"live subtitle: transcribe {transcribeMs}ms (infer {_transcriber.LastTranscribeMs}ms) translate {translateMs}ms end-to-end {endToEndMs}ms");
     }
 
     public void Dispose()
