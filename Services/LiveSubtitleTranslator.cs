@@ -46,6 +46,7 @@ public sealed class LiveSubtitleTranslator : IDisposable
     private const int EvictBatch = 100;
     private const int MaxConsecutiveFailures = 3;   // 熔断阈值：连续失败这么多次即停字幕
     private const int InferenceTimeoutSeconds = 8;  // 单行推理超时（毫秒级行一般 1–2 秒）
+    private const int DisposeDrainSeconds = 15;     // v1.4.31：Dispose 时等在途推理收尾的最长秒数（单行推理约 1–2 秒，15 秒是余量）
     private const int MaxTokens = 32;               // 1.5 秒窗的短句一般 10–20 个中文 token，32 够译两三句，同时截住模型跑题续写（64 时长句多耗约 1 秒）
     private const float Temperature = 0.2f;
     private const int ContextSize = 1024;           // 提示词约 100 token，1024 绰绰有余
@@ -360,6 +361,10 @@ public sealed class LiveSubtitleTranslator : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        // v1.4.31：与听写器同款竞态——_engineGate 在整次推理/加载期间都被持有，
+        // 关字幕时若翻译正在跑，直接释 _weights 会让推理访问已释放的权重。
+        // 先等在途推理收尾再释权重；超时仍释（尽力而为，不无限等）。
+        try { _engineGate.Wait(TimeSpan.FromSeconds(DisposeDrainSeconds)); } catch { }
         // StatelessExecutor 没有 Dispose（上下文由它内部持有，随权重释放由终结器回收）；
         // 只释放权重与同步对象。
         _weights?.Dispose();

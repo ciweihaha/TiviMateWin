@@ -46,4 +46,28 @@ public class LiveSubtitleTranscriberTests
         // 没模型直接返回，不应记超时。
         Assert.Equal(0, transcriber.TranscribeTimeouts);
     }
+
+    [Fact]
+    public void Dispose_NoModel_DoesNotThrow_AndIsIdempotent()
+    {
+        // v1.4.31：关字幕时 Stop 后立刻 Dispose——释放前要等在途听写收尾（等门）；
+        // 无模型/无在途听写时应立刻返回、不抛异常；二次 Dispose 也安全。
+        var transcriber = new LiveSubtitleTranscriber(
+            modelPath: Path.Combine(Path.GetTempPath(), "tivimatewin-test-missing", "ggml-tiny.en.bin"));
+        var ex = Record.Exception(() => transcriber.Dispose());
+        Assert.Null(ex);
+        ex = Record.Exception(() => transcriber.Dispose());
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public async Task TranscribeAsync_AfterDispose_ReturnsNull()
+    {
+        // v1.4.31：Dispose 后再调听写直接返回 null，不碰已释放的门/工厂。
+        var transcriber = new LiveSubtitleTranscriber(
+            modelPath: Path.Combine(Path.GetTempPath(), "tivimatewin-test-missing", "ggml-tiny.en.bin"));
+        transcriber.Dispose();
+        var result = await transcriber.TranscribeAsync(new short[24000], CancellationToken.None);
+        Assert.Null(result);
+    }
 }

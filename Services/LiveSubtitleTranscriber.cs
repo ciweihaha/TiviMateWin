@@ -161,6 +161,7 @@ public sealed class LiveSubtitleTranscriber : IDisposable
     /// 曾让个别窗卡 5–12 秒，超时后当窗跳过、喂音频循环不被堵住）。</summary>
     public async Task<string?> TranscribeAsync(short[] mono16k, CancellationToken ct)
     {
+        if (_disposed) return null;
         if (!ModelReady) return null;
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -171,7 +172,10 @@ public sealed class LiveSubtitleTranscriber : IDisposable
             var setupSw = Stopwatch.StartNew();
             _loadPath ??= LiveSubtitleModelPath.ResolveForNativeLoad(_modelPath);
             _factory ??= WhisperFactory.FromPath(_loadPath);
-            using var processor = _factory.CreateBuilder()
+            // v1.4.31：处理器必须异步释放——取消时同步 Dispose 会抛
+            // "Cannot dispose while processing, please use DisposeAsync instead"；
+            // await using 等在途处理收尾后再释原生状态。
+            await using var processor = _factory.CreateBuilder()
                 .WithLanguage("en")
                 .WithThreads(Threads)
                 // 1.5 秒窗本就是一段话：单段输出，少一次分段解码的开销。
@@ -235,6 +239,13 @@ public sealed class LiveSubtitleTranscriber : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        // v1.4.31：关字幕崩进程修复——工厂释放前必须等在途听写收尾。
+        // 旧逻辑在 Stop（取消）后立刻释工厂，而串行喂音频循环可能正卡在
+        // ProcessAsync 里（处理器由该工厂创建）；原生上下文被提前释放，
+        // 处理器随后访问已释放的 ggml 上下文 → 0xc0000005 访问违规，进程直接死。
+        // _gate 在整次 TranscribeAsync 期间都被持有，拿到它即证明无在途听写；
+        // 取消后听写会在 6 秒超时内收尾，+5 秒余量；超时仍释（尽力而为，不无限等）。
+        try { _gate.Wait(TimeSpan.FromSeconds(TranscribeTimeoutSeconds + 5)); } catch { }
         _factory?.Dispose();
         _gate.Dispose();
     }

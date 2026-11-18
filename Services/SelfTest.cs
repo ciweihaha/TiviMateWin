@@ -194,6 +194,36 @@ public static class SelfTest
             lines.Add(MainWindow.ExtractEpgUrl("") == null && MainWindow.ExtractEpgUrl("\n\n") == null
                 ? "PASS EPG源提取-空输入返回空" : "FAIL EPG源提取-空输入返回空");
 
+            // --- EPG 源地址提取（v1.4.31）：标准属性名是 x-tvg-url，旧实现只认 url-tvg，
+            // 直播源首行是 x-tvg-url 时节目单永远不加载。两者都有时 url-tvg 优先（历史行为）。---
+            lines.Add(MainWindow.ExtractEpgUrl("#EXTM3U x-tvg-url=\"http://epg.example.com/epg.xml\"\n#EXTINF:-1,A\nhttp://a.m3u8") == "http://epg.example.com/epg.xml"
+                ? "PASS EPG源提取-x-tvg-url带引号" : "FAIL EPG源提取-x-tvg-url带引号");
+            lines.Add(MainWindow.ExtractEpgUrl("#EXTM3U x-tvg-url=http://epg.example.com/epg.xml\n#EXTINF:-1,A\nhttp://a.m3u8") == "http://epg.example.com/epg.xml"
+                ? "PASS EPG源提取-x-tvg-url无引号" : "FAIL EPG源提取-x-tvg-url无引号");
+            lines.Add(MainWindow.ExtractEpgUrl("\n#EXTM3U x-tvg-url=\"http://epg.example.com/epg.xml\"\n#EXTINF:-1,A\nhttp://a.m3u8") == "http://epg.example.com/epg.xml"
+                ? "PASS EPG源提取-x-tvg-url前导空行仍取到" : "FAIL EPG源提取-x-tvg-url前导空行仍取到");
+            lines.Add(MainWindow.ExtractEpgUrl("#EXTM3U x-tvg-url=\"http://x\" url-tvg=\"http://epg.example.com/epg.xml\"\n#EXTINF:-1,A\nhttp://a.m3u8") == "http://epg.example.com/epg.xml"
+                ? "PASS EPG源提取-两者都有url-tvg优先" : "FAIL EPG源提取-两者都有url-tvg优先");
+
+            // --- 重连触顶降频（v1.4.31，纯逻辑） ---
+            // 旧逻辑：看门狗每 8 秒调一次 TryAutoReconnect，触顶后每次都记一条 ERROR；
+            // 60 秒冷却一到计数清零又重连 5 次，死源等于无限重试。
+            var now = DateTime.UtcNow;
+            lines.Add(MainWindow.InReconnectBackoff(6, now.AddMinutes(5), now)
+                ? "PASS 重连降频-触顶5分钟内停手" : "FAIL 重连降频-触顶5分钟内停手");
+            lines.Add(!MainWindow.InReconnectBackoff(6, now.AddMinutes(-1), now)
+                ? "PASS 重连降频-过了降频期可再试" : "FAIL 重连降频-过了降频期可再试");
+            lines.Add(!MainWindow.InReconnectBackoff(3, now.AddMinutes(5), now)
+                ? "PASS 重连降频-未触顶不受降频期影响" : "FAIL 重连降频-未触顶不受降频期影响");
+            lines.Add(MainWindow.ReconnectLimitLogDue(null, DateTime.MinValue, "http://a.m3u8", now)
+                ? "PASS 重连触顶日志-首次触顶记" : "FAIL 重连触顶日志-首次触顶记");
+            lines.Add(!MainWindow.ReconnectLimitLogDue("http://a.m3u8", now.AddMinutes(-1), "http://a.m3u8", now)
+                ? "PASS 重连触顶日志-同频道1分钟内不重复记" : "FAIL 重连触顶日志-同频道1分钟内不重复记");
+            lines.Add(MainWindow.ReconnectLimitLogDue("http://a.m3u8", now.AddMinutes(-11), "http://a.m3u8", now)
+                ? "PASS 重连触顶日志-同频道10分钟后可再记" : "FAIL 重连触顶日志-同频道10分钟后可再记");
+            lines.Add(MainWindow.ReconnectLimitLogDue("http://a.m3u8", now, "http://b.m3u8", now)
+                ? "PASS 重连触顶日志-换频道记" : "FAIL 重连触顶日志-换频道记");
+
             // --- 切源缓存判定（深查第 21 轮；纯逻辑） ---
             // 旧 LoadCoreAsync 只在 _all 为空时读缓存，切源后网络失败仍显示旧源频道。
             // NeedsCacheFirst：列表为空、或当前列表属于另一源时先上缓存；同源刷新不走缓存。

@@ -162,4 +162,17 @@ public class LiveSubtitleTranslatorTests
         var result = await translator.TranslateAsync("Hello world", CancellationToken.None);
         Assert.Null(result);
     }
+
+    [Fact]
+    public void Dispose_NoModel_DoesNotThrow_AndIsIdempotent()
+    {
+        // v1.4.31：关字幕时 Stop 后立刻 Dispose——释放前要等在途推理收尾（等门）；
+        // 无模型/无在途推理时应立刻返回、不抛异常；二次 Dispose 也安全。
+        var translator = new LiveSubtitleTranslator(
+            modelPath: Path.Combine(Path.GetTempPath(), "no-such-model.gguf"));
+        var ex = Record.Exception(() => translator.Dispose());
+        Assert.Null(ex);
+        ex = Record.Exception(() => translator.Dispose());
+        Assert.Null(ex);
+    }
 }

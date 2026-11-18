@@ -184,6 +184,12 @@ public partial class MainWindow : Window
     // 断一次不再算进旧的失败链）；_reconnectPending：延迟重连排队中，避免看门狗重复排。
     private DateTime _lastAutoReconnectUtc = DateTime.MinValue;
     private bool _reconnectPending;
+    // v1.4.31：触顶降频——触顶后 5 分钟内看门狗再调也不重试、不再刷 ERROR；
+    // 5 分钟后 60 秒冷却已过，计数清零再试 5 次（死源最多每 5 分钟试 5 次，而不是无限重试）。
+    private DateTime _autoReconnectCappedUntilUtc = DateTime.MinValue;
+    // 触顶 ERROR 只记一次：同频道 10 分钟内不再重复记（看门狗每 8 秒调一次）。
+    private string? _autoReconnectLimitLoggedUrl;
+    private DateTime _autoReconnectLimitLoggedUtc = DateTime.MinValue;
     // 防重复重播：同一次失败可能同时触发 EndReached 与 EncounteredError，两条重连路径
     // 各调一次 PlayAsync；3 秒内同一 URL 只播一次，避免两个 Media 互相顶掉、秒断连锁。
     private DateTime _lastAutoPlayUtc = DateTime.MinValue;
@@ -2414,7 +2420,10 @@ public partial class MainWindow : Window
         SubtitleBar.Visibility = Visibility.Collapsed;
     }
 
-    /// <summary>从 M3U 头部解析 EPG 源地址（#EXTM3U url-tvg="..."）</summary>
+    /// <summary>从 M3U 头部解析 EPG 源地址（#EXTM3U url-tvg="..." 或 x-tvg-url="..."）；
+    /// v1.4.31：标准 M3U 属性名是 x-tvg-url，旧实现只认 url-tvg——直播源首行是
+    /// x-tvg-url 时解析返回 null，LoadEpgAsync 从不执行，节目单永远不显示。
+    /// 两者都有时 url-tvg 优先（历史行为不变）。</summary>
     internal static string? ExtractEpgUrl(string m3uText)
     {
         try
@@ -2436,8 +2445,14 @@ public partial class MainWindow : Window
             }
             if (firstLine is null) return null;
             var idx = firstLine.IndexOf("url-tvg=", StringComparison.OrdinalIgnoreCase);
+            var keyLen = 8;
+            if (idx < 0)
+            {
+                idx = firstLine.IndexOf("x-tvg-url=", StringComparison.OrdinalIgnoreCase);
+                keyLen = 10;
+            }
             if (idx < 0) return null;
-            var rest = firstLine[(idx + 8)..].Trim();
+            var rest = firstLine[(idx + keyLen)..].Trim();
             if (rest.StartsWith('"'))
             {
                 rest = rest[1..];
@@ -2858,11 +2873,16 @@ public partial class MainWindow : Window
     /// CCTV-6 云电脑修复：重播前等 4 秒（3 秒分片至少轮换 1 个，避开刚失败的那批分片，
     /// 也给 SCF/CDN 一个恢复窗口）；上次重连已是 60 秒前的事则计数清零——播稳后偶发
     /// 断一次不再累计进旧失败链；真死流仍会在 5 次内停手（HW 回退照常），60 秒冷却后
-    /// 看门狗会再试一次（直播流值得等它恢复，而不是永久黑屏）。</summary>
+    /// 看门狗会再试一次（直播流值得等它恢复，而不是永久黑屏）。
+    /// v1.4.31：触顶后降频——5 分钟内不再重试、触顶 ERROR 只记一次；旧逻辑里看门狗
+    /// 每 8 秒调一次就记一条 ERROR，60 秒冷却一到又重连 5 次，死源等于无限重试。</summary>
     private bool TryAutoReconnect(ChannelItem ch)
     {
         if (_closing || _isPaused || _pipEffectActive) return false;
         if (_reconnectPending) return true;   // 已有一次延迟重连在排队，不重复排
+        // v1.4.31：触顶降频期内直接停手，不重试、不刷日志（看门狗每 8 秒调一次）。
+        if (InReconnectBackoff(_autoReconnectCount, _autoReconnectCappedUntilUtc, DateTime.UtcNow))
+            return false;
         // 冷却重置：上次重连超过 60 秒，旧失败链清零
         if ((DateTime.UtcNow - _lastAutoReconnectUtc).TotalSeconds > 60)
             _autoReconnectCount = 0;
@@ -2872,7 +2892,13 @@ public partial class MainWindow : Window
             // 很可能是硬解本身播不了这路流——自动切软解并重启（每会话一次）。
             if (TryHardwareDecodeFallback()) return true;
             PlayState.Text = "连续失败，请手动重进";
-            AppLog.Error($"auto-reconnect stopped after limit: [{ch.Name}]");
+            if (ReconnectLimitLogDue(_autoReconnectLimitLoggedUrl, _autoReconnectLimitLoggedUtc, ch.Url, DateTime.UtcNow))
+            {
+                AppLog.Error($"auto-reconnect stopped after limit: [{ch.Name}]");
+                _autoReconnectLimitLoggedUrl = ch.Url;
+                _autoReconnectLimitLoggedUtc = DateTime.UtcNow;
+            }
+            _autoReconnectCappedUntilUtc = DateTime.UtcNow.AddMinutes(5);
             return false;
         }
         _lastAutoReconnectUtc = DateTime.UtcNow;
@@ -2880,6 +2906,16 @@ public partial class MainWindow : Window
         _ = ReconnectAfterDelayAsync(ch);
         return true;
     }
+
+    /// <summary>触顶降频期判定（v1.4.31，纯逻辑，自测覆盖）：计数已超限且仍在
+    /// 触顶后的 5 分钟降频期内，不再重试。过了降频期则由 60 秒冷却规则清零计数再试。</summary>
+    internal static bool InReconnectBackoff(int count, DateTime cappedUntilUtc, DateTime now)
+        => count > 5 && now < cappedUntilUtc;
+
+    /// <summary>触顶 ERROR 是否该记（v1.4.31，纯逻辑，自测覆盖）：换了频道、或同频道
+    /// 上次记已超过 10 分钟才记；看门狗每 8 秒调一次，旧逻辑每次都记一条 ERROR。</summary>
+    internal static bool ReconnectLimitLogDue(string? loggedUrl, DateTime loggedUtc, string url, DateTime now)
+        => loggedUrl != url || (now - loggedUtc).TotalMinutes > 10;
 
     /// <summary>延迟重连：等 4 秒再重播同一直播频道。HLS 清单 3 秒一刷，4 秒足够轮换掉
     /// 刚失败的分片；立即重播只会重新下到同一批坏分片、秒断。等待期间用户换台或已恢复
