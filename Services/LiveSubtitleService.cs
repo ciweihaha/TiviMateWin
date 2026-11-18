@@ -68,6 +68,9 @@ public sealed class LiveSubtitleService : IDisposable
     /// <summary>是否串行管线（设置改了需重建服务才生效）。</summary>
     public bool Serial => _serialMode;
 
+    /// <summary>累计因单窗超时被放弃的窗口数（听写 6 秒未出结果）。</summary>
+    public long TranscribeTimeouts => _transcriber.TranscribeTimeouts;
+
     /// <summary>最近一窗听写耗时（毫秒）。</summary>
     public long LastTranscribeMs => _pipeline?.LastTranscribeMs ?? Interlocked.Read(ref _serialLastTranscribeMs);
 
@@ -312,7 +315,7 @@ public sealed class LiveSubtitleService : IDisposable
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
-                AppLog.Info($"live subtitle watchdog: stage={_serialStage} received={WindowsReceived} dropped={WindowsDropped} transcribed={WindowsTranscribed} translated={WindowsTranslated} lastTranscribe={LastTranscribeMs}ms lastTranslate={LastTranslateMs}ms lastEndToEnd={LastEndToEndMs}ms");
+                AppLog.Info($"live subtitle watchdog: stage={_serialStage} received={WindowsReceived} dropped={WindowsDropped} transcribed={WindowsTranscribed} translated={WindowsTranslated} transcribeTimeouts={TranscribeTimeouts} lastTranscribe={LastTranscribeMs}ms lastTranslate={LastTranslateMs}ms lastEndToEnd={LastEndToEndMs}ms");
             }
         }
         catch (OperationCanceledException)

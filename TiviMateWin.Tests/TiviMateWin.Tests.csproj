@@ -12,8 +12,10 @@
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <!-- 翻译器链接的源码引用了 LLamaSharp 类型，测试工程也要引核心包才能编译；
-         后端原生包不需要（测试用注入的假推理，不加载真模型）。 -->
+         后端原生包不需要（测试用注入的假推理，不加载真模型）。听写器同理：引
+         Whisper.net 核心包即可编译，测试不建真工厂、不加载原生运行时。 -->
     <PackageReference Include="LLamaSharp" Version="0.30.0" />
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
   </ItemGroup>
 
   <!-- 只链接纯逻辑文件，不引用 WPF 主工程（Linux 上编不了 WPF）；托盘状态机无 UI 依赖 -->
@@ -25,6 +27,7 @@
     <Compile Include="..\Services\LiveSubtitleSerialClock.cs" Link="LiveSubtitleSerialClock.cs" />
     <Compile Include="..\Services\LiveSubtitleTranslator.cs" Link="LiveSubtitleTranslator.cs" />
     <Compile Include="..\Services\LiveSubtitleModelPath.cs" Link="LiveSubtitleModelPath.cs" />
+    <Compile Include="..\Services\LiveSubtitleTranscriber.cs" Link="LiveSubtitleTranscriber.cs" />
   </ItemGroup>
 
 </Project>
