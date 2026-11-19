@@ -228,15 +228,10 @@
                 </DockPanel>
 
                 <Grid Margin="4,0,4,6">
-                    <!-- v1.4.35：频道列表关掉虚拟化、滚动条常显。原因：56 个台用不着虚拟化；
-                         但 1.4.33 台式机实测 UIA 里 ListItem=0（容器一个都没生成），
-                         用户又报列表滑不动——虚拟化没生成项时既看不到项、也无处可滚。
-                         关掉后 56 行全量生成（渲染代价可忽略），UIA 也能直接看到项；
-                         滚动条常显，滚轮失灵时还能拖着走。 -->
                     <ListBox x:Name="ChannelList" Background="Transparent" BorderThickness="0"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             ScrollViewer.VerticalScrollBarVisibility="Visible"
-                             VirtualizingPanel.IsVirtualizing="False"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
+                             VirtualizingPanel.IsVirtualizing="True"
                              MouseDoubleClick="ChannelList_MouseDoubleClick"
                              PreviewMouseLeftButtonUp="ChannelList_PreviewMouseLeftButtonUp"
                              PreviewMouseRightButtonUp="ChannelList_PreviewMouseRightButtonUp">
