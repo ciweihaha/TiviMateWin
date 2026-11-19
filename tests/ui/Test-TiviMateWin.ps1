@@ -1,4 +1,4 @@
-# TiviMateWin UI 回归测试脚本 — 发版门禁（用户规矩：先测后发，脚本全过才打 tag）
+﻿# TiviMateWin UI 回归测试脚本 — 发版门禁（用户规矩：先测后发，脚本全过才打 tag）
 # 跑法见 tests/ui/README.md。必须在交互会话 session 1 里跑（定时任务），WinRM session 0 看不到窗口。
 # 退出码：0 全部 PASS；1 有 FAIL；2 有 NEEDS-EYE 待复核（无 FAIL 时）。
 param(
