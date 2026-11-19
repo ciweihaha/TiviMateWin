@@ -23,8 +23,12 @@ public static class Win32SI {
 }
 '@
 $p=Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1
-if($null -eq $p -or $p.MainWindowHandle -eq 0){ Write-Output 'TiviMateWin not running'; exit 1 }
-$win=[System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle)
+if($null -eq $p){ Write-Output 'TiviMateWin not running'; exit 1 }
+$root0=[System.Windows.Automation.AutomationElement]::RootElement
+$win=$null
+$allW=@($root0.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
+foreach($w in $allW){ if($w.Current.Name -like '*星辰*'){ $win=$w; break } }
+if($null -eq $win){ Write-Output 'TiviMateWin window not found by name'; exit 1 }
 Write-Output ("Window rect={0}" -f $win.Current.BoundingRectangle)
 [Win32SI]::SetForegroundWindow($p.MainWindowHandle)
 Start-Sleep -Milliseconds 500
