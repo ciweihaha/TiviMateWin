@@ -1,4 +1,4 @@
-$ProgressPreference='SilentlyContinue'
+﻿$ProgressPreference='SilentlyContinue'
 $out='C:\build\tmw-uitest\probe-out2.txt'
 function L($s){ Add-Content -Path $out -Value $s -Encoding UTF8 }
 if (Test-Path $out) { Remove-Item $out -Force }
@@ -16,11 +16,11 @@ public static class W32 {
 $sw=[W32]::GetSystemMetrics(0); $sh=[W32]::GetSystemMetrics(1)
 L ("physical screen: " + $sw + "x" + $sh)
 $rt=[System.Windows.Automation.AutomationElement]::RootElement
-function Find-Win($namePat){
-  $ws=@($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-  return ($ws | Where-Object { $_.Current.Name -match $namePat } | Select-Object -First 1)
+function Get-TopWindows(){
+  return @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
 }
-$mw=Find-Win '星辰'
+$pid0=(Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).Id
+$mw=(Get-TopWindows) | Where-Object { try { $_.Current.ProcessId -eq $pid0 } catch { $false } } | Sort-Object { $_.Current.BoundingRectangle.Width * $_.Current.BoundingRectangle.Height } -Descending | Select-Object -First 1
 if($null -eq $mw){ L "MAIN NOT FOUND"; L "PROBE-DONE"; exit }
 L ("main rect=" + $mw.Current.BoundingRectangle)
 [void][W32]::SetForegroundWindow([IntPtr]$mw.Current.NativeWindowHandle)
@@ -37,7 +37,7 @@ Start-Sleep -Milliseconds 120
 Start-Sleep -Milliseconds 80
 [W32]::mouse_event(0x0004, $ax, $ay, 0, [IntPtr]::Zero)
 Start-Sleep -Seconds 3
-$swin=Find-Win '设置'
+$swin=(Get-TopWindows) | Where-Object { try { $_.Current.ProcessId -eq $pid0 -and $_.Current.NativeWindowHandle -ne $mw.Current.NativeWindowHandle } catch { $false } } | Select-Object -First 1
 L ("settings after MOUSE click=" + ($null -ne $swin))
 if($null -ne $swin){
   L ("settings rect=" + $swin.Current.BoundingRectangle)
@@ -55,12 +55,14 @@ if($null -ne $swin){
   L ("LiveSubtitleChk found=" + ($null -ne $chk))
   [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
   Start-Sleep -Seconds 1
-  L ("settings closed after ESC=" + ($null -eq (Find-Win '设置')))
+  Start-Sleep -Seconds 1
+  $swinAfter=(Get-TopWindows) | Where-Object { try { $_.Current.ProcessId -eq $pid0 -and $_.Current.NativeWindowHandle -ne $mw.Current.NativeWindowHandle } catch { $false } } | Select-Object -First 1
+  L ("settings closed after ESC=" + ($null -eq $swinAfter))
 } else {
   L "mouse click ALSO failed; try UIA Invoke with foreground"
   try { $pat=$btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern); $pat.Invoke(); L "UIA Invoke called" } catch { L ("UIA Invoke FAILED: " + $_.Exception.Message) }
   Start-Sleep -Seconds 3
-  $swin2=Find-Win '设置'
+  $swin2=(Get-TopWindows) | Where-Object { try { $_.Current.ProcessId -eq $pid0 -and $_.Current.NativeWindowHandle -ne $mw.Current.NativeWindowHandle } catch { $false } } | Select-Object -First 1
   L ("settings after UIA Invoke (fg)=" + ($null -ne $swin2))
   if($null -ne $swin2){ [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Seconds 1 }
 }
