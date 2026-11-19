@@ -1,3 +1,6 @@
+using System.Net.Http;
+using System.Threading;
+
 namespace TiviMateWin.Services;
 
 /// <summary>分片探针（v1.4.36）：直播流秒断时，亲自取一次播放列表 + 首个分片，
