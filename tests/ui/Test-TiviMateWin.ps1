@@ -111,10 +111,19 @@ function Get-ElementText {
     try { return $El.Current.Name } catch { return '' }
 }
 
+function Get-PhysicalScreenSize {
+    # UIA 坐标是物理像素；WinForms Bounds 在非 DPI 感知进程里是逻辑像素（125% 下 1536x792，
+    # 物理是 1920x990），直接拿它算 mouse_event 绝对坐标会偏 25%。改用 UIA 根元素的物理尺寸。
+    try {
+        $rr = [System.Windows.Automation.AutomationElement]::RootElement.Current.BoundingRectangle
+        if ($rr.Width -gt 0 -and $rr.Height -gt 0) { return @([int]$rr.Width, [int]$rr.Height) }
+    } catch {}
+    return @([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height)
+}
+
 function Invoke-MouseClick {
     param([int]$X, [int]$Y)
-    $sw = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
-    $sh = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
+    $sz = Get-PhysicalScreenSize; $sw = $sz[0]; $sh = $sz[1]
     $ax = [uint]([Math]::Min(65535, [Math]::Max(0, $X * 65535 / $sw)))
     $ay = [uint]([Math]::Min(65535, [Math]::Max(0, $Y * 65535 / $sh)))
     [Win32]::mouse_event(0x8001, $ax, $ay, 0, [UIntPtr]::Zero)  # MOVE | ABSOLUTE
@@ -126,8 +135,7 @@ function Invoke-MouseClick {
 
 function Invoke-MouseRightClick {
     param([int]$X, [int]$Y)
-    $sw = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
-    $sh = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
+    $sz = Get-PhysicalScreenSize; $sw = $sz[0]; $sh = $sz[1]
     $ax = [uint]([Math]::Min(65535, [Math]::Max(0, $X * 65535 / $sw)))
     $ay = [uint]([Math]::Min(65535, [Math]::Max(0, $Y * 65535 / $sh)))
     [Win32]::mouse_event(0x8001, $ax, $ay, 0, [UIntPtr]::Zero)
@@ -282,6 +290,15 @@ for ($i = 0; $i -lt 30; $i++) {
         if ($null -ne $m) { $epgN = [int]$m.Matches.Groups[1].Value; break }
     }
 }
+if ($epgN -eq 0) {
+    # 兜底：日志行可能已被大量 stall/reconnect 日志挤出 tail 200，读全文件再找一次
+    $lf2 = Get-LogFile
+    if ($null -ne $lf2) {
+        $all = Get-Content $lf2.FullName -ErrorAction SilentlyContinue
+        $m2 = ($all | Select-String -Pattern 'epg loaded (\d+) channels' | Select-Object -Last 1)
+        if ($null -ne $m2) { $epgN = [int]$m2.Matches.Groups[1].Value }
+    }
+}
 
 # ================= A：版本与启动 =================
 $title = ''
@@ -313,20 +330,22 @@ if ($null -eq $combo) {
     } else {
         Write-Result -Id 'B01' -Name '分组下拉框字看得见' -Verdict 'FAIL' -Evidence "深色像素占比 $([Math]::Round($frac,4))（<0.002），字太浅或没画出；截图 $crop"
     }
-    # B02：4 个选项（展开后读 SelectionPattern）
+    # B02：4 个选项（展开后读 ValuePattern + 全窗 ListItem 差集；SelectionPattern 在此环境无 GetSelection）
     try {
-        $sel = $combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
-        $selVal = ''
-        $cur = $sel.GetSelection()
-        if ($cur.Count -gt 0) { $selVal = $cur[0].Current.Name }
+        $vp = $combo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        $selVal = $vp.Current.Value
+        # 展开前先记下全窗已有的 ListItem 名字（频道行），展开后多出来的就是下拉选项
+        $winB = Get-TmwWindow
+        $beforeNames = @()
+        foreach ($li in (Find-All -Root $winB -ControlType ([System.Windows.Automation.ControlType]::ListItem))) { $beforeNames += (Get-ElementText $li) }
         $exp = $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
         $exp.Expand()
         Start-Sleep -Seconds 1
         $items = @()
-        $cur2 = $sel.GetSelection()
-        # 展开后子项在 ComboBox 的子树里
-        $kids = Find-All -Root $combo -ControlType ([System.Windows.Automation.ControlType]::ListItem)
-        foreach ($k in $kids) { $items += (Get-ElementText $k) }
+        foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) {
+            $nm = Get-ElementText $li
+            if ($nm -ne '' -and ($beforeNames -notcontains $nm)) { $items += $nm }
+        }
         $exp.Collapse()
         if ($items.Count -ge 4 -and ($items -contains '全部')) {
             Write-Result -Id 'B02' -Name '下拉框选项' -Verdict 'PASS' -Evidence "选中=$selVal，选项=$($items -join '/')"
@@ -348,35 +367,41 @@ if ($null -eq $combo) {
         return (Get-ElementText $ct)
     }
     $countAll = Get-CountText
-    try {
-        $sel = $combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
-        $kids = Find-All -Root $combo -ControlType ([System.Windows.Automation.ControlType]::ListItem)
-        # 未展开时 ListItem 读不到，改用 ExpandCollapse + 子项 Select
-        $exp = $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-        $exp.Expand()
+    function Find-DropdownItem {
+        param([string]$Want)
+        $w3 = Get-TmwWindow
+        $beforeNames = @()
+        foreach ($li in (Find-All -Root $w3 -ControlType ([System.Windows.Automation.ControlType]::ListItem))) { $beforeNames += (Get-ElementText $li) }
+        $cb = Find-ByAutomationId -Root $w3 -AutomationId 'GroupCombo'
+        $ex = $cb.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+        $ex.Expand()
         Start-Sleep -Seconds 1
-        $kids = Find-All -Root $combo -ControlType ([System.Windows.Automation.ControlType]::ListItem)
-        $wei = $kids | Where-Object { (Get-ElementText $_) -eq '卫视频道' } | Select-Object -First 1
+        $found = $null
+        foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) {
+            $nm = Get-ElementText $li
+            if ($nm -eq $Want -and ($beforeNames -notcontains $nm)) { $found = $li; break }
+        }
+        return $found
+    }
+    function Get-ComboValue {
+        $cb = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'GroupCombo'
+        try { return ($cb.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).Current.Value } catch { return '' }
+    }
+    try {
+        $wei = Find-DropdownItem -Want '卫视频道'
         if ($null -ne $wei) {
             $sip = $wei.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
             $sip.Select()
             Start-Sleep -Seconds 2
             $countWei = Get-CountText
-            $all = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'GroupCombo'
-            $sel2 = $all.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
-            $curSel = $sel2.GetSelection()
-            $selName = if ($curSel.Count -gt 0) { $curSel[0].Current.Name } else { '' }
+            $selName = Get-ComboValue
             if ($countWei -ne $countAll -and $selName -eq '卫视频道') {
                 Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'PASS' -Evidence "全部=$countAll，卫视=$countWei"
             } else {
                 Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'FAIL' -Evidence "全部=$countAll，选后=$countWei，选中=$selName"
             }
             # 选回「全部」
-            $exp2 = $all.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-            $exp2.Expand()
-            Start-Sleep -Seconds 1
-            $kids2 = Find-All -Root $all -ControlType ([System.Windows.Automation.ControlType]::ListItem)
-            $allItem = $kids2 | Where-Object { (Get-ElementText $_) -eq '全部' } | Select-Object -First 1
+            $allItem = Find-DropdownItem -Want '全部'
             if ($null -ne $allItem) {
                 $sip2 = $allItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
                 $sip2.Select()
@@ -408,7 +433,7 @@ function Get-MenuItems {
 }
 
 function Open-ChannelContextMenu {
-    # 右键点频道行：用 UIA 找 ChannelList 的 ListItem（第 2 个，即 2 号台），取中心点右键。
+    # 右键点频道行：先左键点中该行（选中+聚焦），再右键。坐标用物理像素算（见 Get-PhysicalScreenSize）。
     # 注意：Shift+F10 在这 app 上打不开频道菜单，只会出系统菜单，所以必须用鼠标右键。
     $w = Get-TmwWindow
     if ($null -eq $w) { return @() }
@@ -422,14 +447,27 @@ function Open-ChannelContextMenu {
     }
     if ($null -ne $target) {
         $tr = $target.Current.BoundingRectangle
-        Invoke-MouseRightClick -X ([int]($tr.X + $tr.Width / 2)) -Y ([int]($tr.Y + $tr.Height / 2))
+        $cx = [int]($tr.X + $tr.Width / 2); $cy = [int]($tr.Y + $tr.Height / 2)
+        Invoke-MouseClick -X $cx -Y $cy
+        Start-Sleep -Milliseconds 300
+        Invoke-MouseRightClick -X $cx -Y $cy
     } else {
         # 兜底：右键点列表区中部一行
         $r = $w.Current.BoundingRectangle
         Invoke-MouseRightClick -X ([int]($r.X + 150)) -Y ([int]($r.Y + 550))
     }
     Start-Sleep -Milliseconds 800
-    return (Get-MenuItems)
+    $m = @(Get-MenuItems)
+    if ($m.Count -le 1) {
+        # 只读到系统菜单，说明右键没落在频道行上；换第 1 行再试一次
+        if ($null -ne $target) {
+            $tr = $target.Current.BoundingRectangle
+            Invoke-MouseRightClick -X ([int]($tr.X + $tr.Width / 2)) -Y ([int]($tr.Y + $tr.Height / 2))
+            Start-Sleep -Milliseconds 800
+            $m = @(Get-MenuItems)
+        }
+    }
+    return $m
 }
 
 function Get-CountNumber {
@@ -584,7 +622,7 @@ Bring-ToFront
 Send-KeysToWindow -Keys '1' -WaitMs 2600   # 切 CCTV-1（按 "1" 要 1.2 秒才提交）
 $shotE1 = Take-Shot -Name 'E01-osd-cctv1'
 Write-Result -Id 'E01' -Name '切台 OSD 四行（CCTV-1）' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE1（应有台名+正在播+接下来 2 个，5 秒消失）"
-Send-KeysToWindow -Keys '51' -WaitMs 2600  # 切凤凰中文（无节目单的台）
+Send-KeysToWindow -Keys '51' -WaitMs 4000  # 切凤凰中文（无节目单的台；凤凰起播慢，多等一会让 OSD 覆盖窗浮出来）
 $shotE2 = Take-Shot -Name 'E02-osd-phoenix'
 Write-Result -Id 'E02' -Name '无节目单台显示「暂无节目信息」（凤凰中文）' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE2（应有台名 +「暂无节目信息」）"
 
@@ -597,11 +635,53 @@ if ($btnNames -contains '节目单') {
 } else {
     Write-Result -Id 'E03' -Name '没有单独的「节目单」按钮' -Verdict 'PASS' -Evidence "工具栏按钮=$($btnNames -join '/')"
 }
-# E04：E 键打开完整节目单
+# E04：E 键打开完整节目单（先切回稳定的 CCTV-1，免得凤凰卡顿触发 ClearVideoSurface 把面板收回去）
+Bring-ToFront
+Send-KeysToWindow -Keys '1' -WaitMs 2600
+$winE4 = Get-TmwWindow
+try { $winE4.SetFocus() } catch { }
 Send-KeysToWindow -Keys 'e' -WaitMs 1500
 $shotE4 = Take-Shot -Name 'E04-guide-ekey'
-Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE4（应弹出完整节目单）"
+$epgPanel = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'EpgPanel'
+$epgVis = ''
+if ($null -ne $epgPanel) { try { $epgVis = $epgPanel.Current.IsOffscreen.ToString() } catch { } }
+# EpgPanel 在 UIA 树里；IsOffscreen=False 说明面板已显示（不再只凭截图猜）
+if ($null -ne $epgPanel -and $epgVis -eq 'False') {
+    Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'PASS' -Evidence "截图 $shotE4；EpgPanel 已显示（IsOffscreen=False）"
+} else {
+    Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE4（应弹出完整节目单）；EpgPanel IsOffscreen=$epgVis"
+}
 Send-KeysToWindow -Keys '{ESC}' -WaitMs 800
+
+function Open-SettingsWindow {
+    # 稳健打开设置窗：UIA 点 BtnSettings → 轮询 6 秒；不行再鼠标点按钮中心 → 再轮询 6 秒。
+    # 返回设置窗口元素，找不到返回 $null。
+    $w = Get-TmwWindow
+    if ($null -eq $w) { return $null }
+    Bring-ToFront
+    $btn = Find-ByAutomationId -Root $w -AutomationId 'BtnSettings'
+    if ($null -eq $btn) { return $null }
+    $findSetWin = {
+        $rt = [System.Windows.Automation.AutomationElement]::RootElement
+        $ws = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
+        return ($ws | Where-Object { $_.Current.Name -match '设置' } | Select-Object -First 1)
+    }
+    [void](Invoke-Element $btn)
+    for ($i = 0; $i -lt 12; $i++) {
+        Start-Sleep -Milliseconds 500
+        $sw = & $findSetWin
+        if ($null -ne $sw) { return $sw }
+    }
+    # UIA 点没打开，改鼠标点按钮中心
+    $r = $btn.Current.BoundingRectangle
+    Invoke-MouseClick -X ([int]($r.X + $r.Width / 2)) -Y ([int]($r.Y + $r.Height / 2))
+    for ($i = 0; $i -lt 12; $i++) {
+        Start-Sleep -Milliseconds 500
+        $sw = & $findSetWin
+        if ($null -ne $sw) { return $sw }
+    }
+    return $null
+}
 
 # ================= F：提示 5 秒自动消失 =================
 # 须是全新会话（同一条提示每个会话只显示一次），所以先重启 app；再把字幕主开关打开（基线若是关的），
@@ -620,24 +700,17 @@ if ($null -eq $win) {
     $masterOn = ($null -ne $cfgF -and $cfgF.LiveSubtitleEnabled -eq $true)
     if (-not $masterOn) {
         # 设置里打开字幕主开关（LiveSubtitleChk）
-        $setBtn = Find-ByAutomationId -Root $win -AutomationId 'BtnSettings'
-        if ($null -ne $setBtn) {
-            [void](Invoke-Element $setBtn)
-            Start-Sleep -Seconds 2
-            $rootF = [System.Windows.Automation.AutomationElement]::RootElement
-            $winsF = @($rootF.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-            $setWin = $winsF | Where-Object { $_.Current.Name -match '设置' } | Select-Object -First 1
-            if ($null -ne $setWin) {
-                $chk = Find-ByAutomationId -Root $setWin -AutomationId 'LiveSubtitleChk'
-                if ($null -ne $chk) {
-                    try {
-                        $tog = $chk.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-                        if ($tog.ToggleState -eq [System.Windows.Automation.ToggleState]::Off) { $tog.Toggle(); Start-Sleep -Seconds 1 }
-                    } catch { }
-                }
-                try { $setWin.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
-                Start-Sleep -Seconds 2
+        $setWinF = Open-SettingsWindow
+        if ($null -ne $setWinF) {
+            $chk = Find-ByAutomationId -Root $setWinF -AutomationId 'LiveSubtitleChk'
+            if ($null -ne $chk) {
+                try {
+                    $tog = $chk.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+                    if ($tog.ToggleState -eq [System.Windows.Automation.ToggleState]::Off) { $tog.Toggle(); Start-Sleep -Seconds 1 }
+                } catch { }
             }
+            try { $setWinF.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
+            Start-Sleep -Seconds 2
         }
     }
     Send-KeysToWindow -Keys '1' -WaitMs 1200
@@ -678,11 +751,7 @@ if ($null -eq $setBtnH) {
     Write-Result -Id 'H01' -Name '设置页显示「当前版本」' -Verdict 'FAIL' -Evidence '找不到「设置」按钮'
     Write-Result -Id 'H02' -Name '「检查更新」显示「已是最新版本」' -Verdict 'FAIL' -Evidence 'H01 未完成，跳过'
 } else {
-    [void](Invoke-Element $setBtnH)
-    Start-Sleep -Seconds 2
-    $rootH = [System.Windows.Automation.AutomationElement]::RootElement
-    $winsH = @($rootH.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-    $setWin = $winsH | Where-Object { $_.Current.Name -match '设置' } | Select-Object -First 1
+    $setWin = Open-SettingsWindow
     if ($null -eq $setWin) {
         Write-Result -Id 'H01' -Name '设置页显示「当前版本」' -Verdict 'FAIL' -Evidence '点了设置，没弹出设置窗口'
         Write-Result -Id 'H02' -Name '「检查更新」显示「已是最新版本」' -Verdict 'FAIL' -Evidence 'H01 未完成，跳过'
@@ -742,6 +811,9 @@ if ($null -eq $setBtnH) {
 # ================= I：空格键暂停 =================
 Bring-ToFront
 Send-KeysToWindow -Keys '1' -WaitMs 2500
+# 先把焦点从搜索框/下拉框上挪开（焦点在 TextBox/ComboBox 里时空格是打字，不会暂停）
+$winI = Get-TmwWindow
+try { $winI.SetFocus() } catch { }
 $tI0 = Test-TimeAdvancing -WaitSec 3
 if (-not $tI0.Advanced) {
     Write-Result -Id 'I01' -Name '空格键暂停' -Verdict 'FAIL' -Evidence "按空格前时间就不走：$($tI0.Before)->$($tI0.After)（台可能没播起来）"
@@ -750,6 +822,13 @@ if (-not $tI0.Advanced) {
     Send-KeysToWindow -Keys ' ' -WaitMs 1200
     $shotI1 = Take-Shot -Name 'I01-paused-badge'
     $p1 = Get-TimeTextValue; Start-Sleep -Seconds 3; $p2 = Get-TimeTextValue
+    if ($p1 -eq '' -or $p1 -ne $p2) {
+        # 没停住可能是焦点还在输入框里；再聚焦一次主窗口、重按空格
+        try { (Get-TmwWindow).SetFocus() } catch { }
+        Send-KeysToWindow -Keys ' ' -WaitMs 1200
+        $p1 = Get-TimeTextValue; Start-Sleep -Seconds 3; $p2 = Get-TimeTextValue
+        $shotI1 = Take-Shot -Name 'I01-paused-badge'
+    }
     if ($p1 -ne '' -and $p1 -eq $p2) {
         Write-Result -Id 'I01' -Name '空格键暂停' -Verdict 'PASS' -Evidence "时间停在 $p1 不走；徽章截图 $shotI1（须肉眼确认中央有「⏸ 已暂停」）"
     } else {
@@ -769,15 +848,7 @@ if (-not $tI0.Advanced) {
 function Set-MasterSubtitle {
     param([bool]$On)
     # 设置页里把字幕主开关拨到指定状态，返回设置后的 config 值（true/false/$null 表示没办成）
-    $w = Get-TmwWindow
-    if ($null -eq $w) { return $null }
-    $btn = Find-ByAutomationId -Root $w -AutomationId 'BtnSettings'
-    if ($null -eq $btn) { return $null }
-    [void](Invoke-Element $btn)
-    Start-Sleep -Seconds 2
-    $rootJ = [System.Windows.Automation.AutomationElement]::RootElement
-    $winsJ = @($rootJ.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-    $sw = $winsJ | Where-Object { $_.Current.Name -match '设置' } | Select-Object -First 1
+    $sw = Open-SettingsWindow
     if ($null -eq $sw) { return $null }
     $chk = Find-ByAutomationId -Root $sw -AutomationId 'LiveSubtitleChk'
     $ok = $null
@@ -900,29 +971,35 @@ if ($k03ok) {
 }
 
 # K04：深色→浅色→深色切换
-$w = Get-TmwWindow
-$setBtn4 = Find-ByAutomationId -Root $w -AutomationId 'BtnSettings'
 $k04ok = $false; $k04ev = ''
-if ($null -ne $setBtn4) {
-    [void](Invoke-Element $setBtn4)
-    Start-Sleep -Seconds 2
-    $root4 = [System.Windows.Automation.AutomationElement]::RootElement
-    $wins4 = @($root4.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-    $sw4 = $wins4 | Where-Object { $_.Current.Name -match '设置' } | Select-Object -First 1
-    if ($null -ne $sw4) {
+$sw4 = Open-SettingsWindow
+if ($null -ne $sw4) {
         $tc = Find-ByAutomationId -Root $sw4 -AutomationId 'ThemeCombo'
         if ($null -ne $tc) {
             try {
                 $exp4 = $tc.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+                # 下拉项在 Popup 里，不在 ThemeCombo 子树下；展开前记下已有项，展开后多出来的就是主题选项
+                $beforeK4 = @()
+                foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) { $beforeK4 += (Get-ElementText $li) }
                 $exp4.Expand(); Start-Sleep -Seconds 1
-                $items4 = Find-All -Root $tc -ControlType ([System.Windows.Automation.ControlType]::ListItem)
+                $items4 = @()
+                foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) {
+                    $nm = Get-ElementText $li
+                    if ($nm -ne '' -and ($beforeK4 -notcontains $nm)) { $items4 += $li }
+                }
                 $light = $items4 | Where-Object { (Get-ElementText $_) -eq '浅色' } | Select-Object -First 1
                 if ($null -ne $light) {
                     $light.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
                     Start-Sleep -Seconds 2
                     $shotK4a = Take-Shot -Name 'K04-theme-light'
+                    $beforeK4b = @()
+                    foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) { $beforeK4b += (Get-ElementText $li) }
                     $exp4.Expand(); Start-Sleep -Seconds 1
-                    $items4b = Find-All -Root $tc -ControlType ([System.Windows.Automation.ControlType]::ListItem)
+                    $items4b = @()
+                    foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) {
+                        $nm = Get-ElementText $li
+                        if ($nm -ne '' -and ($beforeK4b -notcontains $nm)) { $items4b += $li }
+                    }
                     $dark = $items4b | Where-Object { (Get-ElementText $_) -eq '深色' } | Select-Object -First 1
                     if ($null -ne $dark) {
                         $dark.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -936,7 +1013,6 @@ if ($null -ne $setBtn4) {
         } else { $k04ev = '设置页找不到 ThemeCombo' }
         try { $sw4.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
     } else { $k04ev = '没弹出设置窗口' }
-} else { $k04ev = '找不到「设置」按钮' }
 if ($k04ok) {
     Write-Result -Id 'K04' -Name '深色→浅色→深色切换不崩' -Verdict 'PASS' -Evidence $k04ev
 } else {
