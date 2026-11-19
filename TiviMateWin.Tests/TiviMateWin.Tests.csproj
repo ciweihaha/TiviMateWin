@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
@@ -41,6 +41,8 @@
     <Compile Include="..\Services\IFreeApiTranslator.cs" Link="IFreeApiTranslator.cs" />
     <Compile Include="..\Services\AzureTranslator.cs" Link="AzureTranslator.cs" />
     <Compile Include="..\Services\FreeApiTranslatorFactory.cs" Link="FreeApiTranslatorFactory.cs" />
+    <Compile Include="..\Services\StreamRecovery.cs" Link="StreamRecovery.cs" />
+    <Compile Include="..\Services\HlsSegmentProbe.cs" Link="HlsSegmentProbe.cs" />
   </ItemGroup>
 
 </Project>

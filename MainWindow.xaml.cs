@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -270,15 +270,6 @@ public partial class MainWindow : Window
         return failCount <= 3 ? RecoveryAction.RetrySame : RecoveryAction.SkipNext;
     }
 
-    /// <summary>秒断判定（v1.4.36，纯逻辑）：播放开始 3 秒内就断，说明 demuxer 根本没建起来
-    /// （分片 403 等），不是播着播着断网；3 秒是 CCTV-1 事故里的实测秒断窗口（0–2 秒）。</summary>
-    internal const int FastFailSeconds = 3;
-    internal const int MaxAutoSkips = 2;
-    internal const string CannotPlayText = "无法播放，请手动重进";
-    internal static bool IsFastFail(TimeSpan sincePlayStart) => sincePlayStart < TimeSpan.FromSeconds(FastFailSeconds);
-    /// <summary>触顶后是否自动跳下一台（v1.4.36，纯逻辑）：秒断满 3 次才跳（偶发闪断不跳台），
-    /// 每轮最多跳 2 次（死台连跳要停手，留“无法播放”给用户）。</summary>
-    internal static bool ShouldAutoSkip(int fastFailStreak, int autoSkipsDone) => fastFailStreak >= 3 && autoSkipsDone < MaxAutoSkips;
 
     // 播放列表加载并发保护：快速切换源/刷新时避免并发覆盖 _all 与 UI 竞态
     private readonly SemaphoreSlim _loadGate = new(1, 1);
@@ -3233,7 +3224,7 @@ public partial class MainWindow : Window
     private void NoteFastFail(ChannelItem ch)
     {
         if (!IsLiveStream(ch.Url)) return;
-        if (_lastPlayStartedUtc != DateTime.MinValue && IsFastFail(DateTime.UtcNow - _lastPlayStartedUtc))
+        if (_lastPlayStartedUtc != DateTime.MinValue && StreamRecovery.IsFastFail(DateTime.UtcNow - _lastPlayStartedUtc))
         {
             if (_fastFailUrl == ch.Url) _fastFailStreak++;
             else { _fastFailUrl = ch.Url; _fastFailStreak = 1; }
@@ -3298,17 +3289,17 @@ public partial class MainWindow : Window
             if (TryHardwareDecodeFallback()) return true;
             // v1.4.36：秒断死流（分片 403 等）不再死磕同一台：触顶后自动跳下一台继续看
             // （每轮最多 2 次，见 ShouldAutoSkip）；再不行就明确停手显示“无法播放”。
-            if (ShouldAutoSkip(_fastFailStreak, _autoSkipCount) && _filtered.Count > 1)
+            if (StreamRecovery.ShouldAutoSkip(_fastFailStreak, _autoSkipCount) && _filtered.Count > 1)
             {
                 _autoSkipCount++;
-                AppLog.Error($"auto-skip dead stream after limit: [{ch.Name}] fast-fail x{_fastFailStreak} (skip {_autoSkipCount}/{MaxAutoSkips})");
+                AppLog.Error($"auto-skip dead stream after limit: [{ch.Name}] fast-fail x{_fastFailStreak} (skip {_autoSkipCount}/{StreamRecovery.MaxAutoSkips})");
                 PlayState.Text = "当前台无法播放，自动换台…";
                 _autoReconnectCount = 0;
                 _fastFailStreak = 0;
                 MoveChannel(1);
                 return true;
             }
-            PlayState.Text = CannotPlayText;
+            PlayState.Text = StreamRecovery.CannotPlayText;
             if (ReconnectLimitLogDue(_autoReconnectLimitLoggedUrl, _autoReconnectLimitLoggedUtc, ch.Url, DateTime.UtcNow))
             {
                 AppLog.Error($"auto-reconnect stopped after limit: [{ch.Name}]");
@@ -3408,7 +3399,7 @@ public partial class MainWindow : Window
         {
             case RecoveryAction.Stop:
                 if (TryHardwareDecodeFallback()) return;
-                PlayState.Text = CannotPlayText;
+                PlayState.Text = StreamRecovery.CannotPlayText;
                 AppLog.Error($"auto-skip stopped after limit: [{ch.Name}]");
                 return;
             case RecoveryAction.UseBackup:
@@ -3421,7 +3412,7 @@ public partial class MainWindow : Window
                 // 否则两条路径各算各的账，5 次上限形同虚设（22:39 事故的第二条路）。
                 if (InReconnectBackoff(_autoReconnectCount, _autoReconnectCappedUntilUtc, DateTime.UtcNow))
                 {
-                    PlayState.Text = CannotPlayText;
+                    PlayState.Text = StreamRecovery.CannotPlayText;
                     AppLog.Error($"channel error, reconnect refused (capped): [{ch.Name}]");
                     return;
                 }
@@ -3505,9 +3496,9 @@ public partial class MainWindow : Window
                     PlayState.Text = "直播中断，自动重连…";
                     AppLog.Info($"unexpected stop detected, reconnect: [{_current.Name}]");
                 }
-                else if (PlayState.Text != CannotPlayText)
+                else if (PlayState.Text != StreamRecovery.CannotPlayText)
                 {
-                    PlayState.Text = CannotPlayText;
+                    PlayState.Text = StreamRecovery.CannotPlayText;
                     AppLog.Info($"unexpected stop detected, reconnect skipped (capped): [{_current.Name}]");
                 }
             }
@@ -3530,7 +3521,7 @@ public partial class MainWindow : Window
                     // v1.4.36：停滞重连也服从触顶降频——触顶期不再重播，免得第三条路绕过上限。
                     if (InReconnectBackoff(_autoReconnectCount, _autoReconnectCappedUntilUtc, DateTime.UtcNow))
                     {
-                        if (PlayState.Text != CannotPlayText) PlayState.Text = CannotPlayText;
+                        if (PlayState.Text != StreamRecovery.CannotPlayText) PlayState.Text = StreamRecovery.CannotPlayText;
                     }
                     else
                     {

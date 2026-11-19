@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using TiviMateWin.Services;
 using Xunit;
 
@@ -12,44 +12,44 @@ public class StreamRecoveryTests
     [Fact]
     public void IsFastFail_Within3s_IsFastFail()
     {
-        Assert.True(MainWindow.IsFastFail(TimeSpan.FromSeconds(0.5)));
-        Assert.True(MainWindow.IsFastFail(TimeSpan.FromSeconds(2)));
-        Assert.True(MainWindow.IsFastFail(TimeSpan.FromSeconds(2.9)));
+        Assert.True(StreamRecovery.IsFastFail(TimeSpan.FromSeconds(0.5)));
+        Assert.True(StreamRecovery.IsFastFail(TimeSpan.FromSeconds(2)));
+        Assert.True(StreamRecovery.IsFastFail(TimeSpan.FromSeconds(2.9)));
     }
 
     [Fact]
     public void IsFastFail_After3s_NotFastFail()
     {
-        Assert.False(MainWindow.IsFastFail(TimeSpan.FromSeconds(3)));
-        Assert.False(MainWindow.IsFastFail(TimeSpan.FromSeconds(10)));
-        Assert.False(MainWindow.IsFastFail(TimeSpan.FromMinutes(1)));
+        Assert.False(StreamRecovery.IsFastFail(TimeSpan.FromSeconds(3)));
+        Assert.False(StreamRecovery.IsFastFail(TimeSpan.FromSeconds(10)));
+        Assert.False(StreamRecovery.IsFastFail(TimeSpan.FromMinutes(1)));
     }
 
     [Fact]
     public void ShouldAutoSkip_FastFail3Times_FirstSkip_Allowed()
     {
-        Assert.True(MainWindow.ShouldAutoSkip(fastFailStreak: 3, autoSkipsDone: 0));
-        Assert.True(MainWindow.ShouldAutoSkip(fastFailStreak: 5, autoSkipsDone: 1));
+        Assert.True(StreamRecovery.ShouldAutoSkip(fastFailStreak: 3, autoSkipsDone: 0));
+        Assert.True(StreamRecovery.ShouldAutoSkip(fastFailStreak: 5, autoSkipsDone: 1));
     }
 
     [Fact]
     public void ShouldAutoSkip_TooFewFastFails_NoSkip()
     {
-        Assert.False(MainWindow.ShouldAutoSkip(fastFailStreak: 0, autoSkipsDone: 0));
-        Assert.False(MainWindow.ShouldAutoSkip(fastFailStreak: 2, autoSkipsDone: 0));
+        Assert.False(StreamRecovery.ShouldAutoSkip(fastFailStreak: 0, autoSkipsDone: 0));
+        Assert.False(StreamRecovery.ShouldAutoSkip(fastFailStreak: 2, autoSkipsDone: 0));
     }
 
     [Fact]
     public void ShouldAutoSkip_AlreadySkippedTwice_Stops()
     {
-        Assert.False(MainWindow.ShouldAutoSkip(fastFailStreak: 3, autoSkipsDone: 2));
-        Assert.False(MainWindow.ShouldAutoSkip(fastFailStreak: 9, autoSkipsDone: 2));
+        Assert.False(StreamRecovery.ShouldAutoSkip(fastFailStreak: 3, autoSkipsDone: 2));
+        Assert.False(StreamRecovery.ShouldAutoSkip(fastFailStreak: 9, autoSkipsDone: 2));
     }
 
     [Fact]
     public void CannotPlayText_ContainsCannotPlay()
     {
-        Assert.Contains("无法播放", MainWindow.CannotPlayText);
+        Assert.Contains("无法播放", StreamRecovery.CannotPlayText);
     }
 
     [Fact]

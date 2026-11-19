@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -284,11 +284,11 @@ public static class SelfTest
             // --- 秒断恢复（v1.4.36，纯逻辑） ---
             // CCTV-1 事故：列表 200 但首个分片 403，0–2 秒就 EndReached；触顶后秒断死流
             // 自动跳下一台（每轮最多 2 次），再不行明确显示“无法播放”。
-            lines.Add(MainWindow.IsFastFail(TimeSpan.FromSeconds(2)) ? "PASS 秒断判定-2秒内断算秒断" : "FAIL 秒断判定-2秒内断算秒断");
-            lines.Add(!MainWindow.IsFastFail(TimeSpan.FromSeconds(10)) ? "PASS 秒断判定-10秒后断不算秒断" : "FAIL 秒断判定-10秒后断不算秒断");
-            lines.Add(MainWindow.ShouldAutoSkip(3, 0) ? "PASS 自动跳台-秒断3次可跳" : "FAIL 自动跳台-秒断3次可跳");
-            lines.Add(!MainWindow.ShouldAutoSkip(2, 0) ? "PASS 自动跳台-秒断不足不跳" : "FAIL 自动跳台-秒断不足不跳");
-            lines.Add(!MainWindow.ShouldAutoSkip(3, 2) ? "PASS 自动跳台-已跳2次停手" : "FAIL 自动跳台-已跳2次停手");
+            lines.Add(StreamRecovery.IsFastFail(TimeSpan.FromSeconds(2)) ? "PASS 秒断判定-2秒内断算秒断" : "FAIL 秒断判定-2秒内断算秒断");
+            lines.Add(!StreamRecovery.IsFastFail(TimeSpan.FromSeconds(10)) ? "PASS 秒断判定-10秒后断不算秒断" : "FAIL 秒断判定-10秒后断不算秒断");
+            lines.Add(StreamRecovery.ShouldAutoSkip(3, 0) ? "PASS 自动跳台-秒断3次可跳" : "FAIL 自动跳台-秒断3次可跳");
+            lines.Add(!StreamRecovery.ShouldAutoSkip(2, 0) ? "PASS 自动跳台-秒断不足不跳" : "FAIL 自动跳台-秒断不足不跳");
+            lines.Add(!StreamRecovery.ShouldAutoSkip(3, 2) ? "PASS 自动跳台-已跳2次停手" : "FAIL 自动跳台-已跳2次停手");
             lines.Add(HlsSegmentProbe.TryGetFirstSegmentUrl("#EXTM3U\n#EXTINF:5,\nhttps://x/y.ts\n", "https://h/p.m3u8", out var segA) && segA == "https://x/y.ts"
                 ? "PASS 分片探针-取首个分片" : "FAIL 分片探针-取首个分片");
             lines.Add(HlsSegmentProbe.TryGetFirstSegmentUrl("#EXTM3U\n#EXTINF:5,\nseg-1.ts\n", "https://h/dir/p.m3u8", out var segB) && segB == "https://h/dir/seg-1.ts"
