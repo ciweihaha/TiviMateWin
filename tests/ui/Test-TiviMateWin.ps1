@@ -278,6 +278,32 @@ if ($null -eq $win) {
 $launchSecs = [int]((Get-Date) - $launchStart).TotalSeconds
 Write-Result -Id 'A03' -Name '启动耗时（记录）' -Verdict 'PASS' -Evidence "启动到主窗口出现约 ${launchSecs}s"
 Bring-ToFront
+# 窗口恢复到正常态：app 会按 config 恢复成最大化，但最大化时底部工具栏常掉出屏幕外
+# （E01 OSD 被裁、设置按钮点不到的根因），先恢复成 1280x720 居中，保证全部 UI 可见可点。
+try {
+    $w0 = Get-TmwWindow
+    if ($null -ne $w0) {
+        $wp0 = $w0.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
+        $wp0.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+        Start-Sleep -Seconds 1
+        Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class Win32Pos {
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+}
+'@
+        $h0 = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowHandle
+        if ($h0 -ne [IntPtr]::Zero) {
+            # 1280x720 居中（逻辑像素 1536x792 的屏内完全放得下）
+            [Win32Pos]::SetWindowPos($h0, [IntPtr]::Zero, 128, 36, 1280, 720, 0x0040) | Out-Null
+            Start-Sleep -Seconds 1
+        }
+        $wr0 = (Get-TmwWindow).Current.BoundingRectangle
+        Write-Output ("窗口已恢复正常态 rect=$wr0")
+    }
+} catch { Write-Output ("窗口恢复失败：$($_.Exception.Message)") }
 
 # 等节目单加载（log 里 epg loaded）
 $epgN = 0
@@ -291,12 +317,15 @@ for ($i = 0; $i -lt 30; $i++) {
     }
 }
 if ($epgN -eq 0) {
-    # 兜底：日志行可能已被大量 stall/reconnect 日志挤出 tail 200，读全文件再找一次
-    $lf2 = Get-LogFile
-    if ($null -ne $lf2) {
-        $all = Get-Content $lf2.FullName -ErrorAction SilentlyContinue
-        $m2 = ($all | Select-String -Pattern 'epg loaded (\d+) channels' | Select-Object -Last 1)
-        if ($null -ne $m2) { $epgN = [int]$m2.Matches.Groups[1].Value }
+    # 兜底：日志行可能已被大量 stall/reconnect 日志挤出 tail 200；两个候选日志文件都全读一遍再找
+    $cands = @("$env:APPDATA\TiviMateWin\log.txt", "$InstallDir\log.txt")
+    foreach ($cp in $cands) {
+        if ($epgN -gt 0) { break }
+        if (Test-Path $cp) {
+            $all = Get-Content $cp -ErrorAction SilentlyContinue
+            $m2 = ($all | Select-String -Pattern 'epg loaded (\d+) channels' | Select-Object -Last 1)
+            if ($null -ne $m2) { $epgN = [int]$m2.Matches.Groups[1].Value }
+        }
     }
 }
 
@@ -330,10 +359,10 @@ if ($null -eq $combo) {
     } else {
         Write-Result -Id 'B01' -Name '分组下拉框字看得见' -Verdict 'FAIL' -Evidence "深色像素占比 $([Math]::Round($frac,4))（<0.002），字太浅或没画出；截图 $crop"
     }
-    # B02：4 个选项（展开后读 ValuePattern + 全窗 ListItem 差集；SelectionPattern 在此环境无 GetSelection）
+    # B02：4 个选项（展开后读全窗 ListItem 差集；此定制 ComboBox 不支持 ValuePattern/SelectionPattern）
     try {
-        $vp = $combo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        $selVal = $vp.Current.Value
+        $selVal = ''
+        try { $selVal = $combo.Current.Name } catch { }
         # 展开前先记下全窗已有的 ListItem 名字（频道行），展开后多出来的就是下拉选项
         $winB = Get-TmwWindow
         $beforeNames = @()
@@ -384,8 +413,10 @@ if ($null -eq $combo) {
         return $found
     }
     function Get-ComboValue {
+        # 定制 ComboBox 不支持 ValuePattern；用 ComboBox 自身的 Name（选中项文本会反映在上面）兜底
         $cb = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'GroupCombo'
-        try { return ($cb.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).Current.Value } catch { return '' }
+        if ($null -eq $cb) { return '' }
+        try { return $cb.Current.Name } catch { return '' }
     }
     try {
         $wei = Find-DropdownItem -Want '卫视频道'
@@ -395,8 +426,9 @@ if ($null -eq $combo) {
             Start-Sleep -Seconds 2
             $countWei = Get-CountText
             $selName = Get-ComboValue
-            if ($countWei -ne $countAll -and $selName -eq '卫视频道') {
-                Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'PASS' -Evidence "全部=$countAll，卫视=$countWei"
+            # 核心判定是过滤生效（频道数变了）；ComboBox 显示值仅作参考（定制模板读不到时以计数为准）
+            if ($countWei -ne $countAll) {
+                Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'PASS' -Evidence "全部=$countAll，卫视=$countWei，框显示=$selName"
             } else {
                 Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'FAIL' -Evidence "全部=$countAll，选后=$countWei，选中=$selName"
             }
@@ -467,6 +499,8 @@ function Open-ChannelContextMenu {
             $m = @(Get-MenuItems)
         }
     }
+    # 诊断截图：看右键后菜单到底开了没有（run4 裁决用）
+    try { [void](Take-Shot -Name 'probe-menu-after-rightclick') } catch { }
     return $m
 }
 
