@@ -281,6 +281,21 @@ public static class SelfTest
             lines.Add(MainWindow.DecideRecovery(6, true) == MainWindow.RecoveryAction.Stop ? "PASS 恢复决策-超5次停手" : "FAIL 恢复决策-超5次停手");
             lines.Add(MainWindow.DecideRecovery(6, false) == MainWindow.RecoveryAction.Stop ? "PASS 恢复决策-无备用超5次停手" : "FAIL 恢复决策-无备用超5次停手");
 
+            // --- 秒断恢复（v1.4.36，纯逻辑） ---
+            // CCTV-1 事故：列表 200 但首个分片 403，0–2 秒就 EndReached；触顶后秒断死流
+            // 自动跳下一台（每轮最多 2 次），再不行明确显示“无法播放”。
+            lines.Add(MainWindow.IsFastFail(TimeSpan.FromSeconds(2)) ? "PASS 秒断判定-2秒内断算秒断" : "FAIL 秒断判定-2秒内断算秒断");
+            lines.Add(!MainWindow.IsFastFail(TimeSpan.FromSeconds(10)) ? "PASS 秒断判定-10秒后断不算秒断" : "FAIL 秒断判定-10秒后断不算秒断");
+            lines.Add(MainWindow.ShouldAutoSkip(3, 0) ? "PASS 自动跳台-秒断3次可跳" : "FAIL 自动跳台-秒断3次可跳");
+            lines.Add(!MainWindow.ShouldAutoSkip(2, 0) ? "PASS 自动跳台-秒断不足不跳" : "FAIL 自动跳台-秒断不足不跳");
+            lines.Add(!MainWindow.ShouldAutoSkip(3, 2) ? "PASS 自动跳台-已跳2次停手" : "FAIL 自动跳台-已跳2次停手");
+            lines.Add(HlsSegmentProbe.TryGetFirstSegmentUrl("#EXTM3U\n#EXTINF:5,\nhttps://x/y.ts\n", "https://h/p.m3u8", out var segA) && segA == "https://x/y.ts"
+                ? "PASS 分片探针-取首个分片" : "FAIL 分片探针-取首个分片");
+            lines.Add(HlsSegmentProbe.TryGetFirstSegmentUrl("#EXTM3U\n#EXTINF:5,\nseg-1.ts\n", "https://h/dir/p.m3u8", out var segB) && segB == "https://h/dir/seg-1.ts"
+                ? "PASS 分片探针-相对地址解析" : "FAIL 分片探针-相对地址解析");
+            lines.Add(!HlsSegmentProbe.TryGetFirstSegmentUrl("#EXTM3U\n#EXT-X-ENDLIST\n", "https://h/p.m3u8", out _)
+                ? "PASS 分片探针-无分片返回否" : "FAIL 分片探针-无分片返回否");
+
             // --- 拉取限长（深查第 13 轮；纯流逻辑，不触网络） ---
             // 旧 FetchTextAsync 用 GetStringAsync 无界缓冲，失控源可撑爆内存；
             // 新实现流式限长（复用 LogoService.ReadCappedAsync），超限抛错且不重试。

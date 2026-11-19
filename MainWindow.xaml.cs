@@ -185,6 +185,14 @@ public partial class MainWindow : Window
     // 断一次不再算进旧的失败链）；_reconnectPending：延迟重连排队中，避免看门狗重复排。
     private DateTime _lastAutoReconnectUtc = DateTime.MinValue;
     private bool _reconnectPending;
+    // v1.4.36：秒断（demuxer 建不出）追踪——播放开始 3 秒内 EndReached/Error 即秒断；
+    // 同一 URL 连续秒断说明流本身有问题（分片 403），不再死磕同一地址。
+    // _fastFailProbed：本轮秒断已打过分片探针（只探一次）；_autoSkipCount：本轮自动跳台次数（上限 2）。
+    private DateTime _lastPlayStartedUtc = DateTime.MinValue;
+    private int _fastFailStreak;
+    private string? _fastFailUrl;
+    private bool _fastFailProbed;
+    private int _autoSkipCount;
     // v1.4.31：触顶降频——触顶后 5 分钟内看门狗再调也不重试、不再刷 ERROR；
     // 5 分钟后 60 秒冷却已过，计数清零再试 5 次（死源最多每 5 分钟试 5 次，而不是无限重试）。
     private DateTime _autoReconnectCappedUntilUtc = DateTime.MinValue;
@@ -261,6 +269,16 @@ public partial class MainWindow : Window
         if (hasBackup) return RecoveryAction.UseBackup;
         return failCount <= 3 ? RecoveryAction.RetrySame : RecoveryAction.SkipNext;
     }
+
+    /// <summary>秒断判定（v1.4.36，纯逻辑）：播放开始 3 秒内就断，说明 demuxer 根本没建起来
+    /// （分片 403 等），不是播着播着断网；3 秒是 CCTV-1 事故里的实测秒断窗口（0–2 秒）。</summary>
+    internal const int FastFailSeconds = 3;
+    internal const int MaxAutoSkips = 2;
+    internal const string CannotPlayText = "无法播放，请手动重进";
+    internal static bool IsFastFail(TimeSpan sincePlayStart) => sincePlayStart < TimeSpan.FromSeconds(FastFailSeconds);
+    /// <summary>触顶后是否自动跳下一台（v1.4.36，纯逻辑）：秒断满 3 次才跳（偶发闪断不跳台），
+    /// 每轮最多跳 2 次（死台连跳要停手，留“无法播放”给用户）。</summary>
+    internal static bool ShouldAutoSkip(int fastFailStreak, int autoSkipsDone) => fastFailStreak >= 3 && autoSkipsDone < MaxAutoSkips;
 
     // 播放列表加载并发保护：快速切换源/刷新时避免并发覆盖 _all 与 UI 竞态
     private readonly SemaphoreSlim _loadGate = new(1, 1);
@@ -1178,6 +1196,10 @@ public partial class MainWindow : Window
             _lastStallAt = DateTime.MinValue;
             _failCount = 0;                  // 用户手动换台：重置坏源失败链，避免永久停止自动跳台
             _recentFailedUrls.Clear();
+            _fastFailStreak = 0;             // v1.4.36：手动换台新开一轮，秒断链与自动跳台计数重新开始
+            _fastFailUrl = null;
+            _fastFailProbed = false;
+            _autoSkipCount = 0;
         }
         _lastMediaTime = -1;                  // 停滞看门狗重新计位
         _stallTicks = 0;
@@ -1224,6 +1246,7 @@ public partial class MainWindow : Window
                 // native 播放器，03:55 长时间播放崩溃即此类竞态；拿锁后同一时间只有一个 Play 在跑。
                 if (!_pipEffectActive && VideoView.Visibility != Visibility.Visible) VideoView.Visibility = Visibility.Visible;
                 if (!_pipEffectActive && VideoView.MediaPlayer != _player) VideoView.MediaPlayer = _player;
+                _lastPlayStartedUtc = DateTime.UtcNow;   // v1.4.36：记下播放提交时间，秒断判定用
                 await Task.Run(() =>
                 {
                     // 与后台 Stop 用同一把 _mainPlayerLock 串行化：锁内再校验一次，
@@ -3204,6 +3227,39 @@ public partial class MainWindow : Window
 
     // ---------- 坏源容错 ----------
 
+    /// <summary>记一次播放失败（v1.4.36）：3 秒内断即秒断，同一 URL 连着秒断就加链；
+    /// 首个秒断触发分片探针（只探一次），把分片真实返回码/耗时记进日志——
+    /// 播放列表 200 说明不了什么，分片 403 才是 demuxer 建不出的原因。</summary>
+    private void NoteFastFail(ChannelItem ch)
+    {
+        if (!IsLiveStream(ch.Url)) return;
+        if (_lastPlayStartedUtc != DateTime.MinValue && IsFastFail(DateTime.UtcNow - _lastPlayStartedUtc))
+        {
+            if (_fastFailUrl == ch.Url) _fastFailStreak++;
+            else { _fastFailUrl = ch.Url; _fastFailStreak = 1; }
+            if (!_fastFailProbed)
+            {
+                _fastFailProbed = true;
+                _ = ProbeSegmentAsync(ch);
+            }
+        }
+        else
+        {
+            _fastFailStreak = 0;
+            _fastFailUrl = ch.Url;
+        }
+    }
+
+    private async Task ProbeSegmentAsync(ChannelItem ch)
+    {
+        try
+        {
+            var r = await HlsSegmentProbe.ProbeFirstSegmentAsync(_http, ch.Url, _netCts.Token);
+            AppLog.Error($"segment probe: [{ch.Name}] playlist={r.PlaylistStatus?.ToString() ?? "?"} segment={r.SegmentStatus?.ToString() ?? "?"} {r.SegmentMs}ms bytes={r.SegmentBytes} err={r.Error ?? "-"}");
+        }
+        catch (Exception ex) { AppLog.Error($"segment probe failed [{ch.Name}]: {ex.Message}"); }
+    }
+
     /// <summary>直播流意外播完（v1.4.16）：HLS 窗口耗尽或 playlist 刷新失败时 libvlc 停在这里；
     /// 点播文件播完是正常的，不重连；直播则自动重连同一频道，不用用户手动重进。</summary>
     private void OnPlayerEndReached()
@@ -3211,6 +3267,7 @@ public partial class MainWindow : Window
         if (_closing || _isPaused || _pipEffectActive) return;
         if (_current is not { } ch) return;
         if (!IsLiveStream(ch.Url)) return;
+        NoteFastFail(ch);
         AppLog.Error($"live stream ended unexpectedly, reconnect: [{ch.Name}]");
         PlayState.Text = "直播中断，自动重连…";
         TryAutoReconnect(ch);
@@ -3239,7 +3296,19 @@ public partial class MainWindow : Window
             // 硬解失败回退：连续 5 次都没播起来、且当前用的是硬件解码，
             // 很可能是硬解本身播不了这路流——自动切软解并重启（每会话一次）。
             if (TryHardwareDecodeFallback()) return true;
-            PlayState.Text = "连续失败，请手动重进";
+            // v1.4.36：秒断死流（分片 403 等）不再死磕同一台：触顶后自动跳下一台继续看
+            // （每轮最多 2 次，见 ShouldAutoSkip）；再不行就明确停手显示“无法播放”。
+            if (ShouldAutoSkip(_fastFailStreak, _autoSkipCount) && _filtered.Count > 1)
+            {
+                _autoSkipCount++;
+                AppLog.Error($"auto-skip dead stream after limit: [{ch.Name}] fast-fail x{_fastFailStreak} (skip {_autoSkipCount}/{MaxAutoSkips})");
+                PlayState.Text = "当前台无法播放，自动换台…";
+                _autoReconnectCount = 0;
+                _fastFailStreak = 0;
+                MoveChannel(1);
+                return true;
+            }
+            PlayState.Text = CannotPlayText;
             if (ReconnectLimitLogDue(_autoReconnectLimitLoggedUrl, _autoReconnectLimitLoggedUtc, ch.Url, DateTime.UtcNow))
             {
                 AppLog.Error($"auto-reconnect stopped after limit: [{ch.Name}]");
@@ -3331,6 +3400,7 @@ public partial class MainWindow : Window
         _lastPlayErrorUrl = ch.Url;
         _recentFailedUrls.Add(ch.Url);
         ++_failCount;
+        NoteFastFail(ch);
 
         var backup = FindBackupChannel(ch);
         var hasBackup = backup is not null && !_recentFailedUrls.Contains(backup.Url);
@@ -3338,7 +3408,7 @@ public partial class MainWindow : Window
         {
             case RecoveryAction.Stop:
                 if (TryHardwareDecodeFallback()) return;
-                PlayState.Text = "连续失败，已停止自动换台";
+                PlayState.Text = CannotPlayText;
                 AppLog.Error($"auto-skip stopped after limit: [{ch.Name}]");
                 return;
             case RecoveryAction.UseBackup:
@@ -3347,6 +3417,14 @@ public partial class MainWindow : Window
                 _ = PlayAsync(backup);
                 return;
             case RecoveryAction.RetrySame:
+                // v1.4.36：另一条重连路径也得服从上限——EndReached 那边已触顶时这里不再重连，
+                // 否则两条路径各算各的账，5 次上限形同虚设（22:39 事故的第二条路）。
+                if (InReconnectBackoff(_autoReconnectCount, _autoReconnectCappedUntilUtc, DateTime.UtcNow))
+                {
+                    PlayState.Text = CannotPlayText;
+                    AppLog.Error($"channel error, reconnect refused (capped): [{ch.Name}]");
+                    return;
+                }
                 // v1.4.16：无备用时先重连同一频道——直播闪断常见，直接跳台是错误体验；
                 // 3 次还不行再跳台（SkipNext）。Playing 事件会清零 _failCount，长期播得住的台不会累积到跳台。
                 PlayState.Text = "播放出错，自动重连…";
@@ -3420,9 +3498,18 @@ public partial class MainWindow : Window
             if (++_stopTicks >= 2)
             {
                 _stopTicks = 0;
-                PlayState.Text = "直播中断，自动重连…";
-                AppLog.Info($"unexpected stop detected, reconnect: [{_current.Name}]");
-                TryAutoReconnect(_current);
+                // v1.4.36：只有真正排上重连才显示“直播中断，自动重连…”；触顶/降频期排不上时
+                // 显示“无法播放”，不要让状态栏一直撒谎（22:39 事故：触顶后仍每 8 秒刷一次重连中）。
+                if (TryAutoReconnect(_current))
+                {
+                    PlayState.Text = "直播中断，自动重连…";
+                    AppLog.Info($"unexpected stop detected, reconnect: [{_current.Name}]");
+                }
+                else if (PlayState.Text != CannotPlayText)
+                {
+                    PlayState.Text = CannotPlayText;
+                    AppLog.Info($"unexpected stop detected, reconnect skipped (capped): [{_current.Name}]");
+                }
             }
             return;
         }
@@ -3440,10 +3527,18 @@ public partial class MainWindow : Window
                 _lastStallAt = DateTime.Now;
                 if (_stallRetryCount < 3)
                 {
-                    _stallRetryCount++;
-                    PlayState.Text = "直播停滞，自动重连…";
-                    AppLog.Info($"stall detected, reconnect #{_stallRetryCount}: [{_current.Name}]");
-                    _ = PlayAsync(_current, true);
+                    // v1.4.36：停滞重连也服从触顶降频——触顶期不再重播，免得第三条路绕过上限。
+                    if (InReconnectBackoff(_autoReconnectCount, _autoReconnectCappedUntilUtc, DateTime.UtcNow))
+                    {
+                        if (PlayState.Text != CannotPlayText) PlayState.Text = CannotPlayText;
+                    }
+                    else
+                    {
+                        _stallRetryCount++;
+                        PlayState.Text = "直播停滞，自动重连…";
+                        AppLog.Info($"stall detected, reconnect #{_stallRetryCount}: [{_current.Name}]");
+                        _ = PlayAsync(_current, true);
+                    }
                 }
                 else
                 {
@@ -3467,6 +3562,10 @@ public partial class MainWindow : Window
                 _autoReconnectCount = 0;
                 _recentFailedUrls.Clear();
                 _lastPlayingAt = DateTime.MinValue;
+                _fastFailStreak = 0;   // v1.4.36：播稳 10 秒算真正播起来，秒断链与跳台计数清零
+                _fastFailUrl = null;
+                _fastFailProbed = false;
+                _autoSkipCount = 0;
             }
             // 停滞 1 分钟后仍在正常播放：流已真正恢复，看门狗计数清零
             if (_stallRetryCount > 0 && (DateTime.Now - _lastStallAt).TotalMinutes > 1)

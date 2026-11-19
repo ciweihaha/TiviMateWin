@@ -3,7 +3,7 @@
 # 退出码：0 全部 PASS；1 有 FAIL；2 有 NEEDS-EYE 待复核（无 FAIL 时）。
 param(
     [string]$InstallDir = 'C:\TiviMateWin',
-    [string]$ExpectedVersion = '1.4.35',
+    [string]$ExpectedVersion = '1.4.36',
     [string]$OutDir = 'C:\build\tmw-uitest\run1',
     [int]$SoakMinutes = 30,
     [switch]$SkipSoak,
@@ -25,6 +25,8 @@ public static class Win32 {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT lpPoint);
+  [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
   public const uint MOUSEEVENTF_MOVE = 0x0001;
   public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
   public const uint MOUSEEVENTF_LEFTUP = 0x0004;
@@ -33,6 +35,10 @@ public static class Win32 {
 }
 '@
 Add-Type -TypeDefinition $Win32 -ErrorAction SilentlyContinue
+
+# 测试脚本自己的控制台窗口不要盖住 app（run6 教训：用户点开控制台后截图全是控制台，
+# 右键/设置点按也全落在控制台上）。启动即最小化（6 = SW_MINIMIZE）。
+try { [Win32]::ShowWindow([Win32]::GetConsoleWindow(), 6) | Out-Null } catch { }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $ResultsFile = Join-Path $OutDir 'results.txt'
@@ -149,6 +155,7 @@ function Invoke-MouseRightClick {
 
 function Take-Shot {
     param([string]$Name, [object]$Crop = $null)
+    Bring-ToFront   # 截图前把 app 顶到最前，免得别的窗口盖住画面（run6 的 E01 截到的就是控制台）
     $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
     $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -533,6 +540,9 @@ if ($names -contains '复制频道地址') {
     Write-Result -Id 'C01' -Name '右键菜单没有「复制频道地址」' -Verdict 'FAIL' -Evidence "菜单=$($names -join '/')"
 } elseif ($names.Count -eq 0) {
     Write-Result -Id 'C01' -Name '右键菜单没有「复制频道地址」' -Verdict 'FAIL' -Evidence 'Shift+F10 后没读到菜单项（焦点可能不在列表上）'
+} elseif (-not ($names -contains '小窗播放' -or $names -contains '新窗口播放' -or $names -contains '隐藏频道' -or $names -contains '收藏')) {
+    # 只读到系统菜单（就一个「系统」）：频道菜单根本没打开，不能算通过（run6 假过教训）
+    Write-Result -Id 'C01' -Name '右键菜单没有「复制频道地址」' -Verdict 'FAIL' -Evidence "只读到系统菜单，没打开频道菜单：菜单=$($names -join '/')"
 } else {
     Write-Result -Id 'C01' -Name '右键菜单没有「复制频道地址」' -Verdict 'PASS' -Evidence "菜单=$($names -join '/')"
 }
@@ -724,13 +734,34 @@ function Open-SettingsWindow {
         $sw = & $findSetWin
         if ($null -ne $sw) { return $sw }
     }
-    # UIA 点没打开，改鼠标点按钮中心
-    $r = $btn.Current.BoundingRectangle
+    # UIA 点没打开，改鼠标点按钮中心（重找按钮，防 Restore 后元素过期）
+    $btn2 = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'BtnSettings'
+    if ($null -eq $btn2) { return $null }
+    $r = $btn2.Current.BoundingRectangle
     Invoke-MouseClick -X ([int]($r.X + $r.Width / 2)) -Y ([int]($r.Y + $r.Height / 2))
     for ($i = 0; $i -lt 12; $i++) {
         Start-Sleep -Milliseconds 500
         $sw = & $findSetWin
         if ($null -ne $sw) { return $sw }
+    }
+    return $null
+}
+
+function Save-SettingsWindow {
+    param($SetWin)
+    # 设置只在点「保存」时才落盘（Save_Click）；直接关窗口会丢弃改动——J01/F01 连败的根因。
+    $saveBtn = Find-ByName -Root $SetWin -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '^保存$' | Select-Object -First 1
+    if ($null -ne $saveBtn -and (Invoke-Element $saveBtn)) { Start-Sleep -Seconds 1; return $true }
+    try { $SetWin.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close(); return $true } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500; return $false }
+}
+
+function Find-ThemeCombo {
+    param($SetWin)
+    # ThemeCombo 在 ScrollViewer 里，窗口刚打开时 UIA 节点可能还没建出来；轮询 5 秒。
+    for ($i = 0; $i -lt 10; $i++) {
+        $tc = Find-ByAutomationId -Root $SetWin -AutomationId 'ThemeCombo'
+        if ($null -ne $tc) { return $tc }
+        Start-Sleep -Milliseconds 500
     }
     return $null
 }
@@ -761,7 +792,7 @@ if ($null -eq $win) {
                     if ($tog.ToggleState -eq [System.Windows.Automation.ToggleState]::Off) { $tog.Toggle(); Start-Sleep -Seconds 1 }
                 } catch { }
             }
-            try { $setWinF.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
+            [void](Save-SettingsWindow -SetWin $setWinF)
             Start-Sleep -Seconds 2
         }
     }
@@ -818,7 +849,7 @@ if ($null -eq $setBtnH) {
         }
         # B05：设置页下拉框（主题）字看得见——深色模板下闭合框是深底，截框数深色像素
         # （白底浅字时深色像素几乎没有；深底浅字或白底深字时都有足够深色像素）
-        $themeCombo = Find-ByAutomationId -Root $setWin -AutomationId 'ThemeCombo'
+        $themeCombo = Find-ThemeCombo -SetWin $setWin
         if ($null -eq $themeCombo) {
             Write-Result -Id 'B05' -Name '设置页下拉框字看得见' -Verdict 'FAIL' -Evidence 'AutomationId=ThemeCombo 找不到'
         } else {
@@ -868,6 +899,12 @@ $winI = Get-TmwWindow
 try { $winI.SetFocus() } catch { }
 $tI0 = Test-TimeAdvancing -WaitSec 3
 if (-not $tI0.Advanced) {
+    # 1 号台可能正好是死流（分片 403 时 app 会自动跳台，但刚切回来那一下可能还没播起来）；
+    # 切下一台再确认一次——空格暂停本身与台无关。
+    Send-KeysToWindow -Keys '{DOWN}' -WaitMs 2500
+    $tI0 = Test-TimeAdvancing -WaitSec 3
+}
+if (-not $tI0.Advanced) {
     Write-Result -Id 'I01' -Name '空格键暂停' -Verdict 'FAIL' -Evidence "按空格前时间就不走：$($tI0.Before)->$($tI0.After)（台可能没播起来）"
     Write-Result -Id 'I02' -Name '再按空格继续' -Verdict 'FAIL' -Evidence 'I01 未完成，跳过'
 } else {
@@ -912,7 +949,7 @@ function Set-MasterSubtitle {
             $ok = $On
         } catch { $ok = $null }
     }
-    try { $sw.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
+    [void](Save-SettingsWindow -SetWin $sw)
     Start-Sleep -Seconds 2
     $c = Get-Config
     if ($null -eq $c) { return $ok }
@@ -1026,7 +1063,7 @@ if ($k03ok) {
 $k04ok = $false; $k04ev = ''
 $sw4 = Open-SettingsWindow
 if ($null -ne $sw4) {
-        $tc = Find-ByAutomationId -Root $sw4 -AutomationId 'ThemeCombo'
+        $tc = Find-ThemeCombo -SetWin $sw4
         if ($null -ne $tc) {
             try {
                 $exp4 = $tc.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
@@ -1065,7 +1102,7 @@ if ($null -ne $sw4) {
                 } else { $k04ev = '找不到「浅色」项' }
             } catch { $k04ev = "主题切换异常：$($_.Exception.Message)" }
         } else { $k04ev = '设置页找不到 ThemeCombo' }
-        try { $sw4.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
+        [void](Save-SettingsWindow -SetWin $sw4)
     } else { $k04ev = '没弹出设置窗口' }
 if ($k04ok) {
     Write-Result -Id 'K04' -Name '深色→浅色→深色切换不崩' -Verdict 'PASS' -Evidence $k04ev
@@ -1109,7 +1146,11 @@ if ($null -eq $sb) {
 }
 
 # K06：config 损坏后仍能启动（备份+恢复；可 -SkipConfigCorruption 跳过）
+# v1.4.36：损坏测试不得留垃圾——快照 config 目录，测完删掉 app 读坏 config 时保全出的
+# config.corrupt-*.json（之前 6 轮共留了 6 个），并校验恢复后的 config 与备份字节一致。
 if (-not $SkipConfigCorruption) {
+    $cfgDir = Split-Path $cfgPath -Parent
+    $corruptBefore = @(Get-ChildItem $cfgDir -Filter 'config.corrupt-*.json' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
     try { Get-Process TiviMateWin -ErrorAction SilentlyContinue | Stop-Process -Force } catch { }
     Start-Sleep -Seconds 2
     Set-Content -Path $cfgPath -Value '{ invalid json,,' -Encoding UTF8
@@ -1124,9 +1165,19 @@ if (-not $SkipConfigCorruption) {
     try { Get-Process TiviMateWin -ErrorAction SilentlyContinue | Stop-Process -Force } catch { }
     Start-Sleep -Seconds 2
     if (Test-Path $cfgBackup) { Copy-Item $cfgBackup $cfgPath -Force }
+    $corruptAfter = @(Get-ChildItem $cfgDir -Filter 'config.corrupt-*.json' -ErrorAction SilentlyContinue)
+    $removed = 0
+    foreach ($f in $corruptAfter) {
+        if ($corruptBefore -notcontains $f.Name) { Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue; $removed++ }
+    }
+    $restoredOk = $false
+    if ((Test-Path $cfgPath) -and (Test-Path $cfgBackup)) {
+        $restoredOk = ((Get-FileHash $cfgPath -Algorithm SHA256).Hash -eq (Get-FileHash $cfgBackup -Algorithm SHA256).Hash)
+    }
     Start-Process -FilePath $exe -WorkingDirectory $InstallDir
     for ($i = 0; $i -lt 30; $i++) { Start-Sleep -Seconds 2; if ($null -ne (Get-TmwWindow)) { break } }
-    Write-Output 'K06 恢复：config 已从备份恢复并重启'
+    Write-Output "K06 恢复：config 已从备份恢复并重启（字节一致=$restoredOk，清理 corrupt 文件=$removed 个）"
+    Add-Content -Path $ResultsFile -Value "K06-cleanup: corrupt-removed=$removed restored-bytes-match=$restoredOk" -Encoding UTF8
 }
 
 # ================= L：连续播 soak =================
