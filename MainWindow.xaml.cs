@@ -109,6 +109,7 @@ public partial class MainWindow : Window
     private const int WM_LBUTTONDOWN = 0x0201;
     private const int WM_LBUTTONUP = 0x0202;
     private const int WM_LBUTTONDBLCLK = 0x0203;
+    private const int WM_RBUTTONUP = 0x0205;
     private const int WM_NCLBUTTONDOWN = 0x00A1;
     private const int HTCAPTION = 2;
     private const int VK_LBUTTON = 0x01;
@@ -511,6 +512,7 @@ public partial class MainWindow : Window
             {
                 var msg = wParam.ToInt32();
                 if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK || msg == WM_LBUTTONUP
+                    || msg == WM_RBUTTONUP
                     || (msg == WM_MOUSEMOVE && _pipVideoDownPoint != null && !_pipDragging))
                 {
                     var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
@@ -530,6 +532,15 @@ public partial class MainWindow : Window
         // 主窗口在前台：视频区双击切换主窗口全屏（线程消息层收不到视频窗口的消息，这里是主入口）
         if (fg == mainHwnd && mainHwnd != IntPtr.Zero)
         {
+            // v1.4.33 修复（用户 11:20 报点右键没反应）：视频区右键开菜单。视频窗口是原生窗口，
+            // 右键根本到不了 WPF，默认 ContextMenu 永远打不开；这里在钩子收到 WM_RBUTTONUP 后
+            // 在 UI 线程复用列表的 ContextMenu（同一份 7 项，排序勾选态与列表共用）。
+            if (msg == WM_RBUTTONUP)
+            {
+                if (IsPointInMainVideo(point) && !IsPointOnMainOverlayOrOsd(point))
+                    OpenVideoContextMenu();
+                return;
+            }
             if (msg == WM_LBUTTONDBLCLK)
             {
                 // 系统已认定双击（视频窗口类带 CS_DBLCLKS 时第二下是 DBLCLK 而不是 DOWN）：直接处理
@@ -578,6 +589,23 @@ public partial class MainWindow : Window
                 PostMessage(pipHwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
             }
         }
+    }
+
+    /// <summary>视频区右键菜单（v1.4.33 修复）：钩子回调内不同步改 UI，一律 BeginInvoke。
+    /// 复用列表的 ContextMenu（同一份 7 项），先把当前播的台选上（菜单项都按 SelectedItem 办事），
+    /// 再定位到鼠标处打开。菜单打开失败也不影响播放。</summary>
+    private void OpenVideoContextMenu()
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_closing || !IsLoaded) return;
+            var menu = ChannelList.ContextMenu;
+            if (menu == null) return;
+            if (_current != null) ChannelList.SelectedItem = _current;
+            menu.PlacementTarget = ChannelList;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+            menu.IsOpen = true;
+        }));
     }
 
     /// <summary>延迟切换主窗口全屏：钩子回调内不同步改窗口状态；300ms 防重入（与线程消息层共用时间戳）。</summary>
@@ -2819,6 +2847,27 @@ public partial class MainWindow : Window
             }
         }
         if (ChannelList.SelectedItem is ChannelItem ch) _ = PlayAsync(ch);
+    }
+
+    /// <summary>列表右键菜单（v1.4.33 修复，用户 11:20 报点右键没反应）：右键先把光标下的项选为当前项
+    /// （WPF 右键默认不改选中，菜单会作用到错台上），再直接打开列表的 ContextMenu，
+    /// 不依赖默认路由（默认路由在某些状态下不出菜单）。只在成功打开时标 Handled，
+    /// 失败时放行默认行为（不标 Handled），菜单出不来也不影响播放。</summary>
+    private void ChannelList_PreviewMouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        try
+        {
+            var menu = ChannelList.ContextMenu;
+            if (menu == null) return;
+            var hit = e.OriginalSource as DependencyObject;
+            var item = hit != null ? ItemsControl.ContainerFromElement(ChannelList, hit) as ListBoxItem : null;
+            if (item?.Content is ChannelItem ch) ChannelList.SelectedItem = ch;
+            menu.PlacementTarget = ChannelList;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+            menu.IsOpen = true;
+            e.Handled = true;
+        }
+        catch (Exception ex) { AppLog.Error($"open channel context menu failed: {ex.Message}"); }
     }
 
     private void MiFavorite_Click(object sender, RoutedEventArgs e)

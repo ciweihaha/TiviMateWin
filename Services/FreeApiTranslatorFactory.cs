@@ -11,9 +11,6 @@ public static class FreeApiTranslatorFactory
     /// <summary>服务商：微软 Azure（默认）。</summary>
     public const string ProviderAzure = "Azure";
 
-    /// <summary>服务商：谷歌。</summary>
-    public const string ProviderGoogle = "Google";
-
     /// <summary>服务商：Cloudflare Workers AI。</summary>
     public const string ProviderCloudflare = "Cloudflare";
 
@@ -23,8 +20,6 @@ public static class FreeApiTranslatorFactory
     /// <summary>服务商取值归一化：非法/空值回落 Azure（默认）。</summary>
     public static string NormalizeProvider(string? provider)
     {
-        if (string.Equals(provider, ProviderGoogle, StringComparison.OrdinalIgnoreCase))
-            return ProviderGoogle;
         if (string.Equals(provider, ProviderCloudflare, StringComparison.OrdinalIgnoreCase))
             return ProviderCloudflare;
         return ProviderAzure;
@@ -32,7 +27,7 @@ public static class FreeApiTranslatorFactory
 
     /// <summary>
     /// 按服务商建翻译器（凭据缺失返回 null）：
-    /// Azure/Google 用 freeApiKey（Azure 还可用 azureRegion）；
+    /// Azure 用 freeApiKey（还可用 azureRegion）；
     /// Cloudflare 用 cloudflareAccountId + cloudflareApiToken。
     /// </summary>
     public static IFreeApiTranslator? Create(string? provider, string? freeApiKey, string? azureRegion,
@@ -40,9 +35,6 @@ public static class FreeApiTranslatorFactory
     {
         switch (NormalizeProvider(provider))
         {
-            case ProviderGoogle:
-                if (string.IsNullOrWhiteSpace(freeApiKey)) return null;
-                return new GoogleTranslator(freeApiKey);
             case ProviderCloudflare:
                 if (string.IsNullOrWhiteSpace(cloudflareAccountId) ||
                     string.IsNullOrWhiteSpace(cloudflareApiToken)) return null;

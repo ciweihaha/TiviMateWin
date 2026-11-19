@@ -12,7 +12,7 @@ namespace TiviMateWin.Services;
 /// 默认 tiny.en + 1.5 秒窗：base.en + 3 秒窗在两台机器上端到端约 11 秒（目标 6 秒内），
 /// 瓶颈是 CPU 听写吞吐（云电脑听写 3 秒，台式机听写 5–6 秒）；翻译走免费接口（8 秒超时，
 /// 失败只跳过该行）。v1.4.33 重构后本地大模型已删掉（用户 10:36：效果不好），翻译只走
-/// 微软 Azure / 谷歌 / Cloudflare 免费接口。
+/// 微软 Azure / Cloudflare 免费接口。
 /// </summary>
 public sealed class LiveSubtitleService : IDisposable
 {
@@ -67,10 +67,10 @@ public sealed class LiveSubtitleService : IDisposable
     /// <summary>是否串行管线（设置改了需重建服务才生效）。</summary>
     public bool Serial => _serialMode;
 
-    /// <summary>当前用的免费接口服务商（Azure/Google/Cloudflare；设置改了需重建服务）。</summary>
+    /// <summary>当前用的免费接口服务商（Azure/Cloudflare；设置改了需重建服务）。</summary>
     public string FreeApiProvider => _config.FreeApiProvider;
 
-    /// <summary>免费接口 Key（Azure/Google 用；设置改了需重建服务；日志里绝不出现）。</summary>
+    /// <summary>免费接口 Key（Azure 用；设置改了需重建服务；日志里绝不出现）。</summary>
     public string? FreeApiKey => _config.FreeApiKey;
 
     /// <summary>Azure 区域（可选；设置改了需重建服务）。</summary>
@@ -85,7 +85,7 @@ public sealed class LiveSubtitleService : IDisposable
     /// <summary>免费接口连续失败次数（到阈值后冷却 5 分钟不再每行重试，见 TranslateAsync）。</summary>
     public int ApiFailureStreak => _apiFailureStreak;
 
-    // 免费接口翻译（v1.4.33 重构）：微软 Azure / 谷歌 / Cloudflare 免费层；
+    // 免费接口翻译（v1.4.33 重构）：微软 Azure / Cloudflare 免费层；
     // 连续失败 5 次后冷却 5 分钟，期间直接跳过该行（显示英文原文），不再每行等 8 秒超时
     // 把字幕拖慢。本地大模型已删掉（用户 10:36：效果不好），不再回落本地。
     private const int ApiMaxConsecutiveFailures = 5;
@@ -145,7 +145,7 @@ public sealed class LiveSubtitleService : IDisposable
             : ResolveTranscribeThreads(config);
         _transcriber = new LiveSubtitleTranscriber(threads: TranscribeThreads,
             modelFileName: config.LiveSubtitleWhisperModel);
-        // v1.4.33 重构：翻译只走免费接口（Azure/Google/Cloudflare），凭据缺失时
+        // v1.4.33 重构：翻译只走免费接口（Azure/Cloudflare），凭据缺失时
         // 翻译器为 null——TranslateAsync 直接返回 null，调用方显示英文原文。
         _apiTranslator = FreeApiTranslatorFactory.Create(config.FreeApiProvider, config.FreeApiKey,
             config.AzureRegion, config.CloudflareAccountId, config.CloudflareApiToken);
@@ -197,7 +197,7 @@ public sealed class LiveSubtitleService : IDisposable
     }
 
     /// <summary>
-    /// 翻译路由（v1.4.33 重构）：只走免费接口（Azure/Google/Cloudflare），
+    /// 翻译路由（v1.4.33 重构）：只走免费接口（Azure/Cloudflare），
     /// 本地大模型已删掉，不再回落本地。接口失败返回 null（调用方显示英文原文、当行跳过）。
     /// 接口连续失败 5 次后冷却 5 分钟——期间不再每行等 8 秒超时，直接返回 null，
     /// 冷却到点自动再试接口。翻译器为 null（凭据未填）时直接返回 null。

@@ -12,8 +12,8 @@ public class FreeApiTranslatorFactoryTests
     [InlineData("Bogus", "Azure")]
     [InlineData("Azure", "Azure")]
     [InlineData("azure", "Azure")]
-    [InlineData("Google", "Google")]
-    [InlineData("google", "Google")]
+    [InlineData("Google", "Azure")]
+    [InlineData("google", "Azure")]
     [InlineData("Cloudflare", "Cloudflare")]
     [InlineData("CLOUDFLARE", "Cloudflare")]
     public void NormalizeProvider_BadValue_FallsBackToAzure(string? input, string expected)
@@ -37,17 +37,12 @@ public class FreeApiTranslatorFactoryTests
     }
 
     [Fact]
-    public void Create_GoogleWithoutKey_ReturnsNull()
+    public void Create_GoogleProvider_FallsBackToAzure()
     {
-        Assert.Null(FreeApiTranslatorFactory.Create("Google", "", null, null, null));
-    }
-
-    [Fact]
-    public void Create_GoogleWithKey_ReturnsGoogleTranslator()
-    {
+        // 用户 11:37 决定：谷歌不要了（每月 50 万字符太少），只留 Azure + Cloudflare。
+        // 旧配置里若还写着 Google，归一化回落 Azure，不能建出已删的 GoogleTranslator。
         using var t = FreeApiTranslatorFactory.Create("Google", "key123", null, null, null);
-        Assert.IsType<GoogleTranslator>(t);
-        Assert.Equal("Google", t!.ProviderName);
+        Assert.IsType<AzureTranslator>(t);
     }
 
     [Fact]

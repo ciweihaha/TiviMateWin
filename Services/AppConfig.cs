@@ -35,10 +35,10 @@ public class AppConfig
     // 只翻英语：Whisper 用 tiny.en，本来也只认英语；法语/德语/日语等不翻译。
     public string LiveSubtitleTranslationMode { get; set; } = ChannelLanguage.DefaultMode;
     // 直播实时字幕翻译服务商（v1.4.33 重构）：Azure=微软（默认，免费额度最大）/
-    // Google=谷歌 / Cloudflare。翻译只走免费接口，本地大模型已删掉
+    // Cloudflare。翻译只走免费接口，本地大模型已删掉
     // （用户 10:36：效果不好）。听写仍在本地，只换翻译这步。
     public string FreeApiProvider { get; set; } = FreeApiTranslatorFactory.DefaultProvider;
-    // 免费接口 Key（Azure / 谷歌用；DPAPI 加密存储，与 Xtream 密码同款，日志里绝不出现）。
+    // 免费接口 Key（Azure 用；DPAPI 加密存储，与 Xtream 密码同款，日志里绝不出现）。
     public string? FreeApiKey { get; set; }
     // Azure 区域（可选，如 eastasia；不填不发区域头）。
     public string? AzureRegion { get; set; }

@@ -235,7 +235,8 @@
                              VirtualizingPanel.VirtualizationMode="Recycling"
                              VirtualizingPanel.IsVirtualizing="True"
                              MouseDoubleClick="ChannelList_MouseDoubleClick"
-                             PreviewMouseLeftButtonUp="ChannelList_PreviewMouseLeftButtonUp">
+                             PreviewMouseLeftButtonUp="ChannelList_PreviewMouseLeftButtonUp"
+                             PreviewMouseRightButtonUp="ChannelList_PreviewMouseRightButtonUp">
                     <ListBox.ContextMenu>
                         <ContextMenu>
                             <MenuItem Header="小窗播放" Click="MiPip_Click"/>

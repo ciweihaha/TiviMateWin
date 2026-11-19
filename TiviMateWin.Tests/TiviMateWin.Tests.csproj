@@ -33,7 +33,6 @@
     <Compile Include="..\Services\CloudflareTranslator.cs" Link="CloudflareTranslator.cs" />
     <Compile Include="..\Services\IFreeApiTranslator.cs" Link="IFreeApiTranslator.cs" />
     <Compile Include="..\Services\AzureTranslator.cs" Link="AzureTranslator.cs" />
-    <Compile Include="..\Services\GoogleTranslator.cs" Link="GoogleTranslator.cs" />
     <Compile Include="..\Services\FreeApiTranslatorFactory.cs" Link="FreeApiTranslatorFactory.cs" />
   </ItemGroup>
 

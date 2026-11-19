@@ -76,15 +76,14 @@
                     <ComboBoxItem Content="全部台"/>
                 </ComboBox>
                 <!-- 翻译服务商（v1.4.33 重构）：只走免费接口，本地大模型已删掉。
-                     微软 Azure 每月 200 万字符免费（最划算）、谷歌每月 50 万字符免费、
+                     微软 Azure 每月 200 万字符免费（最划算）、
                      Cloudflare 每天 1 万 neurons 免费。Key 去各家免费开、贴进来，不收费。 -->
                 <TextBlock Text="翻译服务商（免费接口）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
                 <ComboBox x:Name="LiveSubtitleProviderCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB">
                     <ComboBoxItem Content="微软 Azure（免费）"/>
-                    <ComboBoxItem Content="谷歌（免费）"/>
                     <ComboBoxItem Content="Cloudflare（免费）"/>
                 </ComboBox>
-                <TextBlock Text="免费接口 Key（Azure / 谷歌用；存在本机加密配置里）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
+                <TextBlock Text="免费接口 Key（Azure 用；存在本机加密配置里）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
                 <PasswordBox x:Name="FreeApiKeyBox" Height="28" Background="#FF20262E" Foreground="#FFDDE4EB"
                              BorderBrush="#FF2D3540" Padding="6,3"/>
                 <TextBlock Text="Azure 区域（可选，如 eastasia；不填不发区域头）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>

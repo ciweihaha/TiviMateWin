@@ -61,10 +61,9 @@ public partial class SettingsWindow : Window
             "All" => "全部台",
             _ => "仅英语台",
         });
-        // v1.4.33 重构：翻译服务商（微软 Azure / 谷歌 / Cloudflare）+ 免费接口凭据。
+        // v1.4.33 重构：翻译服务商（微软 Azure / Cloudflare）+ 免费接口凭据。
         SelectCombo(LiveSubtitleProviderCombo, config.FreeApiProvider switch
         {
-            "Google" => "谷歌（免费）",
             "Cloudflare" => "Cloudflare（免费）",
             _ => "微软 Azure（免费）",
         });
@@ -168,7 +167,6 @@ public partial class SettingsWindow : Window
         _config.FreeApiProvider =
             (LiveSubtitleProviderCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() switch
             {
-                "谷歌（免费）" => "Google",
                 "Cloudflare（免费）" => "Cloudflare",
                 _ => "Azure",
             };
