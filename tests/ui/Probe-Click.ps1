@@ -34,7 +34,15 @@ $cx=[int]($br.X + $br.Width/2); $cy=[int]($br.Y + $br.Height/2)
 Write-Output ("click target center=({0},{1})" -f $cx,$cy)
 $sz=Get-PhysSize; $sw=$sz[0]; $sh=$sz[1]
 Write-Output ("phys size used={0}x{1}" -f $sw,$sh)
-$ax=[uint][Math]::Min(65535.0,[Math]::Max(0.0,$cx*65535.0/$sw)); $ay=[uint][Math]::Min(65535.0,[Math]::Max(0.0,$cy*65535.0/$sh))
+$axD = $cx * 65535.0 / $sw
+if ($axD -lt 0) { $axD = 0 }
+if ($axD -gt 65535) { $axD = 65535 }
+$ax = [uint]$axD
+$ayD = $cy * 65535.0 / $sh
+if ($ayD -lt 0) { $ayD = 0 }
+if ($ayD -gt 65535) { $ayD = 65535 }
+$ay = [uint]$ayD
+Write-Output ("axD={0} ayD={1} ax={2} ay={3}" -f $axD, $ayD, $ax, $ay)
 Write-Output ("mouse abs=({0},{1})" -f $ax,$ay)
 [Win32D]::mouse_event(0x8001,$ax,$ay,0,[UIntPtr]::Zero)
 Start-Sleep -Milliseconds 300
