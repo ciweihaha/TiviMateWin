@@ -385,6 +385,18 @@
                                TextAlignment="Center" Margin="0,4,0,0" Visibility="Collapsed"/>
                 </StackPanel>
             </Border>
+            <!-- 暂停提示（v1.4.34）：空格键/按钮暂停时画面定住，在视频中央显示暂停标志；
+                 必须放 VideoView.Content 里（同 ChannelOsd 的空域规则），否则原生视频 HWND 会盖住它。
+                 显隐只跟 _isPaused 走（见 UpdatePauseOverlay）；停止/换台时自动藏。 -->
+            <Border x:Name="PauseOverlay" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="#CC151B24" CornerRadius="12" Padding="18,12"
+                    Visibility="Collapsed" IsHitTestVisible="False">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="⏸" FontSize="28" Foreground="#FFFFFFFF" VerticalAlignment="Center"/>
+                    <TextBlock Text="已暂停" FontSize="20" FontWeight="Bold" Foreground="#FFFFFFFF"
+                               VerticalAlignment="Center" Margin="10,0,0,0"/>
+                </StackPanel>
+            </Border>
             </Grid>
             </lvc:VideoView>
 

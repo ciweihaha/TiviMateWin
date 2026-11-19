@@ -1155,6 +1155,7 @@ public partial class MainWindow : Window
         ShowOsd();
         ShowChannelOsd(ch);   // V1.4：换台信息条（频道名 + 来源徽标 + 正在播放 / 稍后播放）
         _isPaused = false;
+        UpdatePauseOverlay();
         BtnPlayPause.Content = "⏸";
         FsPlayPause.Content = "⏸";
         SeekBar.Value = 0;
@@ -1292,7 +1293,15 @@ public partial class MainWindow : Window
             FsPlayPause.Content = "▶";
             PlayState.Text = "已暂停";
         }
+        UpdatePauseOverlay();
         ShowOsd();
+    }
+
+    /// <summary>暂停提示显隐（v1.4.34）：只跟 _isPaused 走；停止/换台时 _isPaused=false 即藏。
+    /// 覆盖窗口不跟随 VideoView.Visibility 隐藏，ClearVideoSurface 里也要显式藏一次。</summary>
+    private void UpdatePauseOverlay()
+    {
+        PauseOverlay.Visibility = _isPaused ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void BtnStop_Click(object sender, RoutedEventArgs e) => StopPlayback();
@@ -1307,6 +1316,7 @@ public partial class MainWindow : Window
     private void ClearVideoSurface()
     {
         try { HideChannelOsd(); } catch { }
+        try { PauseOverlay.Visibility = Visibility.Collapsed; } catch { }
         try { _epgPanelManuallyOpen = false; EpgPanel.Visibility = Visibility.Collapsed; } catch { }
         // 只隐藏不拆面：VideoView.MediaPlayer = null（set Hwnd=0）与后台 Stop/Play
         // 拆建输入并发触同一个 native 播放器，长时间播放崩溃即此类竞态；
@@ -1349,6 +1359,7 @@ public partial class MainWindow : Window
         try
         {
             _isPaused = false;
+            UpdatePauseOverlay();
             ClearPlayingChannel();          // V1.4：取消列表播放高亮
             Title = "星辰直播";             // V1.4：标题栏恢复
             BtnPlayPause.Content = "▶";     // 已停止：显示播放图标，按下可恢复播放
@@ -1848,16 +1859,26 @@ public partial class MainWindow : Window
         BtnTranslateToggle.ToolTip = $"翻译强制开关：自动 → 强制开 → 强制关（只对当前台，切台后恢复自动）；当前实际：{eff}";
     }
 
-    /// <summary>翻译强制开关（v1.4.33）：自动 → 强制开 → 强制关 → 自动；只对当前台有效。</summary>
+    /// <summary>翻译强制开关（v1.4.33）：自动 → 强制开 → 强制关 → 自动；只对当前台有效。
+    /// v1.4.34：点到"强制开"时总开关必须一起开——总开关关着时 ResolveTranslationActive
+    /// 直接返回 false，按钮文案变了、字幕却永远不出，用户看到的就是"开关打不开"
+    /// （台式机实测：总开关关时点了十几次翻译强制都只改文案、不生效）。点到"关/自动"
+    /// 不动总开关；总开关刚打开时建服务并重播当前频道，让开关立刻生效。</summary>
     private void BtnTranslateToggle_Click(object sender, RoutedEventArgs e)
     {
-        _subtitleForceOverride = _subtitleForceOverride switch
+        var (master, force) = TranslationToggle.Cycle(_config.LiveSubtitleEnabled, _subtitleForceOverride);
+        _subtitleForceOverride = force;
+        if (master && !_config.LiveSubtitleEnabled)
         {
-            null => true,
-            true => false,
-            _ => null,
-        };
-        UpdateLiveSubtitleForChannel(_current);
+            _config.LiveSubtitleEnabled = true;
+            SaveConfigAsync();
+            PlayState.Text = "已打开实时字幕（总开关）";
+            ApplyLiveSubtitleSettings();
+        }
+        else
+        {
+            UpdateLiveSubtitleForChannel(_current);
+        }
         AppLog.Info($"[Subtitle] 翻译强制: {(_subtitleForceOverride?.ToString() ?? "自动")}");
     }
 
@@ -3044,7 +3065,10 @@ public partial class MainWindow : Window
             case Key.Enter when ChannelList.SelectedItem is ChannelItem ch:
                 _ = PlayAsync(ch);
                 return true;
-            case Key.Space when _player != null:
+            case Key.Space when PlaybackHotkeys.ShouldTogglePauseOnSpace(
+                _player != null, Keyboard.FocusedElement is TextBox or MenuItem or ComboBox):
+                // v1.4.34：空格暂停/继续（直播/点播都走同一条 LibVLC Pause/Play）；
+                // 焦点在搜索框/下拉框/菜单里时空格是打字，不抢（见 PlaybackHotkeys）。
                 TogglePlayPause();
                 return true;
             case Key.S when Keyboard.Modifiers == ModifierKeys.None && _player != null:
