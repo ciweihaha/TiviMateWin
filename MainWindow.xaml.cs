@@ -227,6 +227,11 @@ public partial class MainWindow : Window
     private bool _showHidden;
     private bool _pausedForNewWindow;
 
+    /// <summary>标题栏基准：星辰直播 + 版本号（v1.4.35：用户不知道自己在用哪个版本）。
+    /// 播放时后面再拼频道名（见 PlayAsync），停播时恢复成这个。</summary>
+    private static string AppTitleBase =>
+        "星辰直播 " + AppVersion.Display(System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
+
     // 当前列表所属源地址：切源时据此判断缓存是否可用、失败时列表是否已错源。
     // 深查第 21 轮：旧代码只在 _all 为空时读缓存，切源后网络失败仍显示旧源频道。
     private string? _loadedSourceUrl;
@@ -305,6 +310,10 @@ public partial class MainWindow : Window
     // 直播实时字幕（听写+翻译）：服务只在设置开启时创建；字幕条 5 秒无新字幕自动隐藏。
     private LiveSubtitleService? _subtitleService;
     private readonly DispatcherTimer _subtitleHideTimer = new() { Interval = TimeSpan.FromSeconds(5) };
+    // v1.4.35：字幕状态提示（如“免费接口未配置”）5 秒自动消失的计时器，
+    // + 本会话已显示过的提示（同一条不重复弹）。见 SubtitleStatusPolicy。
+    private readonly DispatcherTimer _subtitleStatusTimer = new() { Interval = TimeSpan.FromSeconds(SubtitleStatusPolicy.AutoHideSeconds) };
+    private string? _lastSubtitleStatus;
     // EPG 时效刷新（V1.4）：每分钟刷新本地正在播放显示，避免长时间停留时节目过期
     private readonly DispatcherTimer _epgRefreshTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     // 节目单常驻面板开关（v1.4.33）：默认不常驻（用户嫌右边常驻难看）；
@@ -348,6 +357,16 @@ public partial class MainWindow : Window
         _digitTimer.Tick += (_, _) => CommitDigits();
         _osdHideTimer.Tick += (_, _) => HideChannelOsd();
         _subtitleHideTimer.Tick += (_, _) => { _subtitleHideTimer.Stop(); SubtitleBar.Visibility = Visibility.Collapsed; };
+        // v1.4.35：状态提示 5 秒自动消失（UnBox 0.9.16 同款）；到点只清提示行，
+        // 字幕本身有字时字幕条留着、没字时整条一起藏。
+        _subtitleStatusTimer.Tick += (_, _) =>
+        {
+            _subtitleStatusTimer.Stop();
+            SubtitleStatus.Text = "";
+            SubtitleStatus.Visibility = Visibility.Collapsed;
+            if (string.IsNullOrEmpty(SubtitleChinese.Text) && string.IsNullOrEmpty(SubtitleEnglish.Text))
+                SubtitleBar.Visibility = Visibility.Collapsed;
+        };
         _epgRefreshTimer.Tick += (_, _) => OnEpgRefreshTick();
         _reattachCheckTimer.Tick += (_, _) => { _reattachCheckTimer.Stop(); OnReattachCheckTick(); };
         // v1.4.27（轻微 5）：拉伸模式的 DAR 按视频区实时尺寸算，窗口尺寸变了要重算，
@@ -657,6 +676,7 @@ public partial class MainWindow : Window
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
+        Title = AppTitleBase;   // v1.4.35：标题栏显示版本号
         AppLog.Info($"start v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
         _config = AppConfig.Load();
         ApplyTheme(_config.Theme);      // L11：启动时加载保存的主题（带缺失容错，见 ApplyTheme）
@@ -811,6 +831,11 @@ public partial class MainWindow : Window
     {
         // F6(c)：触 UI 前检查取消/关闭状态。
         if (_closing || ct.IsCancellationRequested) return;
+        // v1.4.35：刷新按钮的反馈——记下刷新前的频道数，成功后告诉用户刷了多少、
+        // 有没有变化、几点刷的；以前只写“已载入 N 个频道”，和初次加载一个样，
+        // 用户点了刷新、列表没变时根本看不出它干没干活。
+        var beforeCount = _all.Count;
+        if (forceRefresh) PlayState.Text = "正在刷新…";
         var src = _config.Playlists.FirstOrDefault(p => p.Name == _config.ActivePlaylist)
                   ?? _config.Playlists.FirstOrDefault();
         if (src is null)
@@ -864,7 +889,17 @@ public partial class MainWindow : Window
                 AdoptChannels(list);
                 _loadedSourceUrl = src.Url;
                 _ = Task.Run(() => ChannelCache.Save(src.Url, list));   // 后台写盘，大清单不卡 UI
-                PlayState.Text = $"已载入 {list.Count} 个频道";
+                // v1.4.35：刷新按钮的反馈——“已刷新”+ 数量 + 变化/时间，证明它刚跑过；
+                // 初次加载仍写“已载入 N 个频道”。只刷频道列表，不重拉节目单数据
+                // （节目单靠每小时自动刷新；见 EpgRefreshPolicy）。
+                if (forceRefresh)
+                {
+                    PlayState.Text = list.Count != beforeCount
+                        ? $"已刷新：{list.Count} 个频道（之前 {beforeCount} 个）"
+                        : $"已刷新：{list.Count} 个频道 {DateTime.Now:HH:mm}";
+                    AppLog.Info($"playlist refreshed: {list.Count} channels (was {beforeCount})");
+                }
+                else PlayState.Text = $"已载入 {list.Count} 个频道";
                 await ResumeLastAsync();
                 // 尝试从 M3U 头部解析 EPG 源并加载节目单
                 // M3：_epgUrl 只在 LoadEpgAsync 成功后才更新（失败时保持旧值，下次刷新可重试）；
@@ -1231,7 +1266,7 @@ public partial class MainWindow : Window
 
         // V1.4：标记正在播放的频道（列表高亮）+ 标题栏同步频道名
         SetPlayingChannel(ch);
-        Title = "星辰直播 - " + ch.Name;
+        Title = AppTitleBase + " - " + ch.Name;
 
         // 应用用户设置的倍速与画面比例（MediaPlayer 级别，播放后生效）
         try
@@ -1372,7 +1407,7 @@ public partial class MainWindow : Window
             _isPaused = false;
             UpdatePauseOverlay();
             ClearPlayingChannel();          // V1.4：取消列表播放高亮
-            Title = "星辰直播";             // V1.4：标题栏恢复
+            Title = AppTitleBase;           // V1.4：标题栏恢复
             BtnPlayPause.Content = "▶";     // 已停止：显示播放图标，按下可恢复播放
             FsPlayPause.Content = "▶";
             SeekBar.Value = 0;
@@ -2375,7 +2410,7 @@ public partial class MainWindow : Window
         ClearVideoSurface();
         _current = null;
         ClearPlayingChannel();
-        Title = "星辰直播";
+        Title = AppTitleBase;
         NowPlaying.Text = "未播放";
         PlayState.Text = "未播放";
         _ = LoadPlaylistAsync(true, _netCts.Token);
@@ -2398,7 +2433,7 @@ public partial class MainWindow : Window
             ClearVideoSurface();
             _current = null;
             ClearPlayingChannel();
-            Title = "星辰直播";
+            Title = AppTitleBase;
             NowPlaying.Text = "未播放";
             PlayState.Text = "未播放";
             _ = LoadPlaylistAsync(false, _netCts.Token);
@@ -2601,16 +2636,22 @@ public partial class MainWindow : Window
         _subtitleHideTimer.Start();
     }
 
-    /// <summary>字幕状态提示（模型下载中、翻译服务连不上等）：空字符串 = 清除提示。</summary>
+    /// <summary>字幕状态提示（模型下载中、翻译服务连不上等）：空字符串 = 清除提示。
+    /// v1.4.35：提示 5 秒自动消失（UnBox 0.9.16 同款）；同一条提示每个会话只显示一次，
+    /// 服务重建（切台）时不再反复弹。否则中文台没有字幕行触发隐藏，这条圆角提示
+    /// 会一直挂在视频上（用户 2026-11-19 照片里的那条就是它）。</summary>
     private void ShowLiveSubtitleStatus(string status)
     {
         if (_closing) return;
+        _subtitleStatusTimer.Stop();
         if (string.IsNullOrEmpty(status))
         {
             SubtitleStatus.Visibility = Visibility.Collapsed;
             SubtitleStatus.Text = "";
             return;
         }
+        if (!SubtitleStatusPolicy.ShouldShow(status, _lastSubtitleStatus)) return;
+        _lastSubtitleStatus = status;
         SubtitleStatus.Text = status;
         SubtitleStatus.Visibility = Visibility.Visible;
         // 有状态无字幕时也把字幕条露出来，否则提示没地方显示。
@@ -2621,11 +2662,13 @@ public partial class MainWindow : Window
             SubtitleEnglish.Visibility = Visibility.Collapsed;
             SubtitleBar.Visibility = Visibility.Visible;
         }
+        _subtitleStatusTimer.Start();
     }
 
     private void HideLiveSubtitle()
     {
         _subtitleHideTimer.Stop();
+        _subtitleStatusTimer.Stop();
         SubtitleBar.Visibility = Visibility.Collapsed;
     }
 
@@ -3014,35 +3057,6 @@ public partial class MainWindow : Window
         SortByNumber.IsChecked = false;
         SortByName.IsChecked = true;
         ApplyFilter();
-    }
-
-    /// <summary>分组管理：重命名 / 删除分组</summary>
-    private void BtnManageGroups_Click(object sender, RoutedEventArgs e)
-    {
-        var groups = _all.Select(c => c.Group).Distinct().OrderBy(g => g, StringComparer.CurrentCulture).ToList();
-        // 深查第 9 轮：必须设 Owner，原因同 BtnSettings_Click（模态守卫只查 OwnedWindows）。
-        var dlg = new Dialogs.GroupManagerWindow(groups) { Owner = this };
-        if (dlg.ShowDialog() != true) return;
-
-        switch (dlg.Action)
-        {
-            case "rename" when dlg.SelectedGroup != null && !string.IsNullOrWhiteSpace(dlg.NewName):
-                var oldName = dlg.SelectedGroup;
-                var newName = dlg.NewName.Trim();
-                if (oldName == newName) return;
-                foreach (var c in _all.Where(c => c.Group == oldName)) c.Group = newName;
-                RebuildGroups();
-                ApplyFilter();
-                QueueSave();
-                break;
-            case "delete" when dlg.SelectedGroup != null:
-                var delName = dlg.SelectedGroup;
-                foreach (var c in _all.Where(c => c.Group == delName)) c.Group = "未分组";
-                RebuildGroups();
-                ApplyFilter();
-                QueueSave();
-                break;
-        }
     }
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)

@@ -15,6 +15,22 @@
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
             <StackPanel>
+                <!-- 版本与更新（v1.4.35）：当前版本一眼能看到；检查更新去 GitHub 查最新 release，
+                     有新版点一下就能下载（走国内镜像，不走打不开的直链）。 -->
+                <TextBlock Text="版本" FontSize="14" FontWeight="Bold" Foreground="#FF4FA3E3" Margin="0,4,0,4"/>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock x:Name="VersionText" Text="当前版本 ?" Foreground="#FFB9C4CE" FontSize="12"
+                               VerticalAlignment="Center"/>
+                    <Button x:Name="CheckUpdateBtn" Content="检查更新" Height="28" Padding="12,0" Margin="12,0,0,0"
+                            Background="#FF232B34" Foreground="#FFC7D1DA" BorderThickness="0" Cursor="Hand"
+                            Click="CheckUpdate_Click"/>
+                    <Button x:Name="DownloadUpdateBtn" Content="下载新版本" Height="28" Padding="12,0" Margin="8,0,0,0"
+                            Background="#FF4FA3E3" Foreground="White" BorderThickness="0" Cursor="Hand"
+                            Click="DownloadUpdate_Click" Visibility="Collapsed"/>
+                </StackPanel>
+                <TextBlock x:Name="UpdateResultText" Text="" Foreground="#FF7A8896" FontSize="11" Margin="0,6,0,12"
+                           TextWrapping="Wrap"/>
+
                 <!-- 网络缓存 -->
                 <TextBlock Text="网络缓存（毫秒）" Foreground="#FFB9C4CE" FontSize="12" Margin="0,4,0,4"/>
                 <Slider x:Name="CacheSlider" Minimum="200" Maximum="10000" TickFrequency="100"

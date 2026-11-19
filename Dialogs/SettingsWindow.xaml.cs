@@ -11,11 +11,17 @@ public partial class SettingsWindow : Window
     private readonly AppConfig _config;
     private bool _initializing = true;   // 初始化期间不触发事件处理
     private bool _initialHwDecode;   // 第 4 轮 R4-D：打开设置时的硬件解码初始值，用于判断是否改动过
+    private string? _latestTag;   // v1.4.35：检查更新发现的新版本号（下载按钮用）
+    private bool _checkingUpdate;
+    private bool _downloadingUpdate;
 
     public SettingsWindow(AppConfig config)
     {
         InitializeComponent();
         _config = config;
+
+        // v1.4.35：版本一眼能看到（用户不知道自己在用哪个版本）。
+        VersionText.Text = "当前版本 " + AppVersion.Display(AppVersion.Current);
 
         // 网络缓存
         CacheSlider.Value = config.NetworkCache;
@@ -101,6 +107,73 @@ public partial class SettingsWindow : Window
     {
         if (_initializing) return;
         CacheValue.Text = $"{(int)CacheSlider.Value} ms";
+    }
+
+    /// <summary>检查更新（v1.4.35）：去 GitHub 查最新 release，和当前版本比。
+    /// 已是最新就明说“已是最新版本”；有新版就显示版本号 + “下载新版本”按钮。</summary>
+    private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_checkingUpdate) return;
+        _checkingUpdate = true;
+        CheckUpdateBtn.IsEnabled = false;
+        UpdateResultText.Text = "正在检查更新…";
+        DownloadUpdateBtn.Visibility = Visibility.Collapsed;
+        _latestTag = null;
+        try
+        {
+            var current = AppVersion.Display(AppVersion.Current);
+            var result = await UpdateChecker.CheckAsync(current);
+            if (!IsLoaded) return;
+            if (result.Error != null)
+            {
+                UpdateResultText.Text = result.Error;
+            }
+            else if (result.IsUpdateAvailable)
+            {
+                _latestTag = result.LatestTag;
+                UpdateResultText.Text = $"发现新版本 {result.LatestTag}（当前 {current}），点“下载新版本”下载安装包。";
+                DownloadUpdateBtn.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                UpdateResultText.Text = $"已是最新版本（{current}）。";
+            }
+        }
+        finally
+        {
+            _checkingUpdate = false;
+            CheckUpdateBtn.IsEnabled = true;
+        }
+    }
+
+    /// <summary>下载新版本安装包（v1.4.35）：走国内镜像（ghfast → gh-proxy → 直链），
+    /// 存在“下载”文件夹；程序运行时不能覆盖自己的文件，所以只下载、不自动安装，
+    /// 下载完告诉用户关闭程序后解压覆盖（先把旧版文件夹改名备份）。</summary>
+    private async void DownloadUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_downloadingUpdate || _latestTag is null) return;
+        _downloadingUpdate = true;
+        DownloadUpdateBtn.IsEnabled = false;
+        CheckUpdateBtn.IsEnabled = false;
+        var tag = _latestTag;
+        var downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        var dest = Path.Combine(downloads, $"TiviMateWin-{tag}-win-x64.zip");
+        UpdateResultText.Text = $"正在下载新版本 {tag}（约 152MB，请稍等）…";
+        try
+        {
+            Directory.CreateDirectory(downloads);
+            var ok = await UpdateChecker.DownloadAsync(tag, dest);
+            if (!IsLoaded) return;
+            UpdateResultText.Text = ok
+                ? $"已下载到 {dest}。关闭本程序后解压覆盖安装即可（先把旧版文件夹改名备份）。"
+                : "下载失败（网络不通），稍后再试，或去 GitHub 发布页手动下载。";
+        }
+        finally
+        {
+            _downloadingUpdate = false;
+            DownloadUpdateBtn.IsEnabled = true;
+            CheckUpdateBtn.IsEnabled = true;
+        }
     }
 
     private void HwDecode_Changed(object sender, RoutedEventArgs e)

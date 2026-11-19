@@ -28,6 +28,9 @@
     <Compile Include="..\Services\LiveSubtitleModelPath.cs" Link="LiveSubtitleModelPath.cs" />
     <Compile Include="..\Services\LiveSubtitleTranscriber.cs" Link="LiveSubtitleTranscriber.cs" />
     <Compile Include="..\Services\ChannelLanguage.cs" Link="ChannelLanguage.cs" />
+    <Compile Include="..\Services\AppVersion.cs" Link="AppVersion.cs" />
+    <Compile Include="..\Services\SubtitleStatusPolicy.cs" Link="SubtitleStatusPolicy.cs" />
+    <Compile Include="..\Services\UpdateChecker.cs" Link="UpdateChecker.cs" />
     <Compile Include="..\Services\ChannelHiding.cs" Link="ChannelHiding.cs" />
     <Compile Include="..\Services\NewWindowPlayback.cs" Link="NewWindowPlayback.cs" />
     <Compile Include="..\Services\PlaybackHotkeys.cs" Link="PlaybackHotkeys.cs" />

@@ -216,12 +216,11 @@
                             Click="BtnAdd_Click"/>
                 </StackPanel>
 
-                <!-- v1.4.35：分组下拉框直接挂在频道列表头上（数量 + 分类 + 管理同一行），
-                     不再单独占一行贴在“源列表”下面——用户以为那是源列表的分类。 -->
+                <!-- v1.4.35：分组下拉框直接挂在频道列表头上（数量 + 分类同一行），
+                     不再单独占一行贴在“源列表”下面——用户以为那是源列表的分类。
+                     “管理”按钮已删（用户确认不要）：分组改名/删除入口随之取消，
+                     分组只跟源里的分组走。 -->
                 <DockPanel DockPanel.Dock="Top" Margin="12,0,12,6">
-                    <Button DockPanel.Dock="Right" Content="管理" Width="44" Height="30" Margin="6,0,0,0"
-                            Background="{DynamicResource BtnBgBrush}" Foreground="{DynamicResource BtnFgBrush}" BorderThickness="0" Cursor="Hand"
-                            FontSize="11" Click="BtnManageGroups_Click" ToolTip="分组管理"/>
                     <TextBlock x:Name="CountText" Text="0 个频道" DockPanel.Dock="Left"
                                Foreground="{DynamicResource MutedFgBrush}" FontSize="12" Margin="2,0,8,0" VerticalAlignment="Center"/>
                     <ComboBox x:Name="GroupCombo" Height="30" Background="{DynamicResource PanelBgBrush}" Foreground="{DynamicResource InputFgBrush}"
@@ -229,10 +228,15 @@
                 </DockPanel>
 
                 <Grid Margin="4,0,4,6">
+                    <!-- v1.4.35：频道列表关掉虚拟化、滚动条常显。原因：56 个台用不着虚拟化；
+                         但 1.4.33 台式机实测 UIA 里 ListItem=0（容器一个都没生成），
+                         用户又报列表滑不动——虚拟化没生成项时既看不到项、也无处可滚。
+                         关掉后 56 行全量生成（渲染代价可忽略），UIA 也能直接看到项；
+                         滚动条常显，滚轮失灵时还能拖着走。 -->
                     <ListBox x:Name="ChannelList" Background="Transparent" BorderThickness="0"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             VirtualizingPanel.VirtualizationMode="Recycling"
-                             VirtualizingPanel.IsVirtualizing="True"
+                             ScrollViewer.VerticalScrollBarVisibility="Visible"
+                             VirtualizingPanel.IsVirtualizing="False"
                              MouseDoubleClick="ChannelList_MouseDoubleClick"
                              PreviewMouseLeftButtonUp="ChannelList_PreviewMouseLeftButtonUp"
                              PreviewMouseRightButtonUp="ChannelList_PreviewMouseRightButtonUp">
