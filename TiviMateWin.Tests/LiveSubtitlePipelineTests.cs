@@ -34,6 +34,11 @@ public class LiveSubtitlePipelineTests
             }
         };
         pipeline.Start();
+        // v1.4.33：先等读取循环真正跑起来再入队——_transcribeChannel 是容量 2 的
+        // DropOldest 队列，启动瞬间连入 3 窗、读取循环还没调度到时，第 1 窗会被丢掉，
+        // 只出 2 条字幕（CI tag 构建 44444026283 就是这么 flaky 挂的：期望 3 条实得 2 条）。
+        // 假听写/假翻译都是立即返回，200ms 足够读取循环启动并等在队列上。
+        await Task.Delay(200);
         pipeline.EnqueueWindow(LoudWindow());
         pipeline.EnqueueWindow(LoudWindow());
         pipeline.EnqueueWindow(LoudWindow());
