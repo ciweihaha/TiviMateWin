@@ -43,6 +43,20 @@ public class ChannelItem : INotifyPropertyChanged
         }
     }
 
+    private bool _isHidden;
+    /// <summary>是否在隐藏列表里（v1.4.35：打开“显示隐藏频道”时，已隐藏的台重新出现并带“已隐藏”标记）</summary>
+    [JsonIgnore]
+    public bool IsHidden
+    {
+        get => _isHidden;
+        set
+        {
+            if (_isHidden == value) return;
+            _isHidden = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsHidden)));
+        }
+    }
+
     /// <summary>无 Logo 时的首字符占位（V1.4）</summary>
     [JsonIgnore]
     public string Initial

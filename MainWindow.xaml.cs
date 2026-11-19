@@ -222,6 +222,11 @@ public partial class MainWindow : Window
     // 多窗口播放：跟踪所有打开的独立频道窗口，主窗口关闭时统一关闭，避免引擎释放后子窗口崩溃
     private readonly List<ChannelWindow> _channelWindows = new();
 
+    // v1.4.35：显示隐藏频道开关（会话内有效，不落盘；默认关，隐藏的台不在列表里）；
+    // 新窗口暂停主窗口的标记（关最后一个新窗口时恢复用，用户手动接管暂停态后清零）。
+    private bool _showHidden;
+    private bool _pausedForNewWindow;
+
     // 当前列表所属源地址：切源时据此判断缓存是否可用、失败时列表是否已错源。
     // 深查第 21 轮：旧代码只在 _all 为空时读缓存，切源后网络失败仍显示旧源频道。
     private string? _loadedSourceUrl;
@@ -1064,13 +1069,17 @@ public partial class MainWindow : Window
         var hidden = _config.HiddenChannels.ToHashSet();
         var favOnly = _favOnly;
 
+        // v1.4.35：把“已隐藏”标记同步到每一行（打开“显示隐藏频道”时，
+        // 已隐藏的台重新出现并带标记，再点“显示频道”取消隐藏）。
+        foreach (var c in _all) c.IsHidden = hidden.Contains(c.Url);
+
         // 过滤：隐藏频道 / 收藏 / 分组 / 搜索关键词
         // v1.4.33：搜关键词时忽略分组（分组选中"央视频道"时搜"湖南"不该出空结果）；
         // 匹配规则抽到 ChannelSearch（台号 + 央视别名），见 ChannelSearch.Matches。
         _view.Filter = c =>
         {
             var ch = (ChannelItem)c;
-            if (hidden.Contains(ch.Url)) return false;
+            if (!ChannelHiding.ShouldShow(ch.Url, hidden, _showHidden)) return false;
             if (favOnly && !ch.IsFavorite) return false;
             if (q.Length == 0 && group is string g && g != "全部" && ch.Group != g) return false;
             if (q.Length > 0 && !ChannelSearch.Matches(ch.Name, ch.Group, ch.Number, q)) return false;
@@ -1257,6 +1266,8 @@ public partial class MainWindow : Window
     private void TogglePlayPause()
     {
         if (_player is null) return;
+        // v1.4.35：用户手动按暂停/播放 = 接管了暂停态，关新窗口时不再自动恢复主窗口。
+        _pausedForNewWindow = false;
         if (_current is null)
         {
             // 停止后按播放/暂停（按钮或空格）：重播当前选中的频道；旧代码直接 return，
@@ -1794,6 +1805,15 @@ public partial class MainWindow : Window
             OsdNowProgress.Value = progress;
             OsdNowProgress.Visibility = Visibility.Visible;
         }
+        else if (pick.Next.Count == 0)
+        {
+            // v1.4.35：这个台在节目单里没有任何节目（凤凰/澳门/BBC 等 6 个台，
+            // 服务端 epg.xml 里本来就没有它们的数据）——卡片只剩台名会让人以为
+            // 信息条没出来；明说“暂无节目信息”，不要装作有节目。
+            OsdNow.Text = "暂无节目信息";
+            OsdNow.Visibility = Visibility.Visible;
+            OsdNowProgress.Visibility = Visibility.Collapsed;
+        }
         else
         {
             OsdNow.Visibility = Visibility.Collapsed;
@@ -1882,14 +1902,14 @@ public partial class MainWindow : Window
         AppLog.Info($"[Subtitle] 翻译强制: {(_subtitleForceOverride?.ToString() ?? "自动")}");
     }
 
-    /// <summary>节目单面板手动开关（v1.4.33）：默认不常驻；按钮或 E 键打开/关闭。</summary>
+    /// <summary>节目单面板手动开关（v1.4.33）：默认不常驻；E 键打开/关闭。
+    /// v1.4.35：工具栏上的“节目单”按钮已去掉（切台自动显示信息条，不用单独点按钮），
+    /// 完整节目单仍可用 E 键打开。</summary>
     private void ToggleEpgPanel()
     {
         _epgPanelManuallyOpen = !_epgPanelManuallyOpen;
         EpgPanel.Visibility = _epgPanelManuallyOpen ? Visibility.Visible : Visibility.Collapsed;
     }
-
-    private void BtnEpg_Click(object sender, RoutedEventArgs e) => ToggleEpgPanel();
 
     /// <summary>来源徽标：流地址 host 是字面 IP 时返回 IPV4/IPV6，域名返回 null（不编）。</summary>
     private static string? SourceBadge(string url)
@@ -2028,9 +2048,43 @@ public partial class MainWindow : Window
         if (_libvlc is null) return;
         var win = new ChannelWindow(_libvlc, _config.Volume, _config.NetworkCache) { Owner = this };
         _channelWindows.Add(win);
-        win.Closed += (_, _) => _channelWindows.Remove(win);
+        win.Closed += (_, _) =>
+        {
+            _channelWindows.Remove(win);
+            ResumeMainAfterNewWindow();
+        };
         win.Show();
         win.Play(ch);
+        // v1.4.35：新窗口一开，主窗口必须停——两个窗口同时播就是两个声音。
+        // 只在主窗口正在播时暂停；恢复由最后一个新窗口关闭时 ResumeMainAfterNewWindow 处理。
+        if (NewWindowPlayback.ShouldPauseMain(_player?.IsPlaying == true, _isPaused))
+        {
+            _player!.Pause();
+            _isPaused = true;
+            _pausedForNewWindow = true;
+            BtnPlayPause.Content = "▶";
+            FsPlayPause.Content = "▶";
+            PlayState.Text = "新窗口播放中，主窗口已暂停";
+            UpdatePauseOverlay();
+            AppLog.Info($"new window play [{ch.Name}]: main paused");
+        }
+    }
+
+    /// <summary>最后一个新窗口关闭：主窗口是被新窗口暂停的、用户中途没手动操作过暂停/
+    /// 播放，就恢复主窗口播放（同款逻辑见小窗关闭恢复主窗口）。手动停播后当前频道已清，
+    /// 不恢复。</summary>
+    private void ResumeMainAfterNewWindow()
+    {
+        if (!NewWindowPlayback.ShouldResumeMain(_pausedForNewWindow, _isPaused, _current != null, _channelWindows.Count)) return;
+        _pausedForNewWindow = false;
+        if (_player is null || _current is null) return;
+        _player.Play();
+        _isPaused = false;
+        BtnPlayPause.Content = "⏸";
+        FsPlayPause.Content = "⏸";
+        PlayState.Text = "播放中";
+        UpdatePauseOverlay();
+        AppLog.Info("new window closed: main resumed");
     }
 
     /// <summary>打开小窗播放指定频道；小窗模式下自动收起节目列表（侧栏）</summary>
@@ -2882,7 +2936,21 @@ public partial class MainWindow : Window
             if (menu == null) return;
             var hit = e.OriginalSource as DependencyObject;
             var item = hit != null ? ItemsControl.ContainerFromElement(ChannelList, hit) as ListBoxItem : null;
-            if (item?.Content is ChannelItem ch) ChannelList.SelectedItem = ch;
+            if (item?.Content is ChannelItem ch)
+            {
+                ChannelList.SelectedItem = ch;
+                // v1.4.35：右键菜单按选中台是否已隐藏，在“隐藏频道 / 显示频道”
+                // 之间只显示一个；“显示隐藏频道”勾选态与当前开关同步。
+                var isHidden = ChannelHiding.IsHidden(ch.Url, _config.HiddenChannels);
+                MiHideItem.Visibility = isHidden ? Visibility.Collapsed : Visibility.Visible;
+                MiUnhideItem.Visibility = isHidden ? Visibility.Visible : Visibility.Collapsed;
+            }
+            else
+            {
+                MiHideItem.Visibility = Visibility.Visible;
+                MiUnhideItem.Visibility = Visibility.Collapsed;
+            }
+            MiShowHiddenItem.IsChecked = _showHidden;
             menu.PlacementTarget = ChannelList;
             menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
             menu.IsOpen = true;
@@ -2903,22 +2971,33 @@ public partial class MainWindow : Window
         e.Handled = true;   // 阻止冒泡触发列表项选中/双击
     }
 
-    private void MiCopy_Click(object sender, RoutedEventArgs e)
-    {
-        if (ChannelList.SelectedItem is ChannelItem ch)
-        {
-            try { Clipboard.SetText(ch.Url); } catch (Exception ex) { AppLog.Error($"copy url failed: {ex.Message}"); }
-        }
-    }
-
-    /// <summary>隐藏当前频道（从列表移除，可恢复）</summary>
+    /// <summary>隐藏当前频道（从列表移除，可恢复：打开“显示隐藏频道”后对它点“显示频道”）</summary>
     private void MiHide_Click(object sender, RoutedEventArgs e)
     {
         if (ChannelList.SelectedItem is not ChannelItem ch) return;
-        if (!_config.HiddenChannels.Contains(ch.Url)) _config.HiddenChannels.Add(ch.Url);
+        ChannelHiding.Hide(_config.HiddenChannels, ch.Url);
         QueueSave();
         ApplyFilter();
         AppLog.Info($"hide channel [{ch.Name}]");
+    }
+
+    /// <summary>显示当前频道（取消隐藏；只对已隐藏的台显示这个菜单项）</summary>
+    private void MiUnhide_Click(object sender, RoutedEventArgs e)
+    {
+        if (ChannelList.SelectedItem is not ChannelItem ch) return;
+        if (!ChannelHiding.Unhide(_config.HiddenChannels, ch.Url)) return;
+        QueueSave();
+        ApplyFilter();
+        AppLog.Info($"unhide channel [{ch.Name}]");
+    }
+
+    /// <summary>显示/隐藏“已隐藏频道”开关：勾上后已隐藏的台重新出现在列表里（带“已隐藏”标记），
+    /// 再右键点“显示频道”取消隐藏；不勾时隐藏的台不在列表里。</summary>
+    private void MiShowHidden_Click(object sender, RoutedEventArgs e)
+    {
+        _showHidden = MiShowHiddenItem.IsChecked == true;
+        ApplyFilter();
+        AppLog.Info($"show hidden channels: {_showHidden}");
     }
 
     private void SortByNumber_Click(object sender, RoutedEventArgs e)

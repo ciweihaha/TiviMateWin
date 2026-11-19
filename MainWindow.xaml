@@ -149,8 +149,6 @@
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,0,12,10">
                     <Button Style="{StaticResource ToolBtn}" Content="网盘" Click="BtnCloud_Click"
                             ToolTip="浏览 OpenList 网盘里的视频并播放"/>
-                    <Button Style="{StaticResource ToolBtn}" Content="节目单" Click="BtnEpg_Click"
-                            ToolTip="打开/关闭节目单（E）"/>
                 </StackPanel>
 
                 <Grid DockPanel.Dock="Top" Margin="12,0,12,8">
@@ -218,16 +216,17 @@
                             Click="BtnAdd_Click"/>
                 </StackPanel>
 
-                <DockPanel DockPanel.Dock="Top" Margin="12,0,12,8">
+                <!-- v1.4.35：分组下拉框直接挂在频道列表头上（数量 + 分类 + 管理同一行），
+                     不再单独占一行贴在“源列表”下面——用户以为那是源列表的分类。 -->
+                <DockPanel DockPanel.Dock="Top" Margin="12,0,12,6">
                     <Button DockPanel.Dock="Right" Content="管理" Width="44" Height="30" Margin="6,0,0,0"
                             Background="{DynamicResource BtnBgBrush}" Foreground="{DynamicResource BtnFgBrush}" BorderThickness="0" Cursor="Hand"
                             FontSize="11" Click="BtnManageGroups_Click" ToolTip="分组管理"/>
+                    <TextBlock x:Name="CountText" Text="0 个频道" DockPanel.Dock="Left"
+                               Foreground="{DynamicResource MutedFgBrush}" FontSize="12" Margin="2,0,8,0" VerticalAlignment="Center"/>
                     <ComboBox x:Name="GroupCombo" Height="30" Background="{DynamicResource PanelBgBrush}" Foreground="{DynamicResource InputFgBrush}"
-                              SelectionChanged="GroupCombo_SelectionChanged"/>
+                              SelectionChanged="GroupCombo_SelectionChanged" ToolTip="按分组筛选频道"/>
                 </DockPanel>
-
-                <TextBlock x:Name="CountText" DockPanel.Dock="Top" Text="0 个频道"
-                           Foreground="{DynamicResource MutedFgBrush}" FontSize="12" Margin="14,2,12,6"/>
 
                 <Grid Margin="4,0,4,6">
                     <ListBox x:Name="ChannelList" Background="Transparent" BorderThickness="0"
@@ -242,8 +241,15 @@
                             <MenuItem Header="小窗播放" Click="MiPip_Click"/>
                             <MenuItem Header="新窗口播放" Click="MiNewWin_Click"/>
                             <MenuItem Header="收藏 / 取消收藏" Click="MiFavorite_Click"/>
-                            <MenuItem Header="隐藏频道" Click="MiHide_Click"/>
-                            <MenuItem Header="复制频道地址" Click="MiCopy_Click"/>
+                            <!-- v1.4.35：隐藏的频道必须能找回来。右键时按选中台是否已隐藏，
+                                 在“隐藏频道 / 显示频道”之间只显示一个（见
+                                 ChannelList_PreviewMouseRightButtonUp）；“显示隐藏频道”
+                                 勾上后，已隐藏的台重新出现在列表里（带“已隐藏”标记），
+                                 再对它点“显示频道”取消隐藏。没有这开关时隐藏的台永远
+                                 不在列表里，右键也就无从点起——BBC 藏了就找不回来。 -->
+                            <MenuItem x:Name="MiHideItem" Header="隐藏频道" Click="MiHide_Click"/>
+                            <MenuItem x:Name="MiUnhideItem" Header="显示频道" Click="MiUnhide_Click" Visibility="Collapsed"/>
+                            <MenuItem x:Name="MiShowHiddenItem" Header="显示隐藏频道" IsCheckable="True" Click="MiShowHidden_Click"/>
                             <Separator/>
                             <!-- 2026-11-05 第 2 轮：排序由二级子菜单拍平为一级菜单项，少一次悬停展开；
                                  名称、勾选态、点击处理均不变，不改排序逻辑、不改分组逻辑。 -->
@@ -289,6 +295,22 @@
                                 <TextBlock Text="{Binding Group}" Foreground="{DynamicResource ItemSubFgBrush}" FontSize="11"
                                            VerticalAlignment="Center" MaxWidth="80" Margin="6,0,0,0"
                                            TextTrimming="CharacterEllipsis" DockPanel.Dock="Right" ToolTip="{Binding Group}"/>
+                                <!-- v1.4.35：已隐藏标记——打开“显示隐藏频道”时，已隐藏的台重新出现，
+                                     行尾带这个标记，再右键“显示频道”取消隐藏。 -->
+                                <TextBlock Text="已隐藏" Foreground="#FFFF8A65" FontSize="11"
+                                           VerticalAlignment="Center" Margin="6,0,0,0"
+                                           DockPanel.Dock="Right">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsHidden}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                                 <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ItemFgBrush}" FontSize="13"
                                            Margin="0,0,6,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
                             </DockPanel>
