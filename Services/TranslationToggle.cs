@@ -14,7 +14,7 @@ public static class TranslationToggle
     /// <summary>按一次开关：返回（新的总开关，新的手动强制）。</summary>
     public static (bool MasterEnabled, bool? ForceOverride) Cycle(bool masterEnabled, bool? forceOverride)
     {
-        var next = forceOverride switch
+        bool? next = forceOverride switch
         {
             null => true,
             true => false,
