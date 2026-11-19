@@ -124,8 +124,10 @@ function Get-PhysicalScreenSize {
 function Invoke-MouseClick {
     param([int]$X, [int]$Y)
     $sz = Get-PhysicalScreenSize; $sw = $sz[0]; $sh = $sz[1]
-    $ax = [uint]([Math]::Min(65535, [Math]::Max(0, $X * 65535 / $sw)))
-    $ay = [uint]([Math]::Min(65535, [Math]::Max(0, $Y * 65535 / $sh)))
+    # 注意：[Math]::Min/Max 在 int/double 混用时会找不到重载、静默返回空值，
+    # 导致 mouse_event 落到 (0,0)。一律用 double 字面量，避免重载歧义。
+    $ax = [uint32][Math]::Min(65535.0, [Math]::Max(0.0, $X * 65535.0 / $sw))
+    $ay = [uint32][Math]::Min(65535.0, [Math]::Max(0.0, $Y * 65535.0 / $sh))
     [Win32]::mouse_event(0x8001, $ax, $ay, 0, [UIntPtr]::Zero)  # MOVE | ABSOLUTE
     Start-Sleep -Milliseconds 120
     [Win32]::mouse_event(0x0002, $ax, $ay, 0, [UIntPtr]::Zero)  # LEFTDOWN
@@ -136,8 +138,8 @@ function Invoke-MouseClick {
 function Invoke-MouseRightClick {
     param([int]$X, [int]$Y)
     $sz = Get-PhysicalScreenSize; $sw = $sz[0]; $sh = $sz[1]
-    $ax = [uint]([Math]::Min(65535, [Math]::Max(0, $X * 65535 / $sw)))
-    $ay = [uint]([Math]::Min(65535, [Math]::Max(0, $Y * 65535 / $sh)))
+    $ax = [uint32][Math]::Min(65535.0, [Math]::Max(0.0, $X * 65535.0 / $sw))
+    $ay = [uint32][Math]::Min(65535.0, [Math]::Max(0.0, $Y * 65535.0 / $sh))
     [Win32]::mouse_event(0x8001, $ax, $ay, 0, [UIntPtr]::Zero)
     Start-Sleep -Milliseconds 120
     [Win32]::mouse_event(0x0008, $ax, $ay, 0, [UIntPtr]::Zero)  # RIGHTDOWN
@@ -421,8 +423,9 @@ if ($null -eq $combo) {
     try {
         $wei = Find-DropdownItem -Want '卫视频道'
         if ($null -ne $wei) {
-            $sip = $wei.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-            $sip.Select()
+            # 定制下拉项不支持 SelectionItemPattern，改鼠标点它
+            $wr = $wei.Current.BoundingRectangle
+            Invoke-MouseClick -X ([int]($wr.X + $wr.Width / 2)) -Y ([int]($wr.Y + $wr.Height / 2))
             Start-Sleep -Seconds 2
             $countWei = Get-CountText
             $selName = Get-ComboValue
@@ -435,8 +438,8 @@ if ($null -eq $combo) {
             # 选回「全部」
             $allItem = Find-DropdownItem -Want '全部'
             if ($null -ne $allItem) {
-                $sip2 = $allItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-                $sip2.Select()
+                $ar = $allItem.Current.BoundingRectangle
+                Invoke-MouseClick -X ([int]($ar.X + $ar.Width / 2)) -Y ([int]($ar.Y + $ar.Height / 2))
                 Start-Sleep -Seconds 2
                 $countBack = Get-CountText
                 if ($countBack -eq $countAll) {
@@ -1023,7 +1026,8 @@ if ($null -ne $sw4) {
                 }
                 $light = $items4 | Where-Object { (Get-ElementText $_) -eq '浅色' } | Select-Object -First 1
                 if ($null -ne $light) {
-                    $light.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+                    $lr = $light.Current.BoundingRectangle
+                    Invoke-MouseClick -X ([int]($lr.X + $lr.Width / 2)) -Y ([int]($lr.Y + $lr.Height / 2))
                     Start-Sleep -Seconds 2
                     $shotK4a = Take-Shot -Name 'K04-theme-light'
                     $beforeK4b = @()
@@ -1036,7 +1040,8 @@ if ($null -ne $sw4) {
                     }
                     $dark = $items4b | Where-Object { (Get-ElementText $_) -eq '深色' } | Select-Object -First 1
                     if ($null -ne $dark) {
-                        $dark.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+                        $dr = $dark.Current.BoundingRectangle
+                        Invoke-MouseClick -X ([int]($dr.X + $dr.Width / 2)) -Y ([int]($dr.Y + $dr.Height / 2))
                         Start-Sleep -Seconds 2
                         $shotK4b = Take-Shot -Name 'K04-theme-dark'
                         $k04ok = ($null -ne (Get-TmwWindow))
