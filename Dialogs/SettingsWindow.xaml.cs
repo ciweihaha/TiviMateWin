@@ -61,12 +61,17 @@ public partial class SettingsWindow : Window
             "All" => "全部台",
             _ => "仅英语台",
         });
-        // v1.4.33：翻译方式（本地模型 / 免费接口）+ Cloudflare 凭据。
-        SelectCombo(LiveSubtitleBackendCombo, config.LiveSubtitleTranslatorBackend == "FreeApi"
-            ? "免费接口（Cloudflare）" : "本地模型");
+        // v1.4.33 重构：翻译服务商（微软 Azure / 谷歌 / Cloudflare）+ 免费接口凭据。
+        SelectCombo(LiveSubtitleProviderCombo, config.FreeApiProvider switch
+        {
+            "Google" => "谷歌（免费）",
+            "Cloudflare" => "Cloudflare（免费）",
+            _ => "微软 Azure（免费）",
+        });
+        FreeApiKeyBox.Password = config.FreeApiKey ?? "";
+        AzureRegionBox.Text = config.AzureRegion ?? "";
         CloudflareAccountIdBox.Text = config.CloudflareAccountId ?? "";
         CloudflareApiTokenBox.Password = config.CloudflareApiToken ?? "";
-        LiveSubtitleModelBox.Text = config.LiveSubtitleModel ?? "";
 
         // Xtream
         XtreamServerBox.Text = config.XtreamServer ?? "";
@@ -159,15 +164,18 @@ public partial class SettingsWindow : Window
             "全部台" => "All",
             _ => "EnglishOnly",
         };
-        // v1.4.33：翻译方式 + Cloudflare 凭据（令牌经 AppConfig.Save DPAPI 加密落盘）。
-        _config.LiveSubtitleTranslatorBackend =
-            (LiveSubtitleBackendCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() == "免费接口（Cloudflare）"
-                ? "FreeApi" : "Local";
+        // v1.4.33 重构：翻译服务商 + 免费接口凭据（Key/令牌经 AppConfig.Save DPAPI 加密落盘）。
+        _config.FreeApiProvider =
+            (LiveSubtitleProviderCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() switch
+            {
+                "谷歌（免费）" => "Google",
+                "Cloudflare（免费）" => "Cloudflare",
+                _ => "Azure",
+            };
+        _config.FreeApiKey = FreeApiKeyBox.Password;
+        _config.AzureRegion = AzureRegionBox.Text.Trim();
         _config.CloudflareAccountId = CloudflareAccountIdBox.Text.Trim();
         _config.CloudflareApiToken = CloudflareApiTokenBox.Password;
-        var subtitleModel = LiveSubtitleModelBox.Text.Trim();
-        _config.LiveSubtitleModel = subtitleModel.Length > 0
-            ? subtitleModel : "qwen2.5-1.5b-instruct-q4_k_m.gguf";
 
         var server = XtreamServerBox.Text.Trim();
         _config.XtreamServer = server;

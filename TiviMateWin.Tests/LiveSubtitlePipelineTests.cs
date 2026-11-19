@@ -164,30 +164,6 @@ public class LiveSubtitlePipelineTests
     }
 
     [Fact]
-    public async Task Pipeline_TranslatorBroken_RaisesEventAndStops()
-    {
-        var broken = new TaskCompletionSource();
-        var emitted = 0;
-        var pipeline = new LiveSubtitlePipeline(
-            transcribe: (_, _) => Task.FromResult<string?>("hello"),
-            translate: (_, _) => Task.FromResult<string?>("你好"),
-            isTranslatorBroken: () => true);
-        pipeline.TranslatorBroken += () => broken.TrySetResult();
-        pipeline.SubtitleReady += _ => Interlocked.Increment(ref emitted);
-        pipeline.Start();
-        pipeline.EnqueueWindow(LoudWindow());
-        await Task.WhenAny(broken.Task, Task.Delay(5000));
-        // 熔断后不再出字幕：再喂两窗，等一会儿，计数不应再涨。
-        var countAfterBreak = emitted;
-        pipeline.EnqueueWindow(LoudWindow());
-        pipeline.EnqueueWindow(LoudWindow());
-        await Task.Delay(800);
-        pipeline.Stop();
-        Assert.True(broken.Task.IsCompleted, "翻译熔断应触发 TranslatorBroken 事件");
-        Assert.Equal(countAfterBreak, emitted);
-    }
-
-    [Fact]
     public async Task Pipeline_EndToEndLatency_Recorded()
     {
         var done = new TaskCompletionSource();

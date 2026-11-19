@@ -12,21 +12,15 @@ namespace TiviMateWin.Services;
 /// 720 请求/分钟，字幕 1.5 秒一窗远远够用。听写（Whisper tiny.en）仍在本地，只换翻译这步。
 /// 翻译还是只翻英语（EnglishOnly 逻辑在 MainWindow 的 TranslationActive 里，见
 /// ChannelLanguage；本类只负责把英文翻成中文）。任何失败返回 null（不抛异常），
-/// 调用方回落本地模型或跳过该行（显示英文原文）。
+/// 调用方只跳过该行（显示英文原文）。本地大模型已删掉（用户 10:36：效果不好）。
 /// 注意：m2m100 对多句输入只翻其中一句——字幕行本来就是单句短句，不受影响。
 /// </summary>
-public sealed class CloudflareTranslator
+public sealed class CloudflareTranslator : IFreeApiTranslator
 {
     /// <summary>翻译模型（Workers AI 上的 M2M-100，100+ 语言互译）。</summary>
     public const string ModelId = "@cf/meta/m2m100-1.2b";
 
-    /// <summary>翻译后端取值：本地模型。</summary>
-    public const string BackendLocal = "Local";
-
-    /// <summary>翻译后端取值：免费接口（Cloudflare Workers AI）。</summary>
-    public const string BackendFreeApi = "FreeApi";
-
-    /// <summary>单行接口超时（秒）：字幕是实时的，等太久不如跳过该行/回落本地。</summary>
+    /// <summary>单行接口超时（秒）：字幕是实时的，等太久不如跳过该行。</summary>
     public const int DefaultTimeoutSeconds = 8;
 
     private const int MaxCacheEntries = 500;
@@ -39,12 +33,9 @@ public sealed class CloudflareTranslator
     private readonly Dictionary<string, string> _cache = new(StringComparer.Ordinal);
     private readonly Queue<string> _order = new();
     private readonly object _cacheGate = new();
+    private bool _disposed;
 
-    /// <summary>后端取值归一化：非法/空值回落本地模型。</summary>
-    public static string NormalizeBackend(string? backend) =>
-        string.Equals(backend, BackendFreeApi, StringComparison.OrdinalIgnoreCase)
-            ? BackendFreeApi
-            : BackendLocal;
+    public string ProviderName => "Cloudflare";
 
     /// <summary>Workers AI REST 地址（REST 调用无需建 Worker，直调即可）。</summary>
     public static string BuildUrl(string accountId) =>
@@ -92,7 +83,7 @@ public sealed class CloudflareTranslator
 
     /// <summary>
     /// 英翻中：先查缓存（重复台词不重复调接口，省额度也省延迟）；8 秒超时、
-    /// HTTP 失败、success=false 一律返回 null（调用方回落本地或跳过该行）。
+    /// HTTP 失败、success=false 一律返回 null（调用方跳过该行，显示英文原文）。
     /// 空文本返回 ""，含中文返回原文（不调接口）。
     /// </summary>
     public async Task<string?> TranslateAsync(string english, CancellationToken ct)
@@ -143,7 +134,7 @@ public sealed class CloudflareTranslator
         }
         catch (OperationCanceledException)
         {
-            // 超时/取消：当作本行失败，调用方回落或跳过。
+            // 超时/取消：当作本行失败，调用方跳过该行。
             return null;
         }
     }
@@ -153,5 +144,12 @@ public sealed class CloudflareTranslator
         foreach (var c in s)
             if (c is >= '\u4E00' and <= '\u9FFF') return true;
         return false;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        if (_ownsHttp) _http.Dispose();
     }
 }

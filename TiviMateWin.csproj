@@ -40,16 +40,13 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="11.0.0" />
     <!-- 第 4 轮 R4-E：SVG 台标光栅化（WPF 的 BitmapImage 解不了 SVG） -->
     <PackageReference Include="Svg.Skia" Version="5.2.3" />
-    <!-- 直播实时字幕（听写+翻译）：Whisper.NET 本地语音识别 + NAudio 音频回放
+    <!-- 直播实时字幕（听写）：Whisper.NET 本地语音识别 + NAudio 音频回放
          （LibVLC 音频回调接管输出后，声音须由应用自己播出）。Whisper.net.Runtime
          是原生运行时，缺了它编译过、运行时加载失败。
-         翻译改进程内推理（v2）：LLamaSharp + Backend.Cpu（llama.cpp 原生库），
-         加载 Qwen2.5-1.5B-Instruct GGUF，不再走 Ollama HTTP。 -->
+         翻译已改走免费接口（v1.4.33 重构），本地大模型与 LLamaSharp 已删掉。 -->
     <PackageReference Include="Whisper.net" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
     <PackageReference Include="NAudio" Version="3.3.0" />
-    <PackageReference Include="LLamaSharp" Version="0.30.0" />
-    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.30.0" />
   </ItemGroup>
 
   <!-- 主题资源字典：不作为 Page 编译进程序集，而是作为 Content 复制到输出目录，运行时按相对路径加载 -->

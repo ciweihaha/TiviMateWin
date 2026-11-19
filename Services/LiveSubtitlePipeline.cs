@@ -14,8 +14,8 @@ public sealed record LiveSubtitleLine(string English, string Chinese, DateTimeOf
 /// 窗（等窗满）+ 听写 + 翻译（不含排队等待）。两级之间用有界队列交接，
 /// 满时丢最旧（直播追新不追旧，宁可丢窗也不积压出越来越慢的字幕）；
 /// 每级串行、FIFO，字幕顺序天然保持。
-/// 任何一步失败只记日志、当窗跳过，永不挡播放；翻译熔断由调用方通过
-/// isTranslatorBroken 传入，触发后整条流水线停掉（TranslatorBroken 事件）。
+/// 任何一步失败只记日志、当窗跳过，永不挡播放；翻译失败只跳过该行（显示英文原文），
+/// 不停字幕（v1.4.33 重构：本地翻译熔断已随本地大模型一起删掉）。
 /// </summary>
 public sealed class LiveSubtitlePipeline : IDisposable
 {
@@ -25,7 +25,6 @@ public sealed class LiveSubtitlePipeline : IDisposable
     private readonly Func<short[], CancellationToken, Task<string?>> _transcribe;
     private readonly Func<string, CancellationToken, Task<string?>> _translate;
     private readonly Func<short[], bool> _isSilent;
-    private readonly Func<bool>? _isTranslatorBroken;
 
     private readonly Channel<TranscribeItem> _transcribeChannel;
     private readonly Channel<TranslateItem> _translateChannel;
@@ -42,9 +41,6 @@ public sealed class LiveSubtitlePipeline : IDisposable
 
     /// <summary>新字幕就绪（后台线程触发，调用方自行切回 UI 线程）。</summary>
     public event Action<LiveSubtitleLine>? SubtitleReady;
-
-    /// <summary>翻译熔断：流水线已停，调用方应停掉字幕、播放继续。</summary>
-    public event Action? TranslatorBroken;
 
     /// <summary>已入队的窗口数（含被丢弃的）。</summary>
     public long WindowsReceived => Interlocked.Read(ref _received);
@@ -70,13 +66,11 @@ public sealed class LiveSubtitlePipeline : IDisposable
     public LiveSubtitlePipeline(
         Func<short[], CancellationToken, Task<string?>> transcribe,
         Func<string, CancellationToken, Task<string?>> translate,
-        Func<short[], bool>? isSilent = null,
-        Func<bool>? isTranslatorBroken = null)
+        Func<short[], bool>? isSilent = null)
     {
         _transcribe = transcribe;
         _translate = translate;
         _isSilent = isSilent ?? (w => LiveSubtitleChunker.IsSilent(w));
-        _isTranslatorBroken = isTranslatorBroken;
         _transcribeChannel = Channel.CreateBounded<TranscribeItem>(new BoundedChannelOptions(QueueCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
@@ -160,13 +154,6 @@ public sealed class LiveSubtitlePipeline : IDisposable
                 var chinese = await _translate(item.English, ct).ConfigureAwait(false);
                 sw.Stop();
                 LastTranslateMs = sw.ElapsedMilliseconds;
-                if (_isTranslatorBroken?.Invoke() == true)
-                {
-                    // 熔断：推理连续失败，字幕停掉、播放继续。
-                    TranslatorBroken?.Invoke();
-                    Stop();
-                    return;
-                }
                 Interlocked.Increment(ref _translated);
                 LastEndToEndMs = (long)(DateTimeOffset.UtcNow - item.EnqueuedAt).TotalMilliseconds;
                 SubtitleReady?.Invoke(new LiveSubtitleLine(

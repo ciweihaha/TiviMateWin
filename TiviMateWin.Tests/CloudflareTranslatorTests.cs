@@ -11,7 +11,7 @@ namespace TiviMateWin.Tests;
 
 /// <summary>Cloudflare 免费接口翻译测试（v1.4.33）：Workers AI @cf/meta/m2m100-1.2b。
 /// 覆盖：响应解析（成功/失败/缺字段/非法 JSON）、请求地址与请求体、缓存、
-/// HTTP 失败与超时返回 null（不抛异常，调用方回落本地或跳过该行）、后端归一化。</summary>
+/// HTTP 失败与超时返回 null（不抛异常，调用方只跳过该行）。</summary>
 public class CloudflareTranslatorTests
 {
     private sealed class FakeHandler : HttpMessageHandler
@@ -187,16 +187,5 @@ public class CloudflareTranslatorTests
         Assert.Equal("你好世界", await t.TranslateAsync("你好世界", CancellationToken.None));
         Assert.Equal("", await t.TranslateAsync("   ", CancellationToken.None));
         Assert.Equal(0, calls);
-    }
-
-    [Fact]
-    public void NormalizeBackend_BadValue_FallsBackToLocal()
-    {
-        Assert.Equal("Local", CloudflareTranslator.NormalizeBackend(null));
-        Assert.Equal("Local", CloudflareTranslator.NormalizeBackend(""));
-        Assert.Equal("Local", CloudflareTranslator.NormalizeBackend("Groq"));
-        Assert.Equal("FreeApi", CloudflareTranslator.NormalizeBackend("FreeApi"));
-        Assert.Equal("FreeApi", CloudflareTranslator.NormalizeBackend("freeapi"));
-        Assert.Equal("Local", CloudflareTranslator.BackendLocal);
     }
 }

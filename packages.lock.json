@@ -11,26 +11,6 @@
           "LibVLCSharp": "3.10.2"
         }
       },
-      "LLamaSharp": {
-        "type": "Direct",
-        "requested": "[0.30.0, )",
-        "resolved": "0.30.0",
-        "contentHash": "kH7o9VqvQoFvqm167iWITcKEX8QKo6XFyDRlvLxU+xdyBwKYHkAed9btIEkeSN/okF+bJS1yzQmzSz28Xi468w==",
-        "dependencies": {
-          "CommunityToolkit.HighPerformance": "8.4.2",
-          "Microsoft.Bcl.AsyncInterfaces": "10.0.13",
-          "Microsoft.Bcl.Memory": "10.0.13",
-          "Microsoft.Extensions.AI.Abstractions": "10.11.0",
-          "System.Linq.Async": "7.0.1",
-          "System.Numerics.Tensors": "10.0.13"
-        }
-      },
-      "LLamaSharp.Backend.Cpu": {
-        "type": "Direct",
-        "requested": "[0.30.0, )",
-        "resolved": "0.30.0",
-        "contentHash": "6j8qUfsVmNwTWBoLUVij//EptyoGZpwwjTSPHBOzehIyinnk6QKtwg5/+2aOWNh5rXkbpPUuuQYchW36UTM5ig=="
-      },
       "NAudio": {
         "type": "Direct",
         "requested": "[3.3.0, )",
@@ -90,11 +70,6 @@
           "Whisper.net.Runtime.Metal": "1.9.1"
         }
       },
-      "CommunityToolkit.HighPerformance": {
-        "type": "Transitive",
-        "resolved": "8.4.2",
-        "contentHash": "2hmtrrU18x6NL3mbuAqwy0KpnoEEJOuK6sH5RKQfD/jHijn2pqvqBUC7WGy9dgNBL9BDA7eOC0kirsNPMp2f4Q=="
-      },
       "ExCSS": {
         "type": "Transitive",
         "resolved": "4.3.1",
@@ -129,20 +104,10 @@
         "resolved": "3.10.2",
         "contentHash": "WNLHBIK5QcOH0kNGBGupKC9Ds3hksPthHyp6ueE8zG5Hy/6EBwAU0BbMqukBCdLatCOY+V9DYHDwSVSXSmPGSA=="
       },
-      "Microsoft.Bcl.AsyncInterfaces": {
-        "type": "Transitive",
-        "resolved": "10.0.13",
-        "contentHash": "PEC80XidOaP1vyHWiSIOHOfh6MpkFln/gkLXKaSmjrAdBSwcAaowvOaVBKvnb+HAb2UTGrZqROajIKMVFu2jdw=="
-      },
-      "Microsoft.Bcl.Memory": {
-        "type": "Transitive",
-        "resolved": "10.0.13",
-        "contentHash": "AOGTKbd+0Xzi/ZsU1n6TwHJqcZqVVRg1iLLNh+D2mQ3++lIRGcuSfH+TYosuqCo3259s0giL+mFJ2rxAf+xDSQ=="
-      },
       "Microsoft.Extensions.AI.Abstractions": {
         "type": "Transitive",
-        "resolved": "10.11.0",
-        "contentHash": "h4DX/TdJU4fk1GGaf19n6Kujkj6VXbGeL4UEOsQ8+ZJC5fVApPauokCtvBP684BYbczUYZQNfo1mbmyHG4WVSg=="
+        "resolved": "10.2.0",
+        "contentHash": "ONGlIBht0ygEdKc0bCt9XWUiq19/460dAu7fCKzPM34OFJSMQIohEDTJwjCJ8vVp8znNakloc9xFF9+R/eDCYQ=="
       },
       "NAudio.Core": {
         "type": "Transitive",
@@ -239,23 +204,10 @@
           "Svg.Model": "5.2.3"
         }
       },
-      "System.Interactive.Async": {
-        "type": "Transitive",
-        "resolved": "7.0.1",
-        "contentHash": "oL1iox7sAJL8i+muGzVMQjDB0axQgOoT5CkwYdap8cQJMkWDWMRErNqhOcZkn31+aKr/uCfgMEdhUARCU4G7gg=="
-      },
-      "System.Linq.Async": {
-        "type": "Transitive",
-        "resolved": "7.0.1",
-        "contentHash": "gwQtBHVY/WgqWgAYSe4JspXR+f1FvMbVIW4ixsJpGV/Kj8Nun3zp1ajIdvCWfmac8ektJGVLiJ/OR8JU9nZnMg==",
-        "dependencies": {
-          "System.Interactive.Async": "7.0.1"
-        }
-      },
       "System.Numerics.Tensors": {
         "type": "Transitive",
-        "resolved": "10.0.13",
-        "contentHash": "E4JC7KcY4j1yx9uy8tVsHlGThnwLdUWtUz6aLHCqbN/jbtwbwbZgnVEF9atUr/7ynFCbo8Rbij056Y9bWM9ALg=="
+        "resolved": "9.0.0",
+        "contentHash": "hyJB4UlpAi19Xr9AXzu2NuagKC4lPfHObNMEAA0HmqFz2rX7wKgzeYzO/jM/eBHDhnUGFFEjk5cOoJaxqg5J4A=="
       },
       "Whisper.net.Runtime.Metal": {
         "type": "Transitive",

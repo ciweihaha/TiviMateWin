@@ -34,21 +34,24 @@ public class AppConfig
     // 直播实时字幕翻译范围（v1.4.33）：Off=关闭 / EnglishOnly=仅英语台（默认）/ All=全部台。
     // 只翻英语：Whisper 用 tiny.en，本来也只认英语；法语/德语/日语等不翻译。
     public string LiveSubtitleTranslationMode { get; set; } = ChannelLanguage.DefaultMode;
-    // 直播实时字幕翻译后端（v1.4.33）：Local=本机 Qwen 模型（默认）/ FreeApi=免费接口
-    // （Cloudflare Workers AI 免费层，@cf/meta/m2m100-1.2b）。听写仍在本地，只换翻译这步。
-    public string LiveSubtitleTranslatorBackend { get; set; } = CloudflareTranslator.BackendLocal;
-    // 免费接口凭据（v1.4.33）：CF 账号 ID + API 令牌（令牌需 Workers AI 权限）；
+    // 直播实时字幕翻译服务商（v1.4.33 重构）：Azure=微软（默认，免费额度最大）/
+    // Google=谷歌 / Cloudflare。翻译只走免费接口，本地大模型已删掉
+    // （用户 10:36：效果不好）。听写仍在本地，只换翻译这步。
+    public string FreeApiProvider { get; set; } = FreeApiTranslatorFactory.DefaultProvider;
+    // 免费接口 Key（Azure / 谷歌用；DPAPI 加密存储，与 Xtream 密码同款，日志里绝不出现）。
+    public string? FreeApiKey { get; set; }
+    // Azure 区域（可选，如 eastasia；不填不发区域头）。
+    public string? AzureRegion { get; set; }
+    // 免费接口凭据（Cloudflare 服务商用）：CF 账号 ID + API 令牌（令牌需 Workers AI 权限）；
     // 令牌 DPAPI 加密存储（与 Xtream/OpenList 密码同款），日志里绝不出现。
     public string? CloudflareAccountId { get; set; }
     public string? CloudflareApiToken { get; set; }
     public bool LiveSubtitleShowEnglish { get; set; } = true;  // 字幕条同时显示英文原文
-    public string LiveSubtitleModel { get; set; } = "qwen2.5-1.5b-instruct-q4_k_m.gguf";
     public string LiveSubtitleWhisperModel { get; set; } = "ggml-tiny.en.bin"; // 听写模型文件名；tiny.en 更快（base.en 在台式机上 3 秒窗要 5–6 秒，队列一满端到端就到 10 秒），base.en 更准、可配回
     public double LiveSubtitleWindowSeconds { get; set; } = 1.5; // 切块窗口（秒），1–10；1.5 秒是延迟与质量的平衡点（UnBox 同款默认）
-    // 两级流水线分核（0=自动：留 1 核给播放与界面，其余按 2:1 分给听写与翻译；
-    // >0 手动指定，云电脑上改 config.json 就能调，不用重编）。
+    // 听写分核（0=自动：留 1 核给播放与界面，其余给听写；>0 手动指定，
+    // 云电脑上改 config.json 就能调，不用重编）。
     public int LiveSubtitleTranscribeThreads { get; set; } = 0;
-    public int LiveSubtitleTranslateThreads { get; set; } = 0;
     // 串行管线：听写与翻译同一线程依次跑，各用全部核（留 1 核给播放与界面）；
     // false=两级流水线（听写与翻译分核并行）。改了需重建服务（重开字幕开关）才生效。
     public bool LiveSubtitleSerial { get; set; } = true; // 串行（听写→翻译依次跑，各用全核）；第三轮实测比两级流水线更快更稳
@@ -343,8 +346,19 @@ public class AppConfig
             cfg.LiveSubtitleWindowSeconds = Math.Clamp(cfg.LiveSubtitleWindowSeconds, 1, 10);
             // v1.4.33：翻译模式非法/空值回落默认（仅英语台），旧配置缺字段时也是默认。
             cfg.LiveSubtitleTranslationMode = ChannelLanguage.NormalizeMode(cfg.LiveSubtitleTranslationMode);
-            // v1.4.33：翻译后端非法/空值回落本地模型。
-            cfg.LiveSubtitleTranslatorBackend = CloudflareTranslator.NormalizeBackend(cfg.LiveSubtitleTranslatorBackend);
+            // v1.4.33 重构：翻译服务商非法/空值回落 Azure（默认）。旧版无此字段时也是默认。
+            cfg.FreeApiProvider = FreeApiTranslatorFactory.NormalizeProvider(cfg.FreeApiProvider);
+            try
+            {
+                cfg.FreeApiKey = DecryptSecret(cfg.FreeApiKey); // 解密 Key（与 Xtream 同款）
+            }
+            catch (InvalidOperationException)
+            {
+                cfg.FreeApiKey = null;
+                var msg = "免费接口 Key 无法解密，已清空，请重新输入后保存。";
+                LastLoadError = LastLoadError == null ? msg : LastLoadError + " " + msg;
+                AppLog.Error("免费接口 Key 解密失败，已清空，需重新输入（日志中不记录 Key 或密文）。");
+            }
             try
             {
                 cfg.CloudflareApiToken = DecryptSecret(cfg.CloudflareApiToken); // 解密令牌（与 Xtream 同款）
@@ -357,7 +371,6 @@ public class AppConfig
                 AppLog.Error("Cloudflare 令牌解密失败，已清空，需重新输入（日志中不记录令牌或密文）。");
             }
             cfg.LiveSubtitleTranscribeThreads = Math.Clamp(cfg.LiveSubtitleTranscribeThreads, 0, 16);
-            cfg.LiveSubtitleTranslateThreads = Math.Clamp(cfg.LiveSubtitleTranslateThreads, 0, 16);
             return cfg;
         }
         catch (JsonException ex)
@@ -459,9 +472,11 @@ public class AppConfig
             var plain = XtreamPassword;
             var plainOl = OpenListPassword;
             var plainCf = CloudflareApiToken;
+            var plainKey = FreeApiKey;
             string? encXtream;
             string? encOl;
             string? encCf;
+            string? encKey;
             try
             {
                 encXtream = !string.IsNullOrEmpty(plain) && !plain.StartsWith("DPAPI:", StringComparison.Ordinal)
@@ -470,6 +485,8 @@ public class AppConfig
                     ? EncryptSecret(plainOl) : plainOl;
                 encCf = !string.IsNullOrEmpty(plainCf) && !plainCf.StartsWith("DPAPI:", StringComparison.Ordinal)
                     ? EncryptSecret(plainCf) : plainCf;
+                encKey = !string.IsNullOrEmpty(plainKey) && !plainKey.StartsWith("DPAPI:", StringComparison.Ordinal)
+                    ? EncryptSecret(plainKey) : plainKey;
             }
             catch (Exception ex)
             {
@@ -496,6 +513,7 @@ public class AppConfig
                     XtreamPassword = encXtream;
                     OpenListPassword = encOl;
                     CloudflareApiToken = encCf;
+                    FreeApiKey = encKey;
                     // 纵深防御：序列化前剥离 Playlists[].Url 中的凭据参数，仅影响落盘内容。
                     if (Playlists != null)
                     {
@@ -539,6 +557,7 @@ public class AppConfig
                     XtreamPassword = plain; // 恢复明文，供本次会话继续使用（成功、失败都执行）
                     OpenListPassword = plainOl; // 同上
                     CloudflareApiToken = plainCf; // 同上（v1.4.33）
+                    FreeApiKey = plainKey; // 同上
                     // 第 4 轮 R4-B：从快照字典的键恢复，不再枚举正在被 UI 线程修改的
                     // Playlists 列表——旧代码枚举活列表，恢复中途也可能抛
                     // InvalidOperationException（注释里承认了这一点）；快照字典是本轮

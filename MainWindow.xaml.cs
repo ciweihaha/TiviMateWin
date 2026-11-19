@@ -2446,22 +2446,22 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 设置保存后应用实时字幕开关：开→建服务，重播当前频道让音频回调生效；
-    /// 关→停服务、藏字幕条。模型/地址/窗口改了要重建服务才生效（翻译器与切块器在构造时定死）。
+    /// 关→停服务、藏字幕条。听写模型/窗口/服务商/Key 改了要重建服务才生效（翻译器与切块器在构造时定死）。
     /// </summary>
     private void ApplyLiveSubtitleSettings()
     {
         if (_config.LiveSubtitleEnabled)
         {
-            var (transcribeThreads, translateThreads) = LiveSubtitleService.ResolveThreads(_config);
+            var transcribeThreads = LiveSubtitleService.ResolveTranscribeThreads(_config);
             if (_subtitleService != null &&
-                (_subtitleService.Model != _config.LiveSubtitleModel ||
-                 _subtitleService.WhisperModel != _config.LiveSubtitleWhisperModel ||
+                (_subtitleService.WhisperModel != _config.LiveSubtitleWhisperModel ||
                  _subtitleService.WindowSeconds != _config.LiveSubtitleWindowSeconds ||
-                 _subtitleService.TranslatorBackend != _config.LiveSubtitleTranslatorBackend ||
+                 _subtitleService.FreeApiProvider != _config.FreeApiProvider ||
+                 _subtitleService.FreeApiKey != _config.FreeApiKey ||
+                 _subtitleService.AzureRegion != _config.AzureRegion ||
                  _subtitleService.CloudflareAccountId != _config.CloudflareAccountId ||
                  _subtitleService.CloudflareApiToken != _config.CloudflareApiToken ||
-                 _subtitleService.TranscribeThreads != transcribeThreads ||
-                 _subtitleService.TranslateThreads != translateThreads))
+                 _subtitleService.TranscribeThreads != transcribeThreads))
             {
                 _subtitleService.Stop();
                 _subtitleService.Dispose();
