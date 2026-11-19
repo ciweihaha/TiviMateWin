@@ -7,7 +7,7 @@
         Background="{DynamicResource WindowBgBrush}" Foreground="{DynamicResource FgBrush}"
         FontFamily="Microsoft YaHei UI" UseLayoutRounding="True"
         Loaded="Window_Loaded" Closing="Window_Closing" Closed="Window_Closed"
-        PreviewKeyDown="Window_PreviewKeyDown">
+        PreviewKeyDown="Window_PreviewKeyDown" PreviewMouseDown="Window_PreviewMouseDown">
     <Window.Resources>
         <Style x:Key="ToolBtn" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource BtnBgBrush}"/>
@@ -149,6 +149,8 @@
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,0,12,10">
                     <Button Style="{StaticResource ToolBtn}" Content="网盘" Click="BtnCloud_Click"
                             ToolTip="浏览 OpenList 网盘里的视频并播放"/>
+                    <Button Style="{StaticResource ToolBtn}" Content="节目单" Click="BtnEpg_Click"
+                            ToolTip="打开/关闭节目单（E）"/>
                 </StackPanel>
 
                 <Grid DockPanel.Dock="Top" Margin="12,0,12,8">
@@ -232,7 +234,8 @@
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              VirtualizingPanel.VirtualizationMode="Recycling"
                              VirtualizingPanel.IsVirtualizing="True"
-                             MouseDoubleClick="ChannelList_MouseDoubleClick">
+                             MouseDoubleClick="ChannelList_MouseDoubleClick"
+                             PreviewMouseLeftButtonUp="ChannelList_PreviewMouseLeftButtonUp">
                     <ListBox.ContextMenu>
                         <ContextMenu>
                             <MenuItem Header="小窗播放" Click="MiPip_Click"/>
@@ -309,12 +312,11 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <!-- 换台信息条（v1.4.26）：必须放在 VideoView.Content 里——LibVLCSharp.WPF 的视频是
-                 原生 HWND（空域规则：Grid 里的同级 WPF 元素永远画不到视频上面）。v1.4.25 把卡片放在
-                 左下角当同级元素，所以完全看不见，只剩边框下沿在视频面盖不到的黑边带里露出来一条
-                 空壳（用户截图里的小细条就是它）。只有 VideoView.Content 会被转到覆盖窗口
-                 （ForegroundWindow）浮在视频之上。居中显示（用户要求放视频中间），3 秒自动隐藏；
-                 换台时显示（见 ShowChannelOsd），无 EPG 时只显示频道名 -->
+            <!-- 换台信息条（v1.4.33）：左下角小卡片（频道名 + 正在播放含时间段 + 接下来 2 个节目），
+                 5 秒自动隐藏（任意键/点鼠标也消失）。必须放在 VideoView.Content 里——LibVLCSharp.WPF 的视频是
+                 原生 HWND（空域规则：Grid 里的同级 WPF 元素永远画不到视频上面）。只有 VideoView.Content 会被转到
+                 覆盖窗口（ForegroundWindow）浮在视频之上。显示期间字幕条抬高避让（见 ShowChannelOsd）。
+                 数字键输入时也复用这块卡片（见 HandleDigit，只填频道号/提示，不显示节目）。 -->
             <lvc:VideoView x:Name="VideoView" Grid.Row="0" Grid.Column="0" Background="Black" Focusable="False">
             <!-- 覆盖层容器（v1.4.27，M29）：VideoView.Content 会被转到覆盖窗口（ForegroundWindow）
                  浮在原生视频之上；ChannelOsd 与 FullscreenOverlay 都必须放这里。放 Grid 同级
@@ -322,23 +324,26 @@
                  注意：覆盖窗口不跟随 VideoView.Visibility 隐藏，停止后信息条要由代码立即藏
                  （见 ClearVideoSurface）；浮层只在全屏时显示，不受影响。 -->
             <Grid>
-            <Border x:Name="ChannelOsd" HorizontalAlignment="Center" VerticalAlignment="Center"
+            <Border x:Name="ChannelOsd" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                    Margin="16,0,0,16"
                     Background="#D9151B24" BorderBrush="#33FFFFFF" BorderThickness="1"
-                    CornerRadius="10" Padding="18,14" Visibility="Collapsed" IsHitTestVisible="False">
-                <StackPanel MaxWidth="560">
+                    CornerRadius="10" Padding="12,10" Visibility="Collapsed" IsHitTestVisible="False">
+                <StackPanel MaxWidth="440">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock x:Name="OsdName" Text="" FontSize="28" FontWeight="Bold" Foreground="#FFE8EDF2"
+                        <TextBlock x:Name="OsdName" Text="" FontSize="20" FontWeight="Bold" Foreground="#FFE8EDF2"
                                    TextTrimming="CharacterEllipsis"/>
                         <Border x:Name="OsdSourceBadge" CornerRadius="4" Background="#2E7D32" Padding="8,3" Margin="12,0,0,0"
                                 VerticalAlignment="Center" Visibility="Collapsed">
                             <TextBlock x:Name="OsdSourceText" Text="" FontSize="12" FontWeight="SemiBold" Foreground="White"/>
                         </Border>
                     </StackPanel>
-                    <TextBlock x:Name="OsdNow" Text="" FontSize="14" Foreground="#FFE8EDF2" Margin="0,8,0,0"
+                    <TextBlock x:Name="OsdNow" Text="" FontSize="12" Foreground="#FFE8EDF2" Margin="0,6,0,0"
                                TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
-                    <ProgressBar x:Name="OsdNowProgress" Height="4" Margin="0,6,0,0" Minimum="0" Maximum="1"
+                    <ProgressBar x:Name="OsdNowProgress" Height="4" Margin="0,5,0,0" Minimum="0" Maximum="1"
                                  Foreground="{DynamicResource AccentBrush}" Visibility="Collapsed"/>
-                    <TextBlock x:Name="OsdNext" Text="" FontSize="14" Foreground="#FF9FB3C8" Margin="0,6,0,0"
+                    <TextBlock x:Name="OsdNext" Text="" FontSize="12" Foreground="#FF9FB3C8" Margin="0,5,0,0"
+                               TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
+                    <TextBlock x:Name="OsdNext2" Text="" FontSize="12" Foreground="#FF9FB3C8" Margin="0,3,0,0"
                                TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
                 </StackPanel>
             </Border>
@@ -382,7 +387,8 @@
             </Grid>
             </lvc:VideoView>
 
-            <!-- EPG 节目单面板 -->
+            <!-- EPG 节目单面板（v1.4.33）：默认不常驻（用户嫌右边常驻难看）；按"节目单"按钮或 E 键
+                 手动打开，停播/切源时自动收起。内容由 ShowEpgForChannel 刷新。 -->
             <Border x:Name="EpgPanel" Grid.Row="0" Grid.Column="1" Width="260" Background="{DynamicResource EpgBgBrush}"
                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0" Visibility="Collapsed">
                 <DockPanel>
@@ -417,6 +423,9 @@
                     BorderThickness="0,1,0,0" Padding="14,7">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="BtnTranslateToggle" Content="翻译: 自动" Padding="10,0" Height="24" Margin="4,0,0,0"
+                                Background="{DynamicResource BtnBgBrush}" Foreground="{DynamicResource BtnFgBrush}" BorderThickness="0" Cursor="Hand"
+                                Click="BtnTranslateToggle_Click" ToolTip="翻译强制开关：自动 → 强制开 → 强制关（只对当前台，切台后恢复自动）"/>
                         <Button x:Name="BtnPlayPause" Content="⏸" Width="26" Height="24" Margin="4,0,0,0"
                                 Background="{DynamicResource BtnBgBrush}" Foreground="{DynamicResource BtnFgBrush}" BorderThickness="0" Cursor="Hand"
                                 Click="BtnPlayPause_Click" ToolTip="播放/暂停（Space）"/>

@@ -293,14 +293,20 @@ public partial class MainWindow : Window
     // 数字键换台（V1.4）：输入缓冲 + 超时确认；匹配规则在 DigitTuner（纯逻辑可自测）
     private string _digitBuf = "";
     private readonly DispatcherTimer _digitTimer = new() { Interval = TimeSpan.FromMilliseconds(1200) };
-    // 换台信息条（V1.4）：左下角频道名 + 正在播放 / 稍后播放卡片，3 秒自动隐藏
-    private readonly DispatcherTimer _osdHideTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    // 换台信息条（V1.4）：左下角频道名 + 正在播放 / 接下来 2 个节目卡片，5 秒自动隐藏
+    private readonly DispatcherTimer _osdHideTimer = new() { Interval = TimeSpan.FromSeconds(5) };
 
     // 直播实时字幕（听写+翻译）：服务只在设置开启时创建；字幕条 5 秒无新字幕自动隐藏。
     private LiveSubtitleService? _subtitleService;
     private readonly DispatcherTimer _subtitleHideTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     // EPG 时效刷新（V1.4）：每分钟刷新本地正在播放显示，避免长时间停留时节目过期
     private readonly DispatcherTimer _epgRefreshTimer = new() { Interval = TimeSpan.FromMinutes(1) };
+    // 节目单常驻面板开关（v1.4.33）：默认不常驻（用户嫌右边常驻难看）；
+    // 手动按"节目单"按钮或 E 键打开，停播/切源时自动收起。
+    private bool _epgPanelManuallyOpen;
+    // 翻译手动强制（v1.4.33）：null=按模式自动，true=当前台强制开，false=当前台强制关；
+    // 切台后清零恢复自动。只在会话内有效，不落盘。
+    private bool? _subtitleForceOverride;
     // 当前处于播放态的列表项引用（列表高亮用；AdoptChannels 整体替换列表后按 Url 恢复）
     private ChannelItem? _playingItem;
 
@@ -334,7 +340,7 @@ public partial class MainWindow : Window
         _stallWatch.Tick += OnStallWatchTick;
         _progressTimer.Tick += (_, _) => UpdateProgress();
         _digitTimer.Tick += (_, _) => CommitDigits();
-        _osdHideTimer.Tick += (_, _) => { _osdHideTimer.Stop(); ChannelOsd.Visibility = Visibility.Collapsed; };
+        _osdHideTimer.Tick += (_, _) => HideChannelOsd();
         _subtitleHideTimer.Tick += (_, _) => { _subtitleHideTimer.Stop(); SubtitleBar.Visibility = Visibility.Collapsed; };
         _epgRefreshTimer.Tick += (_, _) => OnEpgRefreshTick();
         _reattachCheckTimer.Tick += (_, _) => { _reattachCheckTimer.Stop(); OnReattachCheckTick(); };
@@ -1031,14 +1037,15 @@ public partial class MainWindow : Window
         var favOnly = _favOnly;
 
         // 过滤：隐藏频道 / 收藏 / 分组 / 搜索关键词
+        // v1.4.33：搜关键词时忽略分组（分组选中"央视频道"时搜"湖南"不该出空结果）；
+        // 匹配规则抽到 ChannelSearch（台号 + 央视别名），见 ChannelSearch.Matches。
         _view.Filter = c =>
         {
             var ch = (ChannelItem)c;
             if (hidden.Contains(ch.Url)) return false;
             if (favOnly && !ch.IsFavorite) return false;
-            if (group is string g && g != "全部" && ch.Group != g) return false;
-            if (q.Length > 0 && !ch.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
-                            && !ch.Group.Contains(q, StringComparison.OrdinalIgnoreCase)) return false;
+            if (q.Length == 0 && group is string g && g != "全部" && ch.Group != g) return false;
+            if (q.Length > 0 && !ChannelSearch.Matches(ch.Name, ch.Group, ch.Number, q)) return false;
             return true;
         };
 
@@ -1103,8 +1110,17 @@ public partial class MainWindow : Window
         _lastMediaTime = -1;                  // 停滞看门狗重新计位
         _stallTicks = 0;
 
+        // v1.4.33：换台前记下是不是新台；只有真正切到别的台才把翻译手动强制清零恢复自动
+        // （同台重播/看门狗重连不恢复，让用户在同一台上做的强制开/关保持）。
+        var channelChanged = _current is null || !ReferenceEquals(_current, ch);
+
         _current = ch;
         _playSeq++;   // v1.4.15：新播放提交，代号递增，作废此前挂起的后台 Stop（2-2/2-3/2-4）
+        if (channelChanged)
+        {
+            _subtitleForceOverride = null;
+            UpdateLiveSubtitleForChannel(ch);
+        }
         NowPlaying.Text = ch.Name;
         PlayState.Text = "连接中…";
         EmptyState.Visibility = Visibility.Collapsed;
@@ -1257,12 +1273,13 @@ public partial class MainWindow : Window
     /// 立即隐藏换台信息条。只断开 MediaPlayer 不够——VideoView.MediaPlayer = null 只清 libvlc
     /// 的 Hwnd 指针，原生 STATIC 子窗口仍在，停播后只剩浅色底会盖住 WPF 黑底变白屏
     /// （见 StopPlayback 的 v1.4.26 注释）；信息条住在 VideoView.Content 的覆盖窗口里，
-    /// 不跟随 VideoView.Visibility 隐藏，不立即藏会在黑屏上再漂最多 3 秒。
+    /// 不跟随 VideoView.Visibility 隐藏，不立即藏会在黑屏上再漂最多 5 秒。
     /// 停止、切源、删源、空源都走这里，保证无频道可播时视频区是黑底、空状态可见可点；
-    /// 重播时由 PlayAsync 恢复可见并重挂视频面。</summary>
+    /// 重播时由 PlayAsync 恢复可见并重挂视频面。停播同时收起节目单面板（v1.4.33）。</summary>
     private void ClearVideoSurface()
     {
-        try { _osdHideTimer.Stop(); ChannelOsd.Visibility = Visibility.Collapsed; } catch { }
+        try { HideChannelOsd(); } catch { }
+        try { _epgPanelManuallyOpen = false; EpgPanel.Visibility = Visibility.Collapsed; } catch { }
         // 只隐藏不拆面：VideoView.MediaPlayer = null（set Hwnd=0）与后台 Stop/Play
         // 拆建输入并发触同一个 native 播放器，长时间播放崩溃即此类竞态；
         // 隐藏已足够黑屏（子 HWND 还在、只是看不见，帧送到隐藏窗口无害），
@@ -1669,6 +1686,7 @@ public partial class MainWindow : Window
         OsdNow.Visibility = Visibility.Visible;
         OsdNowProgress.Visibility = Visibility.Collapsed;
         OsdNext.Visibility = Visibility.Collapsed;
+        OsdNext2.Visibility = Visibility.Collapsed;
         OsdSourceBadge.Visibility = Visibility.Collapsed;
         ChannelOsd.Visibility = Visibility.Visible;
         _osdHideTimer.Stop();
@@ -1697,6 +1715,7 @@ public partial class MainWindow : Window
             OsdNow.Visibility = Visibility.Collapsed;
             OsdNowProgress.Visibility = Visibility.Collapsed;
             OsdNext.Visibility = Visibility.Collapsed;
+            OsdNext2.Visibility = Visibility.Collapsed;
             OsdSourceBadge.Visibility = Visibility.Collapsed;
             ChannelOsd.Visibility = Visibility.Visible;
             _osdHideTimer.Stop();
@@ -1710,10 +1729,11 @@ public partial class MainWindow : Window
         _ = PlayAsync(ch);
     }
 
-    /// <summary>换台信息条（v1.4.26）：视频中间频道名大字 + 来源徽标 + 正在播放 / 稍后播放，
-    /// 3 秒自动隐藏（数字输入中不覆盖）；无 EPG 数据时只显示频道名，不编节目名。
-    /// 信息条放在 VideoView.Content 里（覆盖窗口浮在视频之上），XAML 里已居中，
-    /// 这里不再算左下角边距；全屏/窗口态都居中。</summary>
+    /// <summary>换台信息条（v1.4.33）：切台时在画面左下角弹出小卡片（频道名 + 正在播放含时间段与进度 +
+    /// 接下来 2 个节目），5 秒自动隐藏（任意键/点鼠标也消失）。卡片小、半透明，尽量不挡画面。
+    /// 数字键输入时也复用这块卡片（只填频道号/提示，不显示节目）。无 EPG 时只显示频道名。
+    /// 显示期间字幕条抬高避让（SubtitleBar.Margin 从 70 改到 150），隐藏时由 HideChannelOsd 恢复。
+    /// 信息条放在 VideoView.Content 里（覆盖窗口浮在视频之上），XAML 里已移到底部左侧。</summary>
     private void ShowChannelOsd(ChannelItem ch)
     {
         if (_digitBuf.Length > 0) return;
@@ -1724,10 +1744,11 @@ public partial class MainWindow : Window
         OsdSourceBadge.Visibility = badge is null ? Visibility.Collapsed : Visibility.Visible;
         var now = DateTime.Now;
         var progs = GetPrograms(ch);
-        var cur = progs.FirstOrDefault(p => p.Start <= now && now < p.Stop);
+        var pick = EpgOverlay.PickCurrentAndNext(progs, now);
+        var cur = pick.Current;
         if (cur != null)
         {
-            OsdNow.Text = $"正在播放：{cur.Title}";
+            OsdNow.Text = $"正在播放：{cur.Title}  {cur.Start:HH:mm}–{cur.Stop:HH:mm}";
             OsdNow.Visibility = Visibility.Visible;
             var total = (cur.Stop - cur.Start).TotalMinutes;
             var progress = total > 0 ? Math.Clamp((now - cur.Start).TotalMinutes / total, 0, 1) : 0;
@@ -1739,17 +1760,87 @@ public partial class MainWindow : Window
             OsdNow.Visibility = Visibility.Collapsed;
             OsdNowProgress.Visibility = Visibility.Collapsed;
         }
-        var next = progs.FirstOrDefault(p => p.Start > now);
-        if (next != null)
+        if (pick.Next.Count >= 1)
         {
-            OsdNext.Text = $"稍后播放：{next.Title}";
+            OsdNext.Text = $"接下来  {pick.Next[0].Start:HH:mm}  {pick.Next[0].Title}";
             OsdNext.Visibility = Visibility.Visible;
         }
         else OsdNext.Visibility = Visibility.Collapsed;
+        if (pick.Next.Count >= 2)
+        {
+            OsdNext2.Text = $"接下来  {pick.Next[1].Start:HH:mm}  {pick.Next[1].Title}";
+            OsdNext2.Visibility = Visibility.Visible;
+        }
+        else OsdNext2.Visibility = Visibility.Collapsed;
         ChannelOsd.Visibility = Visibility.Visible;
+        // 显示期间字幕条抬高避让（v1.4.33：卡片在左下角，字幕条默认在底部中央，高度上会重叠）
+        SubtitleBar.Margin = new Thickness(0, 0, 0, 150);
         _osdHideTimer.Stop();
         _osdHideTimer.Start();
     }
+
+    /// <summary>隐藏换台信息条（v1.4.33）：5 秒定时器、按任意键、点鼠标、停播都走这里，
+    /// 顺便把字幕条的抬高恢复回去。</summary>
+    private void HideChannelOsd()
+    {
+        _osdHideTimer.Stop();
+        ChannelOsd.Visibility = Visibility.Collapsed;
+        SubtitleBar.Margin = new Thickness(0, 0, 0, 70);
+    }
+
+    /// <summary>
+    /// 按当前台的语种决定翻译开/关（v1.4.33）：只翻英语（Whisper tiny.en 本来也只认英语）。
+    /// 决定 = ResolveTranslationActive(总开关, 模式, 台名, 手动强制)；结果写进
+    /// LiveSubtitleService.TranslationActive——关时服务只丢窗（不听写、不翻译、不出字幕），
+    /// 音频捕获与模型保持加载，切回英语台立刻恢复。状态栏按钮文案同步更新。
+    /// </summary>
+    private void UpdateLiveSubtitleForChannel(ChannelItem? ch)
+    {
+        var active = ChannelLanguage.ResolveTranslationActive(
+            _config.LiveSubtitleEnabled,
+            _config.LiveSubtitleTranslationMode,
+            ch?.Name,
+            _subtitleForceOverride);
+        var svc = _subtitleService;
+        if (svc is not null) svc.TranslationActive = active;
+        UpdateTranslateToggleText();
+    }
+
+    /// <summary>状态栏翻译按钮文案（v1.4.33）：自动/强制开/强制关；tooltip 显示当前实际生效状态。</summary>
+    private void UpdateTranslateToggleText()
+    {
+        var label = _subtitleForceOverride switch
+        {
+            true => "翻译: 开",
+            false => "翻译: 关",
+            _ => "翻译: 自动",
+        };
+        BtnTranslateToggle.Content = label;
+        var eff = _subtitleService is not null && _subtitleService.TranslationActive ? "开" : "关";
+        BtnTranslateToggle.ToolTip = $"翻译强制开关：自动 → 强制开 → 强制关（只对当前台，切台后恢复自动）；当前实际：{eff}";
+    }
+
+    /// <summary>翻译强制开关（v1.4.33）：自动 → 强制开 → 强制关 → 自动；只对当前台有效。</summary>
+    private void BtnTranslateToggle_Click(object sender, RoutedEventArgs e)
+    {
+        _subtitleForceOverride = _subtitleForceOverride switch
+        {
+            null => true,
+            true => false,
+            _ => null,
+        };
+        UpdateLiveSubtitleForChannel(_current);
+        AppLog.Info($"[Subtitle] 翻译强制: {(_subtitleForceOverride?.ToString() ?? "自动")}");
+    }
+
+    /// <summary>节目单面板手动开关（v1.4.33）：默认不常驻；按钮或 E 键打开/关闭。</summary>
+    private void ToggleEpgPanel()
+    {
+        _epgPanelManuallyOpen = !_epgPanelManuallyOpen;
+        EpgPanel.Visibility = _epgPanelManuallyOpen ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void BtnEpg_Click(object sender, RoutedEventArgs e) => ToggleEpgPanel();
 
     /// <summary>来源徽标：流地址 host 是字面 IP 时返回 IPV4/IPV6，域名返回 null（不编）。</summary>
     private static string? SourceBadge(string url)
@@ -1789,7 +1880,7 @@ public partial class MainWindow : Window
             // v1.4.32：每分钟 tick 顺带检查节目单时效——超 1 小时或当前频道节目已过期就重抓服务端。
             TryRefreshEpgIfDue();
             if (ChannelOsd.Visibility == Visibility.Visible && _digitBuf.Length == 0)
-                ShowChannelOsd(_current);   // 顺带重置隐藏计时，刷新后重新计 3 秒
+                ShowChannelOsd(_current);   // 顺带重置隐藏计时，刷新后重新计 5 秒
         }
         catch (Exception ex) { AppLog.Error($"EPG refresh tick failed: {ex.Message}"); }
     }
@@ -2366,6 +2457,9 @@ public partial class MainWindow : Window
                 (_subtitleService.Model != _config.LiveSubtitleModel ||
                  _subtitleService.WhisperModel != _config.LiveSubtitleWhisperModel ||
                  _subtitleService.WindowSeconds != _config.LiveSubtitleWindowSeconds ||
+                 _subtitleService.TranslatorBackend != _config.LiveSubtitleTranslatorBackend ||
+                 _subtitleService.CloudflareAccountId != _config.CloudflareAccountId ||
+                 _subtitleService.CloudflareApiToken != _config.CloudflareApiToken ||
                  _subtitleService.TranscribeThreads != transcribeThreads ||
                  _subtitleService.TranslateThreads != translateThreads))
             {
@@ -2387,6 +2481,9 @@ public partial class MainWindow : Window
             _subtitleService = null;
             HideLiveSubtitle();
         }
+        // v1.4.33：服务建好/换好后，按当前台语种 + 翻译模式决定翻译开/关；
+        // 总开关关着时服务已停，这里只写按钮文案。
+        UpdateLiveSubtitleForChannel(_current);
     }
 
     /// <summary>显示一条实时字幕：中文大字 + 英文原文（按设置），5 秒无新字幕自动隐藏。</summary>
@@ -2569,8 +2666,15 @@ public partial class MainWindow : Window
     private void ShowEpgForChannel(ChannelItem ch)
     {
         var progs = GetPrograms(ch);
-        if (progs.Count == 0) { EpgPanel.Visibility = Visibility.Collapsed; return; }
-        EpgPanel.Visibility = Visibility.Visible;
+        // v1.4.33：这里只刷新面板内容，不决定面板显隐——面板默认不常驻，只有用户
+        // 手动打开（"节目单"按钮或 E 键）时才显示；无节目时就算手动打开也只显示空面板。
+        EpgPanel.Visibility = _epgPanelManuallyOpen ? Visibility.Visible : Visibility.Collapsed;
+        if (progs.Count == 0)
+        {
+            EpgList.ItemsSource = null;
+            EpgNow.Visibility = Visibility.Collapsed;
+            return;
+        }
         var now = DateTime.Now;
         var current = progs.FirstOrDefault(p => p.Start <= now && now < p.Stop);
         var upcoming = progs.Where(p => p.Start > now).Take(4).ToList();
@@ -2653,6 +2757,9 @@ public partial class MainWindow : Window
         _searchDebounce.Start();
     }
 
+    /// <summary>搜索框键盘（v1.4.33）：Esc 清空；↑/↓ 在结果里移动选中（不直接播）；
+    /// 回车播选中的那条（有选中时），没选中才播第一条——旧代码回车永远播第一条，
+    /// 搜"凤凰"回车却播了"凤凰中文"以外的第一条就是这么来的。</summary>
     private void SearchBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Escape)
@@ -2660,13 +2767,26 @@ public partial class MainWindow : Window
             SearchBox.Text = "";
             e.Handled = true;
         }
+        else if (e.Key == Key.Down || e.Key == Key.Up)
+        {
+            if (_filtered.Count == 0) return;
+            var idx = ChannelList.SelectedIndex < 0 ? 0 : ChannelList.SelectedIndex;
+            idx = e.Key == Key.Down
+                ? Math.Min(idx + 1, _filtered.Count - 1)
+                : Math.Max(idx - 1, 0);
+            var ch = _filtered[idx];
+            ChannelList.SelectedItem = ch;
+            ChannelList.ScrollIntoView(ch);
+            e.Handled = true;
+        }
         else if (e.Key == Key.Enter)
         {
-            if (_filtered.Count > 0)
+            var target = ChannelList.SelectedItem as ChannelItem
+                         ?? (_filtered.Count > 0 ? _filtered[0] : null);
+            if (target != null)
             {
-                var first = _filtered[0];
-                SelectInList(first);
-                _ = PlayAsync(first);
+                SelectInList(target);
+                _ = PlayAsync(target);
             }
             ChannelList.Focus();
             e.Handled = true;
@@ -2680,6 +2800,24 @@ public partial class MainWindow : Window
 
     private void ChannelList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
+        if (ChannelList.SelectedItem is ChannelItem ch) _ = PlayAsync(ch);
+    }
+
+    /// <summary>搜索结果单击即播（v1.4.33）：搜出结果后点一下就切台，不用再双击。
+    /// 只在搜索框有内容时生效——平时浏览仍是双击播，避免误触；★收藏按钮的点击
+    /// 会走到 FavStar_Click（那里已 e.Handled），这里按视觉树向上找，撞上星标就放行。</summary>
+    private void ChannelList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(SearchBox.Text)) return;
+        if (e.OriginalSource is DependencyObject src)
+        {
+            var cur = src;
+            while (cur != null)
+            {
+                if (cur is Button) return;   // 点到星标等按钮上：交给按钮自己处理
+                cur = VisualTreeHelper.GetParent(cur);
+            }
+        }
         if (ChannelList.SelectedItem is ChannelItem ch) _ = PlayAsync(ch);
     }
 
@@ -2760,7 +2898,17 @@ public partial class MainWindow : Window
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // v1.4.33：换台信息条显示时按任意键先把它关掉（用户要的就是"按任意键消失"）；
+        // 换台键（数字/↑↓）本身也继续走正常处理，换台会重新弹出信息条。
+        if (ChannelOsd.Visibility == Visibility.Visible) HideChannelOsd();
         e.Handled = HandleGlobalKey(e.Key);
+    }
+
+    /// <summary>点鼠标也关换台信息条（v1.4.33）。视频区点的是原生 HWND，到不了 WPF 层，
+    /// 那种情况靠 5 秒自动隐藏兜底；列表/按钮区的点击能收到。</summary>
+    private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (ChannelOsd.Visibility == Visibility.Visible) HideChannelOsd();
     }
 
     /// <summary>全局快捷键统一处理：消息层拦截与 WPF 路由共用，焦点在 VLC 原生窗口时也生效</summary>
@@ -2796,6 +2944,10 @@ public partial class MainWindow : Window
         {
             case Key.Tab when Keyboard.Modifiers == ModifierKeys.None:
                 ToggleSidebar();
+                return true;
+            case Key.E when Keyboard.Modifiers == ModifierKeys.None:
+                // v1.4.33：节目单手动开关（默认不常驻，E 键/按钮打开完整节目单）
+                ToggleEpgPanel();
                 return true;
             case Key.R when Keyboard.Modifiers == ModifierKeys.Control:
                 ResetLayout();

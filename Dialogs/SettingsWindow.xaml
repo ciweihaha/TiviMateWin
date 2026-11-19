@@ -67,6 +67,29 @@
                           FontSize="12" Margin="0,4,0,2"/>
                 <CheckBox x:Name="LiveSubtitleSerialChk" Content="串行模式（听写与翻译依次跑，各用全部核；不勾为两级流水线并行）" Foreground="#FFB9C4CE"
                           FontSize="12" Margin="0,4,0,2"/>
+                <!-- 翻译范围（v1.4.33）：只翻英语——听写模型是 tiny.en，本来也只认英语；
+                     法语/德语/日语等不翻译。默认"仅英语台"。 -->
+                <TextBlock Text="翻译范围（只翻英语台才有意义）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
+                <ComboBox x:Name="LiveSubtitleModeCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB">
+                    <ComboBoxItem Content="关闭"/>
+                    <ComboBoxItem Content="仅英语台"/>
+                    <ComboBoxItem Content="全部台"/>
+                </ComboBox>
+                <!-- 翻译方式（v1.4.33）：本地模型（本机 Qwen 1.5B，首次用要下载约 1.1GB）
+                     / 免费接口（Cloudflare Workers AI 免费层，不下载模型；超时 8 秒回落本地或跳过该行）。
+                     关闭 = 上面"实时出中文字幕"那项取消勾选。 -->
+                <TextBlock Text="翻译方式" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
+                <ComboBox x:Name="LiveSubtitleBackendCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB">
+                    <ComboBoxItem Content="本地模型"/>
+                    <ComboBoxItem Content="免费接口（Cloudflare）"/>
+                </ComboBox>
+                <TextBlock Text="Cloudflare 账号 ID（免费接口用）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
+                <TextBox x:Name="CloudflareAccountIdBox" Height="28" Background="#FF20262E" Foreground="#FFDDE4EB"
+                         BorderBrush="#FF2D3540" Padding="6,3"/>
+                <TextBlock Text="Cloudflare API 令牌（免费接口用，需 Workers AI 权限；存在本机加密配置里）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
+                <PasswordBox x:Name="CloudflareApiTokenBox" Height="28" Background="#FF20262E" Foreground="#FFDDE4EB"
+                             BorderBrush="#FF2D3540" Padding="6,3"/>
+                <TextBlock Text="免费接口每天 1 万 neurons 免费额度，一条字幕几十 token，一天几千条都够；接口超时 8 秒自动回落本地模型或跳过该行" Foreground="#FF7A8896" FontSize="11" Margin="0,6,0,0"/>
                 <TextBlock Text="翻译模型（首次开启时自动下载，存在本机；以后直接用）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
                 <TextBox x:Name="LiveSubtitleModelBox" Height="28" Background="#FF20262E" Foreground="#FFDDE4EB"
                          BorderBrush="#FF2D3540" Padding="6,3"/>

@@ -1,0 +1,202 @@
+using System;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using TiviMateWin.Services;
+using Xunit;
+
+namespace TiviMateWin.Tests;
+
+/// <summary>Cloudflare 免费接口翻译测试（v1.4.33）：Workers AI @cf/meta/m2m100-1.2b。
+/// 覆盖：响应解析（成功/失败/缺字段/非法 JSON）、请求地址与请求体、缓存、
+/// HTTP 失败与超时返回 null（不抛异常，调用方回落本地或跳过该行）、后端归一化。</summary>
+public class CloudflareTranslatorTests
+{
+    private sealed class FakeHandler : HttpMessageHandler
+    {
+        public HttpRequestMessage? LastRequest;
+        public string? LastBody;
+        public Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? Responder;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            LastRequest = request;
+            LastBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
+            if (Responder is not null) return await Responder(request, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"success\":true,\"result\":{\"translated_text\":\"你好，世界\"}}",
+                    Encoding.UTF8, "application/json"),
+            };
+        }
+    }
+
+    [Fact]
+    public void BuildUrl_UsesAccountIdAndModel()
+    {
+        Assert.Equal(
+            "https://api.cloudflare.com/client/v4/accounts/abc123/ai/run/@cf/meta/m2m100-1.2b",
+            CloudflareTranslator.BuildUrl("abc123"));
+    }
+
+    [Fact]
+    public void BuildRequestBody_EnglishToChinese()
+    {
+        var body = CloudflareTranslator.BuildRequestBody("Hello world");
+        Assert.Contains("\"text\":\"Hello world\"", body);
+        Assert.Contains("\"source_lang\":\"english\"", body);
+        Assert.Contains("\"target_lang\":\"chinese\"", body);
+    }
+
+    [Fact]
+    public void ParseTranslatedText_Success()
+    {
+        Assert.Equal("你好，世界",
+            CloudflareTranslator.ParseTranslatedText(
+                "{\"success\":true,\"result\":{\"translated_text\":\"你好，世界\"}}"));
+    }
+
+    [Theory]
+    [InlineData("{\"success\":false,\"errors\":[{\"message\":\"bad token\"}]}")]
+    [InlineData("{\"success\":true,\"result\":{}}")]
+    [InlineData("{\"success\":true,\"result\":{\"translated_text\":\"\"}}")]
+    [InlineData("{\"success\":true,\"result\":{\"translated_text\":\"   \"}}")]
+    [InlineData("not json at all")]
+    [InlineData("")]
+    public void ParseTranslatedText_Failure_ReturnsNull(string json)
+    {
+        Assert.Null(CloudflareTranslator.ParseTranslatedText(json));
+    }
+
+    [Fact]
+    public async Task TranslateAsync_Success_ReturnsChinese()
+    {
+        var handler = new FakeHandler();
+        var t = new CloudflareTranslator("acct", "tok", new HttpClient(handler));
+        Assert.Equal("你好，世界", await t.TranslateAsync("Hello world", CancellationToken.None));
+        Assert.Equal("https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/meta/m2m100-1.2b",
+            handler.LastRequest?.RequestUri?.ToString());
+        Assert.Equal("Bearer", handler.LastRequest?.Headers.Authorization?.Scheme);
+        Assert.Equal("tok", handler.LastRequest?.Headers.Authorization?.Parameter);
+        Assert.Contains("Hello world", handler.LastBody ?? "");
+    }
+
+    [Fact]
+    public async Task TranslateAsync_HttpError_ReturnsNull()
+    {
+        var handler = new FakeHandler
+        {
+            Responder = (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("{\"success\":false}", Encoding.UTF8, "application/json"),
+            }),
+        };
+        var t = new CloudflareTranslator("acct", "tok", new HttpClient(handler));
+        Assert.Null(await t.TranslateAsync("Hello world", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task TranslateAsync_ApiSuccessFalse_ReturnsNull()
+    {
+        var handler = new FakeHandler
+        {
+            Responder = (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"success\":false,\"errors\":[{\"message\":\"no\"}]}",
+                    Encoding.UTF8, "application/json"),
+            }),
+        };
+        var t = new CloudflareTranslator("acct", "tok", new HttpClient(handler));
+        Assert.Null(await t.TranslateAsync("Hello world", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task TranslateAsync_Cancelled_ReturnsNullNotThrow()
+    {
+        var handler = new FakeHandler
+        {
+            Responder = async (_, ct) =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30), ct);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            },
+        };
+        var t = new CloudflareTranslator("acct", "tok", new HttpClient(handler));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        Assert.Null(await t.TranslateAsync("Hello world", cts.Token));
+    }
+
+    [Fact]
+    public async Task TranslateAsync_CacheHits_DoNotCallHttpTwice()
+    {
+        var calls = 0;
+        var handler = new FakeHandler
+        {
+            Responder = (_, _) =>
+            {
+                calls++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "{\"success\":true,\"result\":{\"translated_text\":\"你好\"}}",
+                        Encoding.UTF8, "application/json"),
+                });
+            },
+        };
+        var t = new CloudflareTranslator("acct", "tok", new HttpClient(handler));
+        Assert.Equal("你好", await t.TranslateAsync("Hello", CancellationToken.None));
+        Assert.Equal("你好", await t.TranslateAsync("Hello", CancellationToken.None));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task TranslateAsync_MissingCredentials_ReturnsNullWithoutHttp()
+    {
+        var calls = 0;
+        var handler = new FakeHandler
+        {
+            Responder = (_, _) =>
+            {
+                calls++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            },
+        };
+        var noToken = new CloudflareTranslator("acct", "", new HttpClient(handler));
+        Assert.Null(await noToken.TranslateAsync("Hello", CancellationToken.None));
+        var noAccount = new CloudflareTranslator("", "tok", new HttpClient(handler));
+        Assert.Null(await noAccount.TranslateAsync("Hello", CancellationToken.None));
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public async Task TranslateAsync_ChineseInput_ReturnsOriginalWithoutHttp()
+    {
+        var calls = 0;
+        var handler = new FakeHandler
+        {
+            Responder = (_, _) =>
+            {
+                calls++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            },
+        };
+        var t = new CloudflareTranslator("acct", "tok", new HttpClient(handler));
+        Assert.Equal("你好世界", await t.TranslateAsync("你好世界", CancellationToken.None));
+        Assert.Equal("", await t.TranslateAsync("   ", CancellationToken.None));
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public void NormalizeBackend_BadValue_FallsBackToLocal()
+    {
+        Assert.Equal("Local", CloudflareTranslator.NormalizeBackend(null));
+        Assert.Equal("Local", CloudflareTranslator.NormalizeBackend(""));
+        Assert.Equal("Local", CloudflareTranslator.NormalizeBackend("Groq"));
+        Assert.Equal("FreeApi", CloudflareTranslator.NormalizeBackend("FreeApi"));
+        Assert.Equal("FreeApi", CloudflareTranslator.NormalizeBackend("freeapi"));
+        Assert.Equal("Local", CloudflareTranslator.BackendLocal);
+    }
+}

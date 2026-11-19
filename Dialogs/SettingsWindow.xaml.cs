@@ -55,6 +55,17 @@ public partial class SettingsWindow : Window
         LiveSubtitleChk.IsChecked = config.LiveSubtitleEnabled;
         LiveSubtitleEnglishChk.IsChecked = config.LiveSubtitleShowEnglish;
         LiveSubtitleSerialChk.IsChecked = config.LiveSubtitleSerial;
+        SelectCombo(LiveSubtitleModeCombo, config.LiveSubtitleTranslationMode switch
+        {
+            "Off" => "关闭",
+            "All" => "全部台",
+            _ => "仅英语台",
+        });
+        // v1.4.33：翻译方式（本地模型 / 免费接口）+ Cloudflare 凭据。
+        SelectCombo(LiveSubtitleBackendCombo, config.LiveSubtitleTranslatorBackend == "FreeApi"
+            ? "免费接口（Cloudflare）" : "本地模型");
+        CloudflareAccountIdBox.Text = config.CloudflareAccountId ?? "";
+        CloudflareApiTokenBox.Password = config.CloudflareApiToken ?? "";
         LiveSubtitleModelBox.Text = config.LiveSubtitleModel ?? "";
 
         // Xtream
@@ -142,6 +153,18 @@ public partial class SettingsWindow : Window
         _config.LiveSubtitleEnabled = LiveSubtitleChk.IsChecked == true;
         _config.LiveSubtitleShowEnglish = LiveSubtitleEnglishChk.IsChecked == true;
         _config.LiveSubtitleSerial = LiveSubtitleSerialChk.IsChecked == true;
+        _config.LiveSubtitleTranslationMode = (LiveSubtitleModeCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() switch
+        {
+            "关闭" => "Off",
+            "全部台" => "All",
+            _ => "EnglishOnly",
+        };
+        // v1.4.33：翻译方式 + Cloudflare 凭据（令牌经 AppConfig.Save DPAPI 加密落盘）。
+        _config.LiveSubtitleTranslatorBackend =
+            (LiveSubtitleBackendCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() == "免费接口（Cloudflare）"
+                ? "FreeApi" : "Local";
+        _config.CloudflareAccountId = CloudflareAccountIdBox.Text.Trim();
+        _config.CloudflareApiToken = CloudflareApiTokenBox.Password;
         var subtitleModel = LiveSubtitleModelBox.Text.Trim();
         _config.LiveSubtitleModel = subtitleModel.Length > 0
             ? subtitleModel : "qwen2.5-1.5b-instruct-q4_k_m.gguf";

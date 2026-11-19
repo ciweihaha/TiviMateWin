@@ -30,6 +30,10 @@
     <Compile Include="..\Services\LiveSubtitleTranslator.cs" Link="LiveSubtitleTranslator.cs" />
     <Compile Include="..\Services\LiveSubtitleModelPath.cs" Link="LiveSubtitleModelPath.cs" />
     <Compile Include="..\Services\LiveSubtitleTranscriber.cs" Link="LiveSubtitleTranscriber.cs" />
+    <Compile Include="..\Services\ChannelLanguage.cs" Link="ChannelLanguage.cs" />
+    <Compile Include="..\Services\ChannelSearch.cs" Link="ChannelSearch.cs" />
+    <Compile Include="..\Services\EpgOverlay.cs" Link="EpgOverlay.cs" />
+    <Compile Include="..\Services\CloudflareTranslator.cs" Link="CloudflareTranslator.cs" />
   </ItemGroup>
 
 </Project>

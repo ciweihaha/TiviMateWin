@@ -24,6 +24,10 @@ public sealed class LiveSubtitleService : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _feederTask;
     private Task? _watchdogTask;
+
+    /// <summary>当前台是否开翻译（v1.4.33）：false 时只丢窗、不听写不翻译、不出字幕；
+    /// 音频捕获与模型保持加载，切回英语台立刻恢复。由 MainWindow 按翻译模式+台语种+手动强制决定。</summary>
+    public volatile bool TranslationActive = true;
     private volatile string _serialStage = "idle"; // 串行模式当前阶段（看门狗用）：idle/transcribing/translating
     private bool _audioAttached;
     private bool _modelReady;
@@ -67,6 +71,26 @@ public sealed class LiveSubtitleService : IDisposable
 
     /// <summary>是否串行管线（设置改了需重建服务才生效）。</summary>
     public bool Serial => _serialMode;
+
+    /// <summary>当前用的翻译后端（Local=本机模型 / FreeApi=Cloudflare 免费接口；设置改了需重建服务）。</summary>
+    public string TranslatorBackend => _config.LiveSubtitleTranslatorBackend;
+
+    /// <summary>免费接口用的 CF 账号 ID（设置改了需重建服务）。</summary>
+    public string? CloudflareAccountId => _config.CloudflareAccountId;
+
+    /// <summary>免费接口用的 CF API 令牌（设置改了需重建服务；日志里绝不出现）。</summary>
+    public string? CloudflareApiToken => _config.CloudflareApiToken;
+
+    /// <summary>免费接口连续失败次数（到阈值后冷却 5 分钟不再每行重试，见 TranslateAsync）。</summary>
+    public int ApiFailureStreak => _apiFailureStreak;
+
+    // 免费接口翻译（v1.4.33）：Cloudflare Workers AI 免费层；连续失败 5 次后冷却 5 分钟，
+    // 期间直接走本地回落（或跳过），不再每行等 8 秒超时把字幕拖慢。
+    private readonly CloudflareTranslator? _cloudflare;
+    private const int ApiMaxConsecutiveFailures = 5;
+    private const int ApiCooldownMinutes = 5;
+    private int _apiFailureStreak;
+    private DateTimeOffset _apiCooldownUntilUtc = DateTimeOffset.MinValue;
 
     /// <summary>累计因单窗超时被放弃的窗口数（听写 6 秒未出结果）。</summary>
     public long TranscribeTimeouts => _transcriber.TranscribeTimeouts;
@@ -134,6 +158,13 @@ public sealed class LiveSubtitleService : IDisposable
         _transcriber = new LiveSubtitleTranscriber(threads: transcribeThreads,
             modelFileName: config.LiveSubtitleWhisperModel);
         _translator = new LiveSubtitleTranslator(config.LiveSubtitleModel, threads: translateThreads);
+        // v1.4.33：免费接口模式下建 Cloudflare 翻译器（账号/令牌缺一个都不建，直接走本地）。
+        if (CloudflareTranslator.NormalizeBackend(config.LiveSubtitleTranslatorBackend) == CloudflareTranslator.BackendFreeApi
+            && !string.IsNullOrWhiteSpace(config.CloudflareAccountId)
+            && !string.IsNullOrWhiteSpace(config.CloudflareApiToken))
+        {
+            _cloudflare = new CloudflareTranslator(config.CloudflareAccountId, config.CloudflareApiToken);
+        }
         _transcriber.ModelDownloadProgress += (downloaded, total) =>
         {
             if (total > 0)
@@ -177,7 +208,7 @@ public sealed class LiveSubtitleService : IDisposable
         {
             _pipeline = new LiveSubtitlePipeline(
                 transcribe: (window, ct) => _transcriber.TranscribeAsync(window, ct),
-                translate: (text, ct) => _translator.TranslateAsync(text, ct),
+                translate: (text, ct) => TranslateAsync(text, ct),
                 isTranslatorBroken: () => _translator.IsBroken);
             _pipeline.SubtitleReady += line => SubtitleReady?.Invoke(line);
             _pipeline.TranslatorBroken += OnTranslatorBroken;
@@ -196,6 +227,41 @@ public sealed class LiveSubtitleService : IDisposable
         Stop();
     }
 
+    /// <summary>
+    /// 翻译路由（v1.4.33）：免费接口模式时先走 Cloudflare Workers AI（8 秒超时），
+    /// 失败回落本机模型，本地也没准备好就返回 null（调用方显示英文原文、当行跳过）。
+    /// 接口连续失败 5 次后冷却 5 分钟——期间不再每行等 8 秒超时，直接走本地/跳过，
+    /// 冷却到点自动再试接口。本地模式直接走本机模型（旧行为）。
+    /// </summary>
+    private async Task<string?> TranslateAsync(string english, CancellationToken ct)
+    {
+        if (_cloudflare is not null && DateTimeOffset.UtcNow >= _apiCooldownUntilUtc)
+        {
+            var sw = Stopwatch.StartNew();
+            var viaApi = await _cloudflare.TranslateAsync(english, ct).ConfigureAwait(false);
+            sw.Stop();
+            if (!string.IsNullOrWhiteSpace(viaApi))
+            {
+                _apiFailureStreak = 0;
+                AppLog.Info($"live subtitle: translate via Cloudflare {sw.ElapsedMilliseconds}ms");
+                return viaApi;
+            }
+            if (++_apiFailureStreak >= ApiMaxConsecutiveFailures)
+            {
+                _apiCooldownUntilUtc = DateTimeOffset.UtcNow.AddMinutes(ApiCooldownMinutes);
+                AppLog.Error($"live subtitle: Cloudflare 翻译连续失败 {_apiFailureStreak} 次，冷却 {ApiCooldownMinutes} 分钟（期间走本地回落）");
+            }
+            else
+            {
+                AppLog.Info("live subtitle: Cloudflare 翻译失败，回落本地模型");
+            }
+            if (_translatorReady)
+                return await _translator.TranslateAsync(english, ct).ConfigureAwait(false);
+            return null;
+        }
+        return await _translator.TranslateAsync(english, ct).ConfigureAwait(false);
+    }
+
     private async Task PrepareAsync(CancellationToken ct)
     {
         StatusChanged?.Invoke("正在准备语音模型…");
@@ -203,6 +269,22 @@ public sealed class LiveSubtitleService : IDisposable
         if (!_modelReady)
         {
             StatusChanged?.Invoke("语音模型下载失败，实时字幕暂不可用");
+            return;
+        }
+        if (_cloudflare is not null)
+        {
+            // 免费接口模式：翻译走接口，不下载 1.26GB 本地模型；本机已有模型时才
+            // 加载它做回落（没下载过的不下载——接口失败时当行跳过，显示英文原文）。
+            if (_translator.ModelReady)
+            {
+                StatusChanged?.Invoke("正在准备本地翻译模型（回落用）…");
+                _translatorReady = await _translator.EnsureLoadedAsync(ct).ConfigureAwait(false);
+            }
+            else
+            {
+                _translatorReady = false;
+            }
+            StatusChanged?.Invoke("");
             return;
         }
         StatusChanged?.Invoke("正在准备翻译模型…");
@@ -273,6 +355,12 @@ public sealed class LiveSubtitleService : IDisposable
                     if (!_modelReady)
                     {
                         // 模型未就绪：直播追不上旧音频，直接丢窗，不积压。
+                        continue;
+                    }
+                    if (!TranslationActive)
+                    {
+                        // 本台不翻译（v1.4.33）：丢窗（不听写、不翻译、不出字幕），只记音频时钟；
+                        // 模型保持加载，切回英语台立刻恢复。
                         continue;
                     }
                     if (_serialMode)
@@ -356,7 +444,7 @@ public sealed class LiveSubtitleService : IDisposable
         Interlocked.Increment(ref _serialTranscribed);
         _serialStage = "translating";
         sw.Restart();
-        var chinese = await _translator.TranslateAsync(english, ct).ConfigureAwait(false);
+        var chinese = await TranslateAsync(english, ct).ConfigureAwait(false);
         sw.Stop();
         var translateMs = sw.ElapsedMilliseconds;
         Interlocked.Exchange(ref _serialLastTranslateMs, translateMs);
