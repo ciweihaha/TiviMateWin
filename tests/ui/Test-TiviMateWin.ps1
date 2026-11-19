@@ -317,13 +317,13 @@ if ($null -eq $combo) {
     try {
         $sel = $combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
         $selVal = ''
-        $cur = $sel.GetCurrentSelection()
+        $cur = $sel.GetSelection()
         if ($cur.Count -gt 0) { $selVal = $cur[0].Current.Name }
         $exp = $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
         $exp.Expand()
         Start-Sleep -Seconds 1
         $items = @()
-        $cur2 = $sel.GetCurrentSelection()
+        $cur2 = $sel.GetSelection()
         # 展开后子项在 ComboBox 的子树里
         $kids = Find-All -Root $combo -ControlType ([System.Windows.Automation.ControlType]::ListItem)
         foreach ($k in $kids) { $items += (Get-ElementText $k) }
@@ -331,12 +331,12 @@ if ($null -eq $combo) {
         if ($items.Count -ge 4 -and ($items -contains '全部')) {
             Write-Result -Id 'B02' -Name '下拉框选项' -Verdict 'PASS' -Evidence "选中=$selVal，选项=$($items -join '/')"
         } else {
-            Write-Result -Id 'B02' -Name '下拉框选项' -Verdict 'FAIL' -Evidence "选中=$selVal，读到选项=$($items -join '/')（期望 >=4 个含“全部”）"
+            Write-Result -Id 'B02' -Name '下拉框选项' -Verdict 'FAIL' -Evidence "选中=$selVal，读到选项=$($items -join '/')（期望 >=4 个含「全部」）"
         }
     } catch {
         Write-Result -Id 'B02' -Name '下拉框选项' -Verdict 'FAIL' -Evidence "展开读选项异常：$($_.Exception.Message)"
     }
-    # B03/B04：选“卫视频道”过滤，再选回“全部”
+    # B03/B04：选「卫视频道」过滤，再选回「全部」
     function Get-CountText {
         $w2 = Get-TmwWindow
         $ct = Find-ByAutomationId -Root $w2 -AutomationId 'CountText'
@@ -364,14 +364,14 @@ if ($null -eq $combo) {
             $countWei = Get-CountText
             $all = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'GroupCombo'
             $sel2 = $all.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
-            $curSel = $sel2.GetCurrentSelection()
+            $curSel = $sel2.GetSelection()
             $selName = if ($curSel.Count -gt 0) { $curSel[0].Current.Name } else { '' }
             if ($countWei -ne $countAll -and $selName -eq '卫视频道') {
-                Write-Result -Id 'B03' -Name '选“卫视频道”过滤' -Verdict 'PASS' -Evidence "全部=$countAll，卫视=$countWei"
+                Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'PASS' -Evidence "全部=$countAll，卫视=$countWei"
             } else {
-                Write-Result -Id 'B03' -Name '选“卫视频道”过滤' -Verdict 'FAIL' -Evidence "全部=$countAll，选后=$countWei，选中=$selName"
+                Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'FAIL' -Evidence "全部=$countAll，选后=$countWei，选中=$selName"
             }
-            # 选回“全部”
+            # 选回「全部」
             $exp2 = $all.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
             $exp2.Expand()
             Start-Sleep -Seconds 1
@@ -383,20 +383,20 @@ if ($null -eq $combo) {
                 Start-Sleep -Seconds 2
                 $countBack = Get-CountText
                 if ($countBack -eq $countAll) {
-                    Write-Result -Id 'B04' -Name '选回“全部”恢复' -Verdict 'PASS' -Evidence "恢复后=$countBack"
+                    Write-Result -Id 'B04' -Name '选回「全部」恢复' -Verdict 'PASS' -Evidence "恢复后=$countBack"
                 } else {
-                    Write-Result -Id 'B04' -Name '选回“全部”恢复' -Verdict 'FAIL' -Evidence "恢复后=$countBack，期望=$countAll"
+                    Write-Result -Id 'B04' -Name '选回「全部」恢复' -Verdict 'FAIL' -Evidence "恢复后=$countBack，期望=$countAll"
                 }
             } else {
-                Write-Result -Id 'B04' -Name '选回“全部”恢复' -Verdict 'FAIL' -Evidence '展开后找不到“全部”项'
+                Write-Result -Id 'B04' -Name '选回「全部」恢复' -Verdict 'FAIL' -Evidence '展开后找不到「全部」项'
             }
         } else {
-            Write-Result -Id 'B03' -Name '选“卫视频道”过滤' -Verdict 'FAIL' -Evidence '展开后找不到“卫视频道”项'
-            Write-Result -Id 'B04' -Name '选回“全部”恢复' -Verdict 'FAIL' -Evidence 'B03 未完成，跳过'
+            Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'FAIL' -Evidence '展开后找不到「卫视频道」项'
+            Write-Result -Id 'B04' -Name '选回「全部」恢复' -Verdict 'FAIL' -Evidence 'B03 未完成，跳过'
         }
     } catch {
-        Write-Result -Id 'B03' -Name '选“卫视频道”过滤' -Verdict 'FAIL' -Evidence "异常：$($_.Exception.Message)"
-        Write-Result -Id 'B04' -Name '选回“全部”恢复' -Verdict 'FAIL' -Evidence 'B03 异常，跳过'
+        Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'FAIL' -Evidence "异常：$($_.Exception.Message)"
+        Write-Result -Id 'B04' -Name '选回「全部」恢复' -Verdict 'FAIL' -Evidence 'B03 异常，跳过'
     }
 }
 
@@ -408,14 +408,27 @@ function Get-MenuItems {
 }
 
 function Open-ChannelContextMenu {
-    # 先点一下频道列表区（保证焦点在列表上），再 Shift+F10 打开右键菜单
+    # 右键点频道行：用 UIA 找 ChannelList 的 ListItem（第 2 个，即 2 号台），取中心点右键。
+    # 注意：Shift+F10 在这 app 上打不开频道菜单，只会出系统菜单，所以必须用鼠标右键。
     $w = Get-TmwWindow
     if ($null -eq $w) { return @() }
-    $r = $w.Current.BoundingRectangle
     Bring-ToFront
-    Invoke-MouseClick -X ([int]($r.X + 150)) -Y ([int]($r.Y + 400))
-    Start-Sleep -Milliseconds 500
-    Send-KeysToWindow -Keys '+{F10}' -WaitMs 800
+    $list = Find-ByAutomationId -Root $w -AutomationId 'ChannelList'
+    $target = $null
+    if ($null -ne $list) {
+        $items = Find-All -Root $list -ControlType ([System.Windows.Automation.ControlType]::ListItem)
+        if ($items.Count -gt 1) { $target = $items[1] }
+        elseif ($items.Count -eq 1) { $target = $items[0] }
+    }
+    if ($null -ne $target) {
+        $tr = $target.Current.BoundingRectangle
+        Invoke-MouseRightClick -X ([int]($tr.X + $tr.Width / 2)) -Y ([int]($tr.Y + $tr.Height / 2))
+    } else {
+        # 兜底：右键点列表区中部一行
+        $r = $w.Current.BoundingRectangle
+        Invoke-MouseRightClick -X ([int]($r.X + 150)) -Y ([int]($r.Y + 550))
+    }
+    Start-Sleep -Milliseconds 800
     return (Get-MenuItems)
 }
 
@@ -433,25 +446,25 @@ function Get-CountNumber {
 }
 
 $cnt0 = Get-CountNumber
-# C01：菜单里没有“复制频道地址”
+# C01：菜单里没有「复制频道地址」
 Bring-ToFront
 Send-KeysToWindow -Keys '2' -WaitMs 1500   # 选 2 号台（不播 1 号，免得后面藏正在播的台）
 $menu = Open-ChannelContextMenu
 $names = @($menu | ForEach-Object { Get-ElementText $_ })
 if ($names -contains '复制频道地址') {
-    Write-Result -Id 'C01' -Name '右键菜单没有“复制频道地址”' -Verdict 'FAIL' -Evidence "菜单=$($names -join '/')"
+    Write-Result -Id 'C01' -Name '右键菜单没有「复制频道地址」' -Verdict 'FAIL' -Evidence "菜单=$($names -join '/')"
 } elseif ($names.Count -eq 0) {
-    Write-Result -Id 'C01' -Name '右键菜单没有“复制频道地址”' -Verdict 'FAIL' -Evidence 'Shift+F10 后没读到菜单项（焦点可能不在列表上）'
+    Write-Result -Id 'C01' -Name '右键菜单没有「复制频道地址」' -Verdict 'FAIL' -Evidence 'Shift+F10 后没读到菜单项（焦点可能不在列表上）'
 } else {
-    Write-Result -Id 'C01' -Name '右键菜单没有“复制频道地址”' -Verdict 'PASS' -Evidence "菜单=$($names -join '/')"
+    Write-Result -Id 'C01' -Name '右键菜单没有「复制频道地址」' -Verdict 'PASS' -Evidence "菜单=$($names -join '/')"
 }
 
 # C02：隐藏 2 号台
 $hideItem = $menu | Where-Object { (Get-ElementText $_) -eq '隐藏频道' } | Select-Object -First 1
 if ($null -eq $hideItem) {
-    Write-Result -Id 'C02' -Name '右键“隐藏频道”' -Verdict 'FAIL' -Evidence '菜单里没有“隐藏频道”'
-    Write-Result -Id 'C03' -Name '“显示隐藏频道”找回' -Verdict 'FAIL' -Evidence 'C02 未完成，跳过'
-    Write-Result -Id 'C04' -Name '右键“显示频道”取消隐藏' -Verdict 'FAIL' -Evidence 'C02 未完成，跳过'
+    Write-Result -Id 'C02' -Name '右键「隐藏频道」' -Verdict 'FAIL' -Evidence '菜单里没有「隐藏频道」'
+    Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'FAIL' -Evidence 'C02 未完成，跳过'
+    Write-Result -Id 'C04' -Name '右键「显示频道」取消隐藏' -Verdict 'FAIL' -Evidence 'C02 未完成，跳过'
     Write-Result -Id 'C05' -Name 'config 隐藏恢复基线' -Verdict 'FAIL' -Evidence 'C02 未完成，跳过'
 } else {
     [void](Invoke-Element $hideItem)
@@ -461,27 +474,27 @@ if ($null -eq $hideItem) {
     $hid1 = @()
     if ($null -ne $cfg1 -and $null -ne $cfg1.HiddenChannels) { $hid1 = @($cfg1.HiddenChannels) }
     if ($cnt1 -eq ($cnt0 - 1) -and $hid1.Count -eq ($hidden0.Count + 1)) {
-        Write-Result -Id 'C02' -Name '右键“隐藏频道”' -Verdict 'PASS' -Evidence "频道数 $cnt0->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
+        Write-Result -Id 'C02' -Name '右键「隐藏频道」' -Verdict 'PASS' -Evidence "频道数 $cnt0->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
     } else {
-        Write-Result -Id 'C02' -Name '右键“隐藏频道”' -Verdict 'FAIL' -Evidence "频道数 $cnt0->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
+        Write-Result -Id 'C02' -Name '右键「隐藏频道」' -Verdict 'FAIL' -Evidence "频道数 $cnt0->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
     }
-    # C03：打开“显示隐藏频道”，台回来
+    # C03：打开「显示隐藏频道」，台回来
     $menu2 = Open-ChannelContextMenu
     $showHidden = $menu2 | Where-Object { (Get-ElementText $_) -eq '显示隐藏频道' } | Select-Object -First 1
     if ($null -eq $showHidden) {
-        Write-Result -Id 'C03' -Name '“显示隐藏频道”找回' -Verdict 'FAIL' -Evidence '菜单里没有“显示隐藏频道”'
-        Write-Result -Id 'C04' -Name '右键“显示频道”取消隐藏' -Verdict 'FAIL' -Evidence 'C03 未完成，跳过'
+        Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'FAIL' -Evidence '菜单里没有「显示隐藏频道」'
+        Write-Result -Id 'C04' -Name '右键「显示频道」取消隐藏' -Verdict 'FAIL' -Evidence 'C03 未完成，跳过'
         Write-Result -Id 'C05' -Name 'config 隐藏恢复基线' -Verdict 'FAIL' -Evidence 'C03 未完成，跳过'
     } else {
         [void](Invoke-Element $showHidden)
         Start-Sleep -Seconds 2
         $cnt2 = Get-CountNumber
         if ($cnt2 -eq $cnt0) {
-            Write-Result -Id 'C03' -Name '“显示隐藏频道”找回' -Verdict 'PASS' -Evidence "频道数回到 $cnt2"
+            Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'PASS' -Evidence "频道数回到 $cnt2"
         } else {
-            Write-Result -Id 'C03' -Name '“显示隐藏频道”找回' -Verdict 'FAIL' -Evidence "频道数 $cnt2，期望 $cnt0"
+            Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'FAIL' -Evidence "频道数 $cnt2，期望 $cnt0"
         }
-        # C04：数字键选回 2 号台（它已回到列表），右键应只有“显示频道”
+        # C04：数字键选回 2 号台（它已回到列表），右键应只有「显示频道」
         Bring-ToFront
         Send-KeysToWindow -Keys '2' -WaitMs 1500
         $menu3 = Open-ChannelContextMenu
@@ -494,14 +507,14 @@ if ($null -eq $hideItem) {
             $hid2 = @()
             if ($null -ne $cfg2 -and $null -ne $cfg2.HiddenChannels) { $hid2 = @($cfg2.HiddenChannels) }
             if ($hid2.Count -eq $hidden0.Count) {
-                Write-Result -Id 'C04' -Name '右键“显示频道”取消隐藏' -Verdict 'PASS' -Evidence "隐藏回到 $($hid2.Count) 个"
+                Write-Result -Id 'C04' -Name '右键「显示频道」取消隐藏' -Verdict 'PASS' -Evidence "隐藏回到 $($hid2.Count) 个"
             } else {
-                Write-Result -Id 'C04' -Name '右键“显示频道”取消隐藏' -Verdict 'FAIL' -Evidence "隐藏 $($hid2.Count) 个，期望 $($hidden0.Count)"
+                Write-Result -Id 'C04' -Name '右键「显示频道」取消隐藏' -Verdict 'FAIL' -Evidence "隐藏 $($hid2.Count) 个，期望 $($hidden0.Count)"
             }
         } else {
-            Write-Result -Id 'C04' -Name '右键“显示频道”取消隐藏' -Verdict 'FAIL' -Evidence "菜单=$($names3 -join '/')（期望只有“显示频道”、没有“隐藏频道”）"
+            Write-Result -Id 'C04' -Name '右键「显示频道」取消隐藏' -Verdict 'FAIL' -Evidence "菜单=$($names3 -join '/')（期望只有「显示频道」、没有「隐藏频道」）"
         }
-        # C05：config 隐藏数回到基线；顺手把“显示隐藏频道”关回去（菜单里再点一次取消勾选）
+        # C05：config 隐藏数回到基线；顺手把「显示隐藏频道」关回去（菜单里再点一次取消勾选）
         $menu4 = Open-ChannelContextMenu
         $sh2 = $menu4 | Where-Object { (Get-ElementText $_) -eq '显示隐藏频道' } | Select-Object -First 1
         if ($null -ne $sh2) {
@@ -529,7 +542,7 @@ Send-KeysToWindow -Keys '1' -WaitMs 2000   # 回到 1 号台并播起来
 $menuD = Open-ChannelContextMenu
 $newWin = $menuD | Where-Object { (Get-ElementText $_) -eq '新窗口播放' } | Select-Object -First 1
 if ($null -eq $newWin) {
-    Write-Result -Id 'D01' -Name '新窗口播放时主窗口停掉' -Verdict 'FAIL' -Evidence '菜单里没有“新窗口播放”'
+    Write-Result -Id 'D01' -Name '新窗口播放时主窗口停掉' -Verdict 'FAIL' -Evidence '菜单里没有「新窗口播放」'
     Write-Result -Id 'D02' -Name '关新窗口后主窗口恢复' -Verdict 'FAIL' -Evidence 'D01 未完成，跳过'
 } else {
     [void](Invoke-Element $newWin)
@@ -539,7 +552,7 @@ if ($null -eq $newWin) {
     $st = Wait-ForStatus -Pattern '新窗口播放中' -TimeoutSec 5
     $t0 = Test-TimeAdvancing -WaitSec 3
     if ($wins.Count -ge 2 -and ($st -match '新窗口播放中' -or -not $t0.Advanced)) {
-        Write-Result -Id 'D01' -Name '新窗口播放时主窗口停掉' -Verdict 'PASS' -Evidence "窗口数=$($wins.Count)，状态含“新窗口播放中”=$($st -match '新窗口播放中')，主窗口时间走动=$($t0.Advanced)"
+        Write-Result -Id 'D01' -Name '新窗口播放时主窗口停掉' -Verdict 'PASS' -Evidence "窗口数=$($wins.Count)，状态含「新窗口播放中」=$($st -match '新窗口播放中')，主窗口时间走动=$($t0.Advanced)"
     } else {
         Write-Result -Id 'D01' -Name '新窗口播放时主窗口停掉' -Verdict 'FAIL' -Evidence "窗口数=$($wins.Count)，状态=$st，时间 $($t0.Before)->$($t0.After)"
     }
@@ -573,16 +586,16 @@ $shotE1 = Take-Shot -Name 'E01-osd-cctv1'
 Write-Result -Id 'E01' -Name '切台 OSD 四行（CCTV-1）' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE1（应有台名+正在播+接下来 2 个，5 秒消失）"
 Send-KeysToWindow -Keys '51' -WaitMs 2600  # 切凤凰中文（无节目单的台）
 $shotE2 = Take-Shot -Name 'E02-osd-phoenix'
-Write-Result -Id 'E02' -Name '无节目单台显示“暂无节目信息”（凤凰中文）' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE2（应有台名 +“暂无节目信息”）"
+Write-Result -Id 'E02' -Name '无节目单台显示「暂无节目信息」（凤凰中文）' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE2（应有台名 +「暂无节目信息」）"
 
-# E03：没有单独的“节目单”按钮
+# E03：没有单独的「节目单」按钮
 $win = Get-TmwWindow
 $btns = Find-All -Root $win -ControlType ([System.Windows.Automation.ControlType]::Button)
 $btnNames = @($btns | ForEach-Object { Get-ElementText $_ })
 if ($btnNames -contains '节目单') {
-    Write-Result -Id 'E03' -Name '没有单独的“节目单”按钮' -Verdict 'FAIL' -Evidence "按钮里还有“节目单”：$($btnNames -join '/')"
+    Write-Result -Id 'E03' -Name '没有单独的「节目单」按钮' -Verdict 'FAIL' -Evidence "按钮里还有「节目单」：$($btnNames -join '/')"
 } else {
-    Write-Result -Id 'E03' -Name '没有单独的“节目单”按钮' -Verdict 'PASS' -Evidence "工具栏按钮=$($btnNames -join '/')"
+    Write-Result -Id 'E03' -Name '没有单独的「节目单」按钮' -Verdict 'PASS' -Evidence "工具栏按钮=$($btnNames -join '/')"
 }
 # E04：E 键打开完整节目单
 Send-KeysToWindow -Keys 'e' -WaitMs 1500
@@ -599,7 +612,7 @@ Start-Process -FilePath $exe -WorkingDirectory $InstallDir
 $win = $null
 for ($i = 0; $i -lt 60; $i++) { Start-Sleep -Seconds 2; $win = Get-TmwWindow; if ($null -ne $win) { break } }
 if ($null -eq $win) {
-    Write-Result -Id 'F01' -Name '“免费接口未配置”提示 5 秒自动消失' -Verdict 'FAIL' -Evidence '重启后 120 秒无主窗口'
+    Write-Result -Id 'F01' -Name '「免费接口未配置」提示 5 秒自动消失' -Verdict 'FAIL' -Evidence '重启后 120 秒无主窗口'
 } else {
     Bring-ToFront
     Start-Sleep -Seconds 5
@@ -607,7 +620,7 @@ if ($null -eq $win) {
     $masterOn = ($null -ne $cfgF -and $cfgF.LiveSubtitleEnabled -eq $true)
     if (-not $masterOn) {
         # 设置里打开字幕主开关（LiveSubtitleChk）
-        $setBtn = Find-ByName -Root $win -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '设置' | Select-Object -First 1
+        $setBtn = Find-ByAutomationId -Root $win -AutomationId 'BtnSettings'
         if ($null -ne $setBtn) {
             [void](Invoke-Element $setBtn)
             Start-Sleep -Seconds 2
@@ -639,7 +652,7 @@ if ($null -eq $win) {
     }
     Send-KeysToWindow -Keys '2' -WaitMs 3000
     $shotF3 = Take-Shot -Name 'F01-toast-switch2'
-    Write-Result -Id 'F01' -Name '“免费接口未配置”提示 5 秒自动消失' -Verdict 'NEEDS-EYE' -Evidence "t1=$shotF1（应有提示），t8=$shotF2（应消失），切台后=$shotF3（不应重现）；log 里有该提示=$logged"
+    Write-Result -Id 'F01' -Name '「免费接口未配置」提示 5 秒自动消失' -Verdict 'NEEDS-EYE' -Evidence "t1=$shotF1（应有提示），t8=$shotF2（应消失），切台后=$shotF3（不应重现）；log 里有该提示=$logged"
 }
 
 # ================= G：刷新按钮 =================
@@ -647,23 +660,23 @@ Bring-ToFront
 $win = Get-TmwWindow
 $refBtn = Find-ByName -Root $win -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '^刷新$' | Select-Object -First 1
 if ($null -eq $refBtn) {
-    Write-Result -Id 'G01' -Name '点“刷新”显示“已刷新：N 个频道 HH:mm”' -Verdict 'FAIL' -Evidence '找不到“刷新”按钮'
+    Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'FAIL' -Evidence '找不到「刷新」按钮'
 } else {
     [void](Invoke-Element $refBtn)
     $stG = Wait-ForStatus -Pattern '已刷新：\d+ 个频道 \d{2}:\d{2}' -TimeoutSec 20
     if ($stG -match '已刷新：\d+ 个频道 \d{2}:\d{2}') {
-        Write-Result -Id 'G01' -Name '点“刷新”显示“已刷新：N 个频道 HH:mm”' -Verdict 'PASS' -Evidence $stG
+        Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'PASS' -Evidence $stG
     } else {
-        Write-Result -Id 'G01' -Name '点“刷新”显示“已刷新：N 个频道 HH:mm”' -Verdict 'FAIL' -Evidence "刷新后状态=$stG（期望“已刷新：N 个频道 HH:mm”）"
+        Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'FAIL' -Evidence "刷新后状态=$stG（期望「已刷新：N 个频道 HH:mm」）"
     }
 }
 
 # ================= H：版本显示 + 检查更新 =================
 $win = Get-TmwWindow
-$setBtnH = Find-ByName -Root $win -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '设置' | Select-Object -First 1
+$setBtnH = Find-ByAutomationId -Root $win -AutomationId 'BtnSettings'
 if ($null -eq $setBtnH) {
-    Write-Result -Id 'H01' -Name '设置页显示“当前版本”' -Verdict 'FAIL' -Evidence '找不到“设置”按钮'
-    Write-Result -Id 'H02' -Name '“检查更新”显示“已是最新版本”' -Verdict 'FAIL' -Evidence 'H01 未完成，跳过'
+    Write-Result -Id 'H01' -Name '设置页显示「当前版本」' -Verdict 'FAIL' -Evidence '找不到「设置」按钮'
+    Write-Result -Id 'H02' -Name '「检查更新」显示「已是最新版本」' -Verdict 'FAIL' -Evidence 'H01 未完成，跳过'
 } else {
     [void](Invoke-Element $setBtnH)
     Start-Sleep -Seconds 2
@@ -671,16 +684,16 @@ if ($null -eq $setBtnH) {
     $winsH = @($rootH.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
     $setWin = $winsH | Where-Object { $_.Current.Name -match '设置' } | Select-Object -First 1
     if ($null -eq $setWin) {
-        Write-Result -Id 'H01' -Name '设置页显示“当前版本”' -Verdict 'FAIL' -Evidence '点了设置，没弹出设置窗口'
-        Write-Result -Id 'H02' -Name '“检查更新”显示“已是最新版本”' -Verdict 'FAIL' -Evidence 'H01 未完成，跳过'
+        Write-Result -Id 'H01' -Name '设置页显示「当前版本」' -Verdict 'FAIL' -Evidence '点了设置，没弹出设置窗口'
+        Write-Result -Id 'H02' -Name '「检查更新」显示「已是最新版本」' -Verdict 'FAIL' -Evidence 'H01 未完成，跳过'
     } else {
         $textsH = Find-All -Root $setWin -ControlType ([System.Windows.Automation.ControlType]::Text)
         $namesH = @($textsH | ForEach-Object { Get-ElementText $_ })
         $verText = @($namesH | Where-Object { $_ -match '当前版本' })
         if ($verText.Count -gt 0 -and ($verText -join '') -match [regex]::Escape($ExpectedVersion)) {
-            Write-Result -Id 'H01' -Name '设置页显示“当前版本”' -Verdict 'PASS' -Evidence ($verText -join ' / ')
+            Write-Result -Id 'H01' -Name '设置页显示「当前版本」' -Verdict 'PASS' -Evidence ($verText -join ' / ')
         } else {
-            Write-Result -Id 'H01' -Name '设置页显示“当前版本”' -Verdict 'FAIL' -Evidence "设置页文字=$($namesH -join ' | ')"
+            Write-Result -Id 'H01' -Name '设置页显示「当前版本」' -Verdict 'FAIL' -Evidence "设置页文字=$($namesH -join ' | ')"
         }
         # B05：设置页下拉框（主题）字看得见——深色模板下闭合框是深底，截框数深色像素
         # （白底浅字时深色像素几乎没有；深底浅字或白底深字时都有足够深色像素）
@@ -700,7 +713,7 @@ if ($null -eq $setBtnH) {
         }
         $updBtn = Find-ByName -Root $setWin -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '检查更新' | Select-Object -First 1
         if ($null -eq $updBtn) {
-            Write-Result -Id 'H02' -Name '“检查更新”显示“已是最新版本”' -Verdict 'FAIL' -Evidence '设置页没有“检查更新”按钮'
+            Write-Result -Id 'H02' -Name '「检查更新」显示「已是最新版本」' -Verdict 'FAIL' -Evidence '设置页没有「检查更新」按钮'
         } else {
             [void](Invoke-Element $updBtn)
             $ok = $false
@@ -714,11 +727,11 @@ if ($null -eq $setBtnH) {
             $t3 = Find-All -Root $setWin -ControlType ([System.Windows.Automation.ControlType]::Text)
             $n3 = ($t3 | ForEach-Object { Get-ElementText $_ }) -join ' | '
             if ($ok) {
-                Write-Result -Id 'H02' -Name '“检查更新”显示“已是最新版本”' -Verdict 'PASS' -Evidence $n3
+                Write-Result -Id 'H02' -Name '「检查更新」显示「已是最新版本」' -Verdict 'PASS' -Evidence $n3
             } elseif ($n3 -match '发现新版本') {
-                Write-Result -Id 'H02' -Name '“检查更新”显示“已是最新版本”' -Verdict 'FAIL' -Evidence "有新版本：$n3（当前应是最新）"
+                Write-Result -Id 'H02' -Name '「检查更新」显示「已是最新版本」' -Verdict 'FAIL' -Evidence "有新版本：$n3（当前应是最新）"
             } else {
-                Write-Result -Id 'H02' -Name '“检查更新”显示“已是最新版本”' -Verdict 'FAIL' -Evidence "30 秒未见“已是最新版本”：$n3"
+                Write-Result -Id 'H02' -Name '「检查更新」显示「已是最新版本」' -Verdict 'FAIL' -Evidence "30 秒未见「已是最新版本」：$n3"
             }
         }
         try { $setWin.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
@@ -738,7 +751,7 @@ if (-not $tI0.Advanced) {
     $shotI1 = Take-Shot -Name 'I01-paused-badge'
     $p1 = Get-TimeTextValue; Start-Sleep -Seconds 3; $p2 = Get-TimeTextValue
     if ($p1 -ne '' -and $p1 -eq $p2) {
-        Write-Result -Id 'I01' -Name '空格键暂停' -Verdict 'PASS' -Evidence "时间停在 $p1 不走；徽章截图 $shotI1（须肉眼确认中央有“⏸ 已暂停”）"
+        Write-Result -Id 'I01' -Name '空格键暂停' -Verdict 'PASS' -Evidence "时间停在 $p1 不走；徽章截图 $shotI1（须肉眼确认中央有「⏸ 已暂停」）"
     } else {
         Write-Result -Id 'I01' -Name '空格键暂停' -Verdict 'FAIL' -Evidence "按空格后时间还在走：$p1->$p2；截图 $shotI1"
     }
@@ -752,13 +765,13 @@ if (-not $tI0.Advanced) {
     }
 }
 
-# ================= J：翻译“强制开”联动主开关 =================
+# ================= J：翻译「强制开」联动主开关 =================
 function Set-MasterSubtitle {
     param([bool]$On)
     # 设置页里把字幕主开关拨到指定状态，返回设置后的 config 值（true/false/$null 表示没办成）
     $w = Get-TmwWindow
     if ($null -eq $w) { return $null }
-    $btn = Find-ByName -Root $w -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '设置' | Select-Object -First 1
+    $btn = Find-ByAutomationId -Root $w -AutomationId 'BtnSettings'
     if ($null -eq $btn) { return $null }
     [void](Invoke-Element $btn)
     Start-Sleep -Seconds 2
@@ -785,11 +798,11 @@ function Set-MasterSubtitle {
 
 $masterBeforeJ = Set-MasterSubtitle -On $false
 if ($masterBeforeJ -eq $false) {
-    # 点状态栏翻译按钮，直到它显示“强制开”
+    # 点状态栏翻译按钮，直到它显示「强制开」
     $w = Get-TmwWindow
-    $tBtn = Find-ByName -Root $w -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '^翻译' | Select-Object -First 1
+    $tBtn = Find-ByAutomationId -Root $w -AutomationId 'BtnTranslateToggle'
     if ($null -eq $tBtn) {
-        Write-Result -Id 'J01' -Name '翻译“强制开”联动主开关' -Verdict 'FAIL' -Evidence '找不到状态栏翻译按钮'
+        Write-Result -Id 'J01' -Name '翻译「强制开」联动主开关' -Verdict 'FAIL' -Evidence '找不到状态栏翻译按钮'
     } else {
         $forced = $false
         for ($k = 0; $k -lt 4; $k++) {
@@ -799,19 +812,19 @@ if ($masterBeforeJ -eq $false) {
             if ($nm -match '强制') { $forced = $true; break }
             # 按钮被重建时要重找
             $w = Get-TmwWindow
-            $tBtn = Find-ByName -Root $w -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '^翻译' | Select-Object -First 1
+            $tBtn = Find-ByAutomationId -Root $w -AutomationId 'BtnTranslateToggle'
             if ($null -eq $tBtn) { break }
         }
         Start-Sleep -Seconds 1
         $cfgJ = Get-Config
         if ($forced -and $null -ne $cfgJ -and $cfgJ.LiveSubtitleEnabled -eq $true) {
-            Write-Result -Id 'J01' -Name '翻译“强制开”联动主开关' -Verdict 'PASS' -Evidence '状态栏切到强制开后，config LiveSubtitleEnabled=true 已保存'
+            Write-Result -Id 'J01' -Name '翻译「强制开」联动主开关' -Verdict 'PASS' -Evidence '状态栏切到强制开后，config LiveSubtitleEnabled=true 已保存'
         } else {
-            Write-Result -Id 'J01' -Name '翻译“强制开”联动主开关' -Verdict 'FAIL' -Evidence "强制开状态=$forced，config LiveSubtitleEnabled=$(if ($null -ne $cfgJ) { $cfgJ.LiveSubtitleEnabled } else { '读不到' })"
+            Write-Result -Id 'J01' -Name '翻译「强制开」联动主开关' -Verdict 'FAIL' -Evidence "强制开状态=$forced，config LiveSubtitleEnabled=$(if ($null -ne $cfgJ) { $cfgJ.LiveSubtitleEnabled } else { '读不到' })"
         }
     }
 } else {
-    Write-Result -Id 'J01' -Name '翻译“强制开”联动主开关' -Verdict 'FAIL' -Evidence "先关主开关没办成（返回值=$masterBeforeJ），无法测联动"
+    Write-Result -Id 'J01' -Name '翻译「强制开」联动主开关' -Verdict 'FAIL' -Evidence "先关主开关没办成（返回值=$masterBeforeJ），无法测联动"
 }
 # J02：恢复基线（F01/J01 可能把主开关打开了）
 $restored = Set-MasterSubtitle -On ([bool]$liveSub0)
@@ -865,7 +878,7 @@ for ($n = 1; $n -le 3; $n++) {
     Bring-ToFront
     $m = Open-ChannelContextMenu
     $nw = $m | Where-Object { (Get-ElementText $_) -eq '新窗口播放' } | Select-Object -First 1
-    if ($null -eq $nw) { $k03ok = $false; $k03ev = "第 $n 次菜单里没有“新窗口播放”"; break }
+    if ($null -eq $nw) { $k03ok = $false; $k03ev = "第 $n 次菜单里没有「新窗口播放」"; break }
     [void](Invoke-Element $nw)
     Start-Sleep -Seconds 2
     $root3 = [System.Windows.Automation.AutomationElement]::RootElement
@@ -888,7 +901,7 @@ if ($k03ok) {
 
 # K04：深色→浅色→深色切换
 $w = Get-TmwWindow
-$setBtn4 = Find-ByName -Root $w -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '设置' | Select-Object -First 1
+$setBtn4 = Find-ByAutomationId -Root $w -AutomationId 'BtnSettings'
 $k04ok = $false; $k04ev = ''
 if ($null -ne $setBtn4) {
     [void](Invoke-Element $setBtn4)
@@ -917,13 +930,13 @@ if ($null -ne $setBtn4) {
                         $shotK4b = Take-Shot -Name 'K04-theme-dark'
                         $k04ok = ($null -ne (Get-TmwWindow))
                         $k04ev = "浅色截图 $shotK4a，深色截图 $shotK4b"
-                    } else { $k04ev = '切回深色时找不到“深色”项' }
-                } else { $k04ev = '找不到“浅色”项' }
+                    } else { $k04ev = '切回深色时找不到「深色」项' }
+                } else { $k04ev = '找不到「浅色」项' }
             } catch { $k04ev = "主题切换异常：$($_.Exception.Message)" }
         } else { $k04ev = '设置页找不到 ThemeCombo' }
         try { $sw4.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
     } else { $k04ev = '没弹出设置窗口' }
-} else { $k04ev = '找不到“设置”按钮' }
+} else { $k04ev = '找不到「设置」按钮' }
 if ($k04ok) {
     Write-Result -Id 'K04' -Name '深色→浅色→深色切换不崩' -Verdict 'PASS' -Evidence $k04ev
 } else {
@@ -959,7 +972,7 @@ if ($null -eq $sb) {
     $cntAfter = Get-CountNumber
     $alive5 = ($null -ne (Get-TmwWindow))
     if ($alive5 -and $cntAfter -eq $cntBefore) {
-        Write-Result -Id 'K05' -Name '搜不到的词不崩、清空恢复' -Verdict 'PASS' -Evidence "搜前=$cntBefore，搜“zzzz不存在”后=$cntZero，清空后=$cntAfter"
+        Write-Result -Id 'K05' -Name '搜不到的词不崩、清空恢复' -Verdict 'PASS' -Evidence "搜前=$cntBefore，搜「zzzz不存在」后=$cntZero，清空后=$cntAfter"
     } else {
         Write-Result -Id 'K05' -Name '搜不到的词不崩、清空恢复' -Verdict 'FAIL' -Evidence "搜前=$cntBefore，搜后=$cntZero，清空后=$cntAfter，窗口在=$alive5"
     }
