@@ -280,15 +280,25 @@ if ($null -eq $win) {
 $launchSecs = [int]((Get-Date) - $launchStart).TotalSeconds
 Write-Result -Id 'A03' -Name '启动耗时（记录）' -Verdict 'PASS' -Evidence "启动到主窗口出现约 ${launchSecs}s"
 Bring-ToFront
-# 窗口恢复到正常态：app 会按 config 恢复成最大化，但最大化时底部工具栏常掉出屏幕外
-# （E01 OSD 被裁、设置按钮点不到的根因），先恢复成 1280x720 居中，保证全部 UI 可见可点。
-try {
-    $w0 = Get-TmwWindow
-    if ($null -ne $w0) {
+function Restore-WindowNormal {
+    # 窗口恢复到正常态：app 会按 config 恢复成最大化，但最大化时底部工具栏常掉出屏幕外
+    # （E01 OSD 被裁、设置按钮点不到的根因），恢复成 1280x720 居中，保证全部 UI 可见可点。
+    # F01/K06 会重启 app，重启后窗口又变回最大化，所以每次打开设置窗前也要调一次。
+    try {
+        $w0 = Get-TmwWindow
+        if ($null -eq $w0) { return }
         $wp0 = $w0.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
         $wp0.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
         Start-Sleep -Seconds 1
-        Add-Type @'
+        $h0 = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowHandle
+        if ($h0 -ne [IntPtr]::Zero) {
+            # 1280x720 居中（逻辑像素 1536x792 的屏内完全放得下）
+            [Win32Pos]::SetWindowPos($h0, [IntPtr]::Zero, 128, 36, 1280, 720, 0x0040) | Out-Null
+            Start-Sleep -Seconds 1
+        }
+    } catch { Write-Output ("窗口恢复失败：$($_.Exception.Message)") }
+}
+Add-Type @'
 using System; using System.Runtime.InteropServices;
 public static class Win32Pos {
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -296,16 +306,9 @@ public static class Win32Pos {
   public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 }
 '@
-        $h0 = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowHandle
-        if ($h0 -ne [IntPtr]::Zero) {
-            # 1280x720 居中（逻辑像素 1536x792 的屏内完全放得下）
-            [Win32Pos]::SetWindowPos($h0, [IntPtr]::Zero, 128, 36, 1280, 720, 0x0040) | Out-Null
-            Start-Sleep -Seconds 1
-        }
-        $wr0 = (Get-TmwWindow).Current.BoundingRectangle
-        Write-Output ("窗口已恢复正常态 rect=$wr0")
-    }
-} catch { Write-Output ("窗口恢复失败：$($_.Exception.Message)") }
+Restore-WindowNormal
+$wr0 = (Get-TmwWindow).Current.BoundingRectangle
+Write-Output ("窗口已恢复正常态 rect=$wr0")
 
 # 等节目单加载（log 里 epg loaded）
 $epgN = 0
@@ -577,7 +580,7 @@ if ($null -eq $hideItem) {
         $unhide = $menu3 | Where-Object { (Get-ElementText $_) -eq '显示频道' } | Select-Object -First 1
         if ($null -ne $unhide -and -not ($names3 -contains '隐藏频道')) {
             [void](Invoke-Element $unhide)
-            Start-Sleep -Seconds 2
+            Start-Sleep -Seconds 4  # config 保存是 2 秒防抖，2 秒读会抢在写盘前
             $cfg2 = Get-Config
             $hid2 = @()
             if ($null -ne $cfg2 -and $null -ne $cfg2.HiddenChannels) { $hid2 = @($cfg2.HiddenChannels) }
@@ -612,6 +615,16 @@ if ($null -eq $hideItem) {
 }
 
 # ================= D：新窗口播放 =================
+function Get-TmwWindows {
+    # 属于 TiviMateWin 进程的全部顶层窗口（主窗口 + 新窗口 ChannelWindow）。
+    # 不能按标题筛：ChannelWindow 的标题是台名（如 CCTV综合），不含「星辰」/「TiviMate」。
+    $pid = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).Id
+    if ($null -eq $pid) { return @() }
+    $rt = [System.Windows.Automation.AutomationElement]::RootElement
+    $all = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
+    return @($all | Where-Object { try { $_.Current.ProcessId -eq $pid } catch { $false } })
+}
+
 Bring-ToFront
 Send-KeysToWindow -Keys '1' -WaitMs 2000   # 回到 1 号台并播起来
 $menuD = Open-ChannelContextMenu
@@ -623,7 +636,7 @@ if ($null -eq $newWin) {
     [void](Invoke-Element $newWin)
     Start-Sleep -Seconds 3
     $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $wins = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))) | Where-Object { $_.Current.Name -like '*星辰*' -or $_.Current.Name -like '*TiviMate*' })
+    $wins = @(Get-TmwWindows)
     $st = Wait-ForStatus -Pattern '新窗口播放中' -TimeoutSec 5
     $t0 = Test-TimeAdvancing -WaitSec 3
     if ($wins.Count -ge 2 -and ($st -match '新窗口播放中' -or -not $t0.Advanced)) {
@@ -645,7 +658,7 @@ if ($null -eq $newWin) {
     } catch { }
     Start-Sleep -Seconds 3
     $t1 = Test-TimeAdvancing -WaitSec 4
-    $wins2 = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))) | Where-Object { $_.Current.Name -like '*星辰*' -or $_.Current.Name -like '*TiviMate*' })
+    $wins2 = @(Get-TmwWindows)
     if ($closed -and $wins2.Count -eq 1 -and $t1.Advanced) {
         Write-Result -Id 'D02' -Name '关新窗口后主窗口恢复' -Verdict 'PASS' -Evidence "窗口数回到 1，时间 $($t1.Before)->$($t1.After) 在走"
     } else {
@@ -691,8 +704,10 @@ if ($null -ne $epgPanel -and $epgVis -eq 'False') {
 Send-KeysToWindow -Keys '{ESC}' -WaitMs 800
 
 function Open-SettingsWindow {
-    # 稳健打开设置窗：UIA 点 BtnSettings → 轮询 6 秒；不行再鼠标点按钮中心 → 再轮询 6 秒。
+    # 稳健打开设置窗：先恢复窗口正常态（重启后会变回最大化，工具栏掉出屏幕就点不到），
+    # 再 UIA 点 BtnSettings → 轮询 6 秒；不行再鼠标点按钮中心 → 再轮询 6 秒。
     # 返回设置窗口元素，找不到返回 $null。
+    Restore-WindowNormal
     $w = Get-TmwWindow
     if ($null -eq $w) { return $null }
     Bring-ToFront
@@ -990,7 +1005,7 @@ for ($n = 1; $n -le 3; $n++) {
     [void](Invoke-Element $nw)
     Start-Sleep -Seconds 2
     $root3 = [System.Windows.Automation.AutomationElement]::RootElement
-    $allW = @($root3.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))) | Where-Object { $_.Current.Name -like '*星辰*' -or $_.Current.Name -like '*TiviMate*' })
+    $allW = @(Get-TmwWindows)
     $mainH3 = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowHandle
     foreach ($w3 in $allW) {
         if ($w3.Current.NativeWindowHandle -ne $mainH3) {
@@ -998,7 +1013,7 @@ for ($n = 1; $n -le 3; $n++) {
         }
     }
     Start-Sleep -Seconds 2
-    $left = @($root3.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))) | Where-Object { $_.Current.Name -like '*星辰*' -or $_.Current.Name -like '*TiviMate*' })
+    $left = @(Get-TmwWindows)
     if ($left.Count -ne 1) { $k03ok = $false; $k03ev = "第 $n 次关窗后还剩 $($left.Count) 个窗口"; break }
 }
 if ($k03ok) {
