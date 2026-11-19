@@ -223,12 +223,14 @@
                 <DockPanel DockPanel.Dock="Top" Margin="12,0,12,6">
                     <TextBlock x:Name="CountText" Text="0 个频道" DockPanel.Dock="Left"
                                Foreground="{DynamicResource MutedFgBrush}" FontSize="12" Margin="2,0,8,0" VerticalAlignment="Center"/>
-                    <!-- v1.4.35 补：下拉框颜色写死（别用 DynamicResource）。1.4.34 实测：
-                         GroupCombo 用 DynamicResource PanelBgBrush/InputFgBrush 时画出来是
-                         空白白框、一个字都没有（数据正常：UIA 读到选中“全部”、4 个选项）。
-                         设置页里的下拉框用写死的 #FF20262E/#FFDDE4EB 就正常显示，照抄它。
-                         下拉列表项也写死样式（深底浅字、悬停/选中高亮），免得弹出的列表看不清。 -->
-                    <ComboBox x:Name="GroupCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB"
+                    <!-- v1.4.35 补 2：下拉框字色写深。1.4.34 是完全没字；1.4.35 第一版把
+                         底色/字色写死后，字画出来了但还是看不见——台式机实测：字亮度 224–234、
+                         底 234–241，几乎没对比度。原因是这套 ComboBox 模板根本不吃
+                         Background（底还是白的），只吃 Foreground。字色改成深色
+                         #FF20262E（白底深字，对比度够），下拉列表项保持深底浅字
+                         （ComboBoxItem 模板吃 Background，那边是正常的；重验时要点开
+                         下拉框截图确认列表项也看得见）。 -->
+                    <ComboBox x:Name="GroupCombo" Height="30" Background="#FF20262E" Foreground="#FF20262E"
                               BorderBrush="#FF2D3540" BorderThickness="1"
                               SelectionChanged="GroupCombo_SelectionChanged" ToolTip="按分组筛选频道">
                         <ComboBox.ItemContainerStyle>
