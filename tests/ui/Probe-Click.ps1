@@ -20,7 +20,9 @@ $root=[System.Windows.Automation.AutomationElement]::RootElement
 $rr=$root.Current.BoundingRectangle
 Write-Output ("RootElement rect={0}" -f $rr)
 Write-Output ("WinForms Bounds={0}x{1}" -f [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height)
-$win=$root.FindFirst([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)))
+$p=Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1
+if($null -eq $p -or $p.MainWindowHandle -eq 0){ Write-Output 'TiviMateWin not running'; exit 1 }
+$win=[System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle)
 Write-Output ("Window name={0} rect={1}" -f $win.Current.Name, $win.Current.BoundingRectangle)
 [Win32D]::SetForegroundWindow([IntPtr]$win.Current.NativeWindowHandle)
 Start-Sleep -Milliseconds 500
