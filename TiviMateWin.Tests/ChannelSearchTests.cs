@@ -18,13 +18,15 @@ public class ChannelSearchTests
     }
 
     [Theory]
-    [InlineData("BBC")]
-    [InlineData("bbc")]
-    [InlineData("CNN")]
-    public void EnglishName_CaseInsensitiveMatches(string q)
+    [InlineData("BBC 新闻", "BBC")]
+    [InlineData("BBC 新闻", "bbc")]
+    [InlineData("CNN International", "CNN")]
+    [InlineData("CNN International", "cnn")]
+    public void EnglishName_CaseInsensitiveMatches(string name, string q)
     {
-        Assert.True(ChannelSearch.Matches("BBC 新闻", "其他地区直播", 56, q));
+        Assert.True(ChannelSearch.Matches(name, "其他地区直播", 56, q));
         Assert.False(ChannelSearch.Matches("CCTV综合", "央视频道", 1, "BBC"));
+        Assert.False(ChannelSearch.Matches("BBC 新闻", "其他地区直播", 56, "CNN"));
     }
 
     [Theory]
