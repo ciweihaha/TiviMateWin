@@ -21,6 +21,8 @@
   <!-- 只链接纯逻辑文件，不引用 WPF 主工程（Linux 上编不了 WPF）；托盘状态机无 UI 依赖 -->
   <ItemGroup>
     <Compile Include="..\Services\PipTrayIconState.cs" Link="PipTrayIconState.cs" />
+    <Compile Include="..\Services\EpgRefreshPolicy.cs" Link="EpgRefreshPolicy.cs" />
+    <Compile Include="..\Models\EpgProgram.cs" Link="EpgProgram.cs" />
     <Compile Include="..\Services\AppLog.cs" Link="AppLog.cs" />
     <Compile Include="..\Services\LiveSubtitleChunker.cs" Link="LiveSubtitleChunker.cs" />
     <Compile Include="..\Services\LiveSubtitlePipeline.cs" Link="LiveSubtitlePipeline.cs" />

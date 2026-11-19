@@ -205,6 +205,31 @@ public static class SelfTest
             lines.Add(MainWindow.ExtractEpgUrl("#EXTM3U x-tvg-url=\"http://x\" url-tvg=\"http://epg.example.com/epg.xml\"\n#EXTINF:-1,A\nhttp://a.m3u8") == "http://epg.example.com/epg.xml"
                 ? "PASS EPG源提取-两者都有url-tvg优先" : "FAIL EPG源提取-两者都有url-tvg优先");
 
+            // --- EPG 自动重抓判定（v1.4.32，纯逻辑） ---
+            // 节目单只在加载播放列表时抓一次，之后只重绘本地显示：每小时重抓、
+            // 数据过期立即重抓、5 分钟内不重复发起、从未加载过不触发。
+            var epgNow = new DateTime(2026, 11, 19, 10, 0, 0);
+            lines.Add(EpgRefreshPolicy.ShouldRefetchEpg(epgNow.AddHours(-1), epgNow.AddHours(-1), epgNow, false)
+                ? "PASS EPG自动重抓-超1小时重抓" : "FAIL EPG自动重抓-超1小时重抓");
+            lines.Add(!EpgRefreshPolicy.ShouldRefetchEpg(epgNow.AddMinutes(-59), epgNow.AddHours(-1), epgNow, false)
+                ? "PASS EPG自动重抓-1小时内不重抓" : "FAIL EPG自动重抓-1小时内不重抓");
+            lines.Add(EpgRefreshPolicy.ShouldRefetchEpg(epgNow.AddMinutes(-10), epgNow.AddMinutes(-10), epgNow, true)
+                ? "PASS EPG自动重抓-数据过期立即重抓" : "FAIL EPG自动重抓-数据过期立即重抓");
+            lines.Add(!EpgRefreshPolicy.ShouldRefetchEpg(epgNow.AddHours(-2), epgNow.AddMinutes(-4), epgNow, true)
+                ? "PASS EPG自动重抓-5分钟内不重复发起" : "FAIL EPG自动重抓-5分钟内不重复发起");
+            lines.Add(!EpgRefreshPolicy.ShouldRefetchEpg(null, DateTime.MinValue, epgNow, true)
+                ? "PASS EPG自动重抓-从未加载不触发" : "FAIL EPG自动重抓-从未加载不触发");
+            var epgStaleProgs = new List<EpgProgram>
+            {
+                new() { Start = new DateTime(2026, 11, 19, 0, 0, 0), Stop = new DateTime(2026, 11, 19, 20, 0, 0), Title = "旧节目" }
+            };
+            lines.Add(EpgRefreshPolicy.EpgDataExpired(epgStaleProgs, new DateTime(2026, 11, 19, 20, 4, 0))
+                ? "PASS EPG过期判定-已过最后节目结束时间" : "FAIL EPG过期判定-已过最后节目结束时间");
+            lines.Add(!EpgRefreshPolicy.EpgDataExpired(epgStaleProgs, new DateTime(2026, 11, 19, 19, 0, 0))
+                ? "PASS EPG过期判定-节目进行中不过期" : "FAIL EPG过期判定-节目进行中不过期");
+            lines.Add(!EpgRefreshPolicy.EpgDataExpired(new List<EpgProgram>(), epgNow)
+                ? "PASS EPG过期判定-无节目不算过期" : "FAIL EPG过期判定-无节目不算过期");
+
             // --- 重连触顶降频（v1.4.31，纯逻辑） ---
             // 旧逻辑：看门狗每 8 秒调一次 TryAutoReconnect，触顶后每次都记一条 ERROR；
             // 60 秒冷却一到计数清零又重连 5 次，死源等于无限重试。

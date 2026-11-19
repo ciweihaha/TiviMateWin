@@ -283,6 +283,8 @@ public partial class MainWindow : Window
     private string? _epgUrl;
     private int _epgSeq;   // F7：EPG 加载序号：只采纳最后一次请求的结果，防止旧结果覆盖新结果
     private string? _epgLoadingUrl;   // M3：正在加载的 EPG 地址（与 _epgUrl 分离：失败时 _epgUrl 不动，下次刷新可重试；加载中不重复发起）
+    private DateTime? _epgLoadedAt;   // v1.4.32：上次成功抓到 EPG 的时间；超 1 小时触发自动重抓
+    private DateTime _lastEpgFetchAttempt = DateTime.MinValue; // v1.4.32：最近一次 EPG 拉取尝试（含失败）；5 分钟内不重复发起，避免失败/回前台时刷屏重试
     // EPG 频道名 → 节目列表索引：GetPrograms 的名称回退查索引，不再线性扫整个 EPG 字典；与 _epg 同步重建。
     // 键的来源是 EPG 的 &lt;channel&gt; display-name（见 LoadEpgAsync），不是 id 的原样复制——
     // 旧实现只抄 id 键，名字回退基本查不到；id 键仍先占位，撞名时 id 优先。
@@ -349,7 +351,12 @@ public partial class MainWindow : Window
         InstallMouseHook(); // 底层鼠标钩子：视频区双击/小窗视频区拖动（见 OnLowLevelMouse）
     }
 
-    private void OnWindowActivated(object? sender, EventArgs e) => ReturnFocusToList();
+    private void OnWindowActivated(object? sender, EventArgs e)
+    {
+        ReturnFocusToList();
+        // v1.4.32：回前台时节目单可能已过期（服务端每天更新、旧缓存停在昨天）——到期就重抓，不用重启 app。
+        TryRefreshEpgIfDue();
+    }
 
     private void ReturnFocusToList()
     {
@@ -1779,6 +1786,8 @@ public partial class MainWindow : Window
         {
             if (_closing || _current is null) return;
             ShowEpgForChannel(_current);
+            // v1.4.32：每分钟 tick 顺带检查节目单时效——超 1 小时或当前频道节目已过期就重抓服务端。
+            TryRefreshEpgIfDue();
             if (ChannelOsd.Visibility == Visibility.Visible && _digitBuf.Length == 0)
                 ShowChannelOsd(_current);   // 顺带重置隐藏计时，刷新后重新计 3 秒
         }
@@ -2476,6 +2485,7 @@ public partial class MainWindow : Window
     {
         // F7：与 _loadSeq 同模式的序号，并捕获调用时的 url；完成时比对不一致则丢弃。
         var seq = ++_epgSeq;
+        _lastEpgFetchAttempt = DateTime.Now;   // v1.4.32：记一次拉取尝试（含失败），5 分钟内不重复发起
         try
         {
             var xml = await FetchTextAsync(url, ct, MaxEpgBytes);
@@ -2489,6 +2499,7 @@ public partial class MainWindow : Window
             }, ct);
             if (seq != _epgSeq) return;   // 已有更新的 EPG 请求，丢弃旧结果，不覆盖 _epg、不刷新当前频道节目
             _epgUrl = url;   // M3：仅成功后才更新 _epgUrl，失败时保持旧值，下次刷新仍会重试
+            _epgLoadedAt = DateTime.Now;   // v1.4.32：成功才记时，失败不刷新计时（下次 tick/回前台可再试）
             _epg = epg;
             // L7：同步重建名称索引（TryAdd：仅大小写不同的 id 碰撞时先到先得，与旧线性扫描的首个匹配一致）。
             // 旧代码只把 id 键原样抄进名称索引，GetPrograms 用频道名查它时只有名字恰好等于
@@ -2518,6 +2529,23 @@ public partial class MainWindow : Window
             // 加载启动（标记已被覆写为新地址），不清除他人的标记。
             if (_epgLoadingUrl == url) _epgLoadingUrl = null;
         }
+    }
+
+    /// <summary>按三路触发检查节目单时效，到期就重抓（v1.4.32）：每分钟 tick、回前台时调用。
+    /// 只在已有成功加载的 EPG 地址时才发起；加载中不重复发起；失败不清空旧数据
+    /// （LoadEpgAsync 失败分支只记日志），下次检查可再试。判定在 EpgRefreshPolicy（纯逻辑可单测）。</summary>
+    private void TryRefreshEpgIfDue()
+    {
+        try
+        {
+            if (_closing || _epgUrl is null || _epgLoadingUrl != null) return;
+            var expired = _current != null && EpgRefreshPolicy.EpgDataExpired(GetPrograms(_current), DateTime.Now);
+            if (!EpgRefreshPolicy.ShouldRefetchEpg(_epgLoadedAt, _lastEpgFetchAttempt, DateTime.Now, expired)) return;
+            AppLog.Info($"epg auto-refresh: refetching {AppConfig.RedactUrlForLog(_epgUrl)} (loaded {_epgLoadedAt:HH:mm}, expired={expired})");
+            _epgLoadingUrl = _epgUrl;
+            _ = LoadEpgAsync(_epgUrl, _netCts.Token);
+        }
+        catch (Exception ex) { AppLog.Error($"epg auto-refresh check failed: {ex.Message}"); }
     }
 
     /// <summary>获取频道当前/即将播出的节目</summary>
