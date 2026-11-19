@@ -1,3 +1,4 @@
+using System;
 using System.Reflection;
 
 namespace TiviMateWin.Services;
@@ -10,7 +11,8 @@ public static class AppVersion
     /// <summary>当前运行的程序集版本（标题栏、设置页共用）。</summary>
     public static Version? Current => Assembly.GetExecutingAssembly().GetName().Version;
 
-    /// <summary>“1.4.35.0”→“1.4.35”；拿不到版本时返回“?”。</summary>
+    /// <summary>“1.4.35.0”→“1.4.35”；拿不到版本时返回“?”。
+    /// 两段版本号（如 1.4）的 Build 是 -1，按 0 显示。</summary>
     public static string Display(Version? version) =>
-        version is null ? "?" : $"{version.Major}.{version.Minor}.{version.Build}";
+        version is null ? "?" : $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}";
 }
