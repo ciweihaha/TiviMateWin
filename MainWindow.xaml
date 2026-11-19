@@ -223,32 +223,12 @@
                 <DockPanel DockPanel.Dock="Top" Margin="12,0,12,6">
                     <TextBlock x:Name="CountText" Text="0 个频道" DockPanel.Dock="Left"
                                Foreground="{DynamicResource MutedFgBrush}" FontSize="12" Margin="2,0,8,0" VerticalAlignment="Center"/>
-                    <!-- v1.4.35 补 2：下拉框字色写深。1.4.34 是完全没字；1.4.35 第一版把
-                         底色/字色写死后，字画出来了但还是看不见——台式机实测：字亮度 224–234、
-                         底 234–241，几乎没对比度。原因是这套 ComboBox 模板根本不吃
-                         Background（底还是白的），只吃 Foreground。字色改成深色
-                         #FF20262E（白底深字，对比度够），下拉列表项保持深底浅字
-                         （ComboBoxItem 模板吃 Background，那边是正常的；重验时要点开
-                         下拉框截图确认列表项也看得见）。 -->
-                    <ComboBox x:Name="GroupCombo" Height="30" Background="#FF20262E" Foreground="#FF20262E"
-                              BorderBrush="#FF2D3540" BorderThickness="1"
-                              SelectionChanged="GroupCombo_SelectionChanged" ToolTip="按分组筛选频道">
-                        <ComboBox.ItemContainerStyle>
-                            <Style TargetType="ComboBoxItem">
-                                <Setter Property="Background" Value="#FF20262E"/>
-                                <Setter Property="Foreground" Value="#FFDDE4EB"/>
-                                <Setter Property="Padding" Value="8,6"/>
-                                <Style.Triggers>
-                                    <Trigger Property="IsHighlighted" Value="True">
-                                        <Setter Property="Background" Value="#FF31404F"/>
-                                    </Trigger>
-                                    <Trigger Property="IsSelected" Value="True">
-                                        <Setter Property="Background" Value="#FF1F4E7A"/>
-                                    </Trigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ComboBox.ItemContainerStyle>
-                    </ComboBox>
+                    <!-- v1.4.35 补 3：下拉框改用 App.xaml 里的 DarkComboBoxStyle 自定义模板。
+                         补 2 的深字色（白底深字）能看清闭合框，但下拉列表的选中行仍是系统
+                         浅蓝高亮 + 浅字（模板触发器盖掉了样式触发器），设置页 5 个下拉框
+                         也同病。自定义模板深底浅字全程自己画，闭合框和列表项都看得见。 -->
+                    <ComboBox x:Name="GroupCombo" Height="30" Style="{StaticResource DarkComboBoxStyle}"
+                              SelectionChanged="GroupCombo_SelectionChanged" ToolTip="按分组筛选频道"/>
                 </DockPanel>
 
                 <Grid Margin="4,0,4,6">

@@ -9,10 +9,12 @@ namespace TiviMateWin.Services;
 /// </summary>
 public static class NewWindowPlayback
 {
-    /// <summary>开新窗口时主窗口该不该暂停：主窗口正在播、且当前没暂停，才需要暂停。
-    /// 主窗口本来就停着/暂停着，不用动。</summary>
-    public static bool ShouldPauseMain(bool mainIsPlaying, bool mainIsPaused)
-        => mainIsPlaying && !mainIsPaused;
+    /// <summary>开新窗口时主窗口该不该暂停：只要主窗口有当前台、且当前没暂停，就暂停。
+    /// 不能只看 IsPlaying——流卡在缓冲/重连时 IsPlaying 是 false，但流恢复后会出声，
+    /// 和新窗口一起响（云电脑实测 2026-11-19：缓冲时开新窗口两次都没暂停上）。
+    /// 主窗口本来就暂停着，不用动；没有当前台（没在播），不用动。</summary>
+    public static bool ShouldPauseMain(bool hasCurrentChannel, bool mainIsPaused)
+        => hasCurrentChannel && !mainIsPaused;
 
     /// <summary>最后一个新窗口关闭时主窗口该不该恢复：主窗口是被新窗口暂停的、
     /// 现在仍处于暂停态、还有可恢复的当前频道、没有别的新窗口开着，四条全满足才恢复。

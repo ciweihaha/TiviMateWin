@@ -6,4 +6,87 @@
     <!-- L11：主题不在此处静态合并——Themes/*.xaml 是松散 Content 文件，缺失时 XAML 解析
          直接导致启动崩溃。改由 MainWindow 在 Window_Loaded 中经 ApplyTheme 加载（带缺失容错：
          加载失败记日志并保持 WPF 默认配色）。 -->
+    <Application.Resources>
+        <!-- v1.4.35 补 3：深色下拉框模板。只在 ComboBox 上写死 Background/Foreground 没用——
+             默认模板的 toggle 按钮自己画白底、选中/悬停行用系统高亮色盖掉样式触发器，字就看不见
+             （云电脑实测 2026-11-19：闭合框白底浅字、选中行浅蓝高亮浅字；设置页 5 个下拉框同病）。
+             这里给 ComboBox/ComboBoxItem 各写一套自定义模板，深底浅字全程自己画；主窗口分组框
+             和设置页 5 个下拉框共用。浅色主题下下拉框仍是深色（可接受）。 -->
+        <Style x:Key="DarkComboBoxItemStyle" TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#FF20262E"/>
+            <Setter Property="Foreground" Value="#FFDDE4EB"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#FF31404F"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#FF1F4E7A"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="DarkComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="Background" Value="#FF20262E"/>
+            <Setter Property="Foreground" Value="#FFDDE4EB"/>
+            <Setter Property="BorderBrush" Value="#FF2D3540"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource DarkComboBoxItemStyle}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid SnapsToDevicePixels="True">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="Bd" Grid.ColumnSpan="2"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"/>
+                            <ContentPresenter x:Name="ContentSite" Grid.Column="0" Margin="8,0,4,0"
+                                              VerticalAlignment="Center" IsHitTestVisible="False"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"/>
+                            <ToggleButton x:Name="ToggleButton" Grid.Column="1" Width="30"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                          Background="Transparent" BorderThickness="0"
+                                          Focusable="False" ClickMode="Press">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="Transparent">
+                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                                <Path Data="M 0 0 L 8 0 L 4 5 Z" Fill="#FFDDE4EB"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </ToggleButton>
+                            <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                                   PopupAnimation="Slide">
+                                <Border Background="#FF20262E" BorderBrush="#FF2D3540" BorderThickness="1"
+                                        MinWidth="{TemplateBinding ActualWidth}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <ScrollViewer SnapsToDevicePixels="True">
+                                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Application.Resources>
 </Application>

@@ -45,7 +45,7 @@
 
                 <!-- 画面比例 -->
                 <TextBlock Text="画面比例" Foreground="#FFB9C4CE" FontSize="12" Margin="0,4,0,4"/>
-                <ComboBox x:Name="AspectCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB"
+                <ComboBox x:Name="AspectCombo" Height="30" Style="{StaticResource DarkComboBoxStyle}"
                           SelectionChanged="Aspect_Changed">
                     <ComboBoxItem Content="原始"/>
                     <ComboBoxItem Content="16:9"/>
@@ -56,7 +56,7 @@
                 <!-- 倍速 -->
                 <TextBlock Text="播放倍速（Ctrl+[ / Ctrl+] 调整）" Foreground="#FFB9C4CE" FontSize="12"
                            Margin="0,16,0,4"/>
-                <ComboBox x:Name="RateCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB"
+                <ComboBox x:Name="RateCombo" Height="30" Style="{StaticResource DarkComboBoxStyle}"
                           SelectionChanged="Rate_Changed">
                     <ComboBoxItem Content="0.5x"/>
                     <ComboBoxItem Content="0.75x"/>
@@ -68,7 +68,7 @@
 
                 <!-- 主题 -->
                 <TextBlock Text="主题" Foreground="#FFB9C4CE" FontSize="12" Margin="0,16,0,4"/>
-                <ComboBox x:Name="ThemeCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB"
+                <ComboBox x:Name="ThemeCombo" Height="30" Style="{StaticResource DarkComboBoxStyle}"
                           SelectionChanged="Theme_Changed">
                     <ComboBoxItem Content="深色"/>
                     <ComboBoxItem Content="浅色"/>
@@ -86,7 +86,7 @@
                 <!-- 翻译范围（v1.4.33）：只翻英语——听写模型是 tiny.en，本来也只认英语；
                      法语/德语/日语等不翻译。默认"仅英语台"。 -->
                 <TextBlock Text="翻译范围（只翻英语台才有意义）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
-                <ComboBox x:Name="LiveSubtitleModeCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB">
+                <ComboBox x:Name="LiveSubtitleModeCombo" Height="30" Style="{StaticResource DarkComboBoxStyle}">
                     <ComboBoxItem Content="关闭"/>
                     <ComboBoxItem Content="仅英语台"/>
                     <ComboBoxItem Content="全部台"/>
@@ -95,7 +95,7 @@
                      微软 Azure 每月 200 万字符免费（最划算）、
                      Cloudflare 每天 1 万 neurons 免费。Key 去各家免费开、贴进来，不收费。 -->
                 <TextBlock Text="翻译服务商（免费接口）" Foreground="#FFB9C4CE" FontSize="11" Margin="0,8,0,2"/>
-                <ComboBox x:Name="LiveSubtitleProviderCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB">
+                <ComboBox x:Name="LiveSubtitleProviderCombo" Height="30" Style="{StaticResource DarkComboBoxStyle}">
                     <ComboBoxItem Content="微软 Azure（免费）"/>
                     <ComboBoxItem Content="Cloudflare（免费）"/>
                 </ComboBox>

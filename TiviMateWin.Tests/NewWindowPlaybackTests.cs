@@ -8,17 +8,19 @@ namespace TiviMateWin.Tests;
 public class NewWindowPlaybackTests
 {
     [Fact]
-    public void ShouldPauseMain_PlayingAndNotPaused_Pauses()
+    public void ShouldPauseMain_HasChannelAndNotPaused_Pauses()
     {
-        Assert.True(NewWindowPlayback.ShouldPauseMain(mainIsPlaying: true, mainIsPaused: false));
+        Assert.True(NewWindowPlayback.ShouldPauseMain(hasCurrentChannel: true, mainIsPaused: false));
     }
 
     [Fact]
-    public void ShouldPauseMain_NotPlayingOrAlreadyPaused_DoesNotPause()
+    public void ShouldPauseMain_NoChannelOrAlreadyPaused_DoesNotPause()
     {
-        Assert.False(NewWindowPlayback.ShouldPauseMain(mainIsPlaying: false, mainIsPaused: false));
-        Assert.False(NewWindowPlayback.ShouldPauseMain(mainIsPlaying: true, mainIsPaused: true));
-        Assert.False(NewWindowPlayback.ShouldPauseMain(mainIsPlaying: false, mainIsPaused: true));
+        // 没在播任何台：没什么可暂停的。
+        Assert.False(NewWindowPlayback.ShouldPauseMain(hasCurrentChannel: false, mainIsPaused: false));
+        // 主窗口本来就暂停着：不用动。
+        Assert.False(NewWindowPlayback.ShouldPauseMain(hasCurrentChannel: true, mainIsPaused: true));
+        Assert.False(NewWindowPlayback.ShouldPauseMain(hasCurrentChannel: false, mainIsPaused: true));
     }
 
     [Fact]

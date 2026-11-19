@@ -2091,10 +2091,12 @@ public partial class MainWindow : Window
         win.Show();
         win.Play(ch);
         // v1.4.35：新窗口一开，主窗口必须停——两个窗口同时播就是两个声音。
-        // 只在主窗口正在播时暂停；恢复由最后一个新窗口关闭时 ResumeMainAfterNewWindow 处理。
-        if (NewWindowPlayback.ShouldPauseMain(_player?.IsPlaying == true, _isPaused))
+        // 只要主窗口有当前台就暂停（补 3：不只看 IsPlaying——流卡在缓冲/重连时
+        // IsPlaying 是 false，但恢复后会出声；_player 可能为空时直接跳过）。
+        // 恢复由最后一个新窗口关闭时 ResumeMainAfterNewWindow 处理。
+        if (_player is not null && NewWindowPlayback.ShouldPauseMain(_current != null, _isPaused))
         {
-            _player!.Pause();
+            _player.Pause();
             _isPaused = true;
             _pausedForNewWindow = true;
             BtnPlayPause.Content = "▶";

@@ -682,6 +682,22 @@ if ($null -eq $setBtnH) {
         } else {
             Write-Result -Id 'H01' -Name '设置页显示“当前版本”' -Verdict 'FAIL' -Evidence "设置页文字=$($namesH -join ' | ')"
         }
+        # B05：设置页下拉框（主题）字看得见——深色模板下闭合框是深底，截框数深色像素
+        # （白底浅字时深色像素几乎没有；深底浅字或白底深字时都有足够深色像素）
+        $themeCombo = Find-ByAutomationId -Root $setWin -AutomationId 'ThemeCombo'
+        if ($null -eq $themeCombo) {
+            Write-Result -Id 'B05' -Name '设置页下拉框字看得见' -Verdict 'FAIL' -Evidence 'AutomationId=ThemeCombo 找不到'
+        } else {
+            $r5 = $themeCombo.Current.BoundingRectangle
+            $rect5 = New-Object System.Drawing.Rectangle([int]$r5.X, [int]$r5.Y, [int]$r5.Width, [int]$r5.Height)
+            $crop5 = Take-Shot -Name 'B05-theme-combo-crop' -Crop $rect5
+            $frac5 = Get-DarkPixelFraction -ImagePath $crop5
+            if ($frac5 -gt 0.002) {
+                Write-Result -Id 'B05' -Name '设置页下拉框字看得见' -Verdict 'PASS' -Evidence "深色像素占比 $([Math]::Round($frac5,4))，截图 $crop5"
+            } else {
+                Write-Result -Id 'B05' -Name '设置页下拉框字看得见' -Verdict 'FAIL' -Evidence "深色像素占比 $([Math]::Round($frac5,4))（<0.002），字太浅或没画出；截图 $crop5"
+            }
+        }
         $updBtn = Find-ByName -Root $setWin -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '检查更新' | Select-Object -First 1
         if ($null -eq $updBtn) {
             Write-Result -Id 'H02' -Name '“检查更新”显示“已是最新版本”' -Verdict 'FAIL' -Evidence '设置页没有“检查更新”按钮'
