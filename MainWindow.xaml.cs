@@ -2536,10 +2536,15 @@ public partial class MainWindow : Window
 
     private void BtnSettings_Click(object sender, RoutedEventArgs e)
     {
+        // 诊断（H01：设置按钮点不开）：确认 Click 是否触发、对话框是否真的打开。
+        AppLog.Info("settings button clicked");
         // 深查第 9 轮：必须设 Owner——OnThreadFilterMessage 的模态守卫只查 OwnedWindows，
         // 不设 Owner 时设置对话框打开期间 ↑/↓/空格/F 等全局键会漏拦截、在对话框背后换台/暂停/切全屏。
         var dlg = new Dialogs.SettingsWindow(_config) { Owner = this };
-        if (dlg.ShowDialog() == true)
+        AppLog.Info("settings window constructed, showing dialog");
+        var dlgResult = dlg.ShowDialog();
+        AppLog.Info($"settings dialog returned: {dlgResult}");
+        if (dlgResult == true)
         {
             // 应用设置：画面比例、倍速、主题
             _aspectRatio = _config.AspectRatio ?? "";

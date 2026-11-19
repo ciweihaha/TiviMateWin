@@ -20,6 +20,8 @@ public partial class SettingsWindow : Window
     public SettingsWindow(AppConfig config)
     {
         InitializeComponent();
+        // 诊断（H01）：确认构造函数跑完。
+        AppLog.Info("SettingsWindow ctor done");
         _config = config;
 
         // v1.4.35：版本一眼能看到（用户不知道自己在用哪个版本）。
