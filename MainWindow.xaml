@@ -223,8 +223,30 @@
                 <DockPanel DockPanel.Dock="Top" Margin="12,0,12,6">
                     <TextBlock x:Name="CountText" Text="0 个频道" DockPanel.Dock="Left"
                                Foreground="{DynamicResource MutedFgBrush}" FontSize="12" Margin="2,0,8,0" VerticalAlignment="Center"/>
-                    <ComboBox x:Name="GroupCombo" Height="30" Background="{DynamicResource PanelBgBrush}" Foreground="{DynamicResource InputFgBrush}"
-                              SelectionChanged="GroupCombo_SelectionChanged" ToolTip="按分组筛选频道"/>
+                    <!-- v1.4.35 补：下拉框颜色写死（别用 DynamicResource）。1.4.34 实测：
+                         GroupCombo 用 DynamicResource PanelBgBrush/InputFgBrush 时画出来是
+                         空白白框、一个字都没有（数据正常：UIA 读到选中“全部”、4 个选项）。
+                         设置页里的下拉框用写死的 #FF20262E/#FFDDE4EB 就正常显示，照抄它。
+                         下拉列表项也写死样式（深底浅字、悬停/选中高亮），免得弹出的列表看不清。 -->
+                    <ComboBox x:Name="GroupCombo" Height="30" Background="#FF20262E" Foreground="#FFDDE4EB"
+                              BorderBrush="#FF2D3540" BorderThickness="1"
+                              SelectionChanged="GroupCombo_SelectionChanged" ToolTip="按分组筛选频道">
+                        <ComboBox.ItemContainerStyle>
+                            <Style TargetType="ComboBoxItem">
+                                <Setter Property="Background" Value="#FF20262E"/>
+                                <Setter Property="Foreground" Value="#FFDDE4EB"/>
+                                <Setter Property="Padding" Value="8,6"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsHighlighted" Value="True">
+                                        <Setter Property="Background" Value="#FF31404F"/>
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="#FF1F4E7A"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ComboBox.ItemContainerStyle>
+                    </ComboBox>
                 </DockPanel>
 
                 <Grid Margin="4,0,4,6">
