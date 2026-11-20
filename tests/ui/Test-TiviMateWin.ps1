@@ -1011,7 +1011,9 @@ if ($null -eq $refBtn) {
     Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'FAIL' -Evidence '找不到「刷新」按钮'
 } else {
     [void](Invoke-Element $refBtn)
-    $stG = Wait-ForStatus -Pattern '已刷新：\d+ 个频道 \d{2}:\d{2}' -TimeoutSec 20
+    # run13：超时 20 秒→45 秒——日志证实刷新本身能跑完（run12：22:39:22「playlist refreshed: 54 channels」），
+    # 但从点下到完成约 29 秒（云电脑拉 live.m3u 慢），20 秒轮询等不到，不是 app bug。
+    $stG = Wait-ForStatus -Pattern '已刷新：\d+ 个频道 \d{2}:\d{2}' -TimeoutSec 45
     if ($stG -match '已刷新：\d+ 个频道 \d{2}:\d{2}') {
         Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'PASS' -Evidence $stG
     } else {
