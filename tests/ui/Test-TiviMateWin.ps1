@@ -632,10 +632,11 @@ if ($null -eq $hideItem) {
         } else {
             Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'FAIL' -Evidence "频道数 $cnt2，期望 $cnt0"
         }
-        # C04：数字键选回 2 号台（它已回到列表），右键应只有「显示频道」；
-        # run10：直接点带「已隐藏」标记的那行，不再默认点第 2 行
+        # C04：右键已隐藏的台，应只有「显示频道」；
+        # run10：直接点带「已隐藏」标记的那行，不再默认点第 2 行。
+        # run11：不按数字键选台——按“2”会切台播流、重排列表，反而让标记行找不准；
+        # -HiddenOnly 自己会左键选中该行再右键。
         Bring-ToFront
-        Send-KeysToWindow -Keys '2' -WaitMs 1500
         $menu3 = Open-ChannelContextMenu -HiddenOnly
         $names3 = @($menu3 | ForEach-Object { Get-ElementText $_ })
         $unhide = $menu3 | Where-Object { (Get-ElementText $_) -eq '显示频道' } | Select-Object -First 1
@@ -726,9 +727,15 @@ if ($null -eq $newWin) {
     Write-Result -Id 'D02' -Name '关新窗口后主窗口恢复' -Verdict 'FAIL' -Evidence 'D01 未完成，跳过'
 } else {
     [void](Invoke-Element $newWin)
-    Start-Sleep -Seconds 3
+    # run11：新窗口开得慢（run10 里 3 秒时只有 1 个窗，5 分钟后日志才见 channel window play），
+    # 轮询等 15 秒而不是固定睡 3 秒。
+    $wins = @()
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 500
+        $wins = @(Get-TmwWindows)
+        if ($wins.Count -ge 2) { break }
+    }
     $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $wins = @(Get-TmwWindows)
     $st = Wait-ForStatus -Pattern '新窗口播放中' -TimeoutSec 5
     $t0 = Test-TimeAdvancing -WaitSec 3
     if ($wins.Count -ge 2 -and ($st -match '新窗口播放中' -or -not $t0.Advanced)) {
