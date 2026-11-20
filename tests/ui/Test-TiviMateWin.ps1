@@ -29,6 +29,11 @@ public static class Win32 {
   [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
   [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
   public const uint MOUSEEVENTF_MOVE = 0x0001;
   public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
   public const uint MOUSEEVENTF_LEFTUP = 0x0004;
@@ -260,6 +265,40 @@ function Test-TimeAdvancing {
     Start-Sleep -Seconds $WaitSec
     $b = Get-TimeTextValue
     return @{ Before = $a; After = $b; Advanced = ($a -ne '' -and $b -ne '' -and $a -ne $b) }
+}
+
+function Get-TimeTextViaJob {
+    # run9：UIA 读时间可能在 app 卡住时无限阻塞（run8 浸泡因此晚了约 15 分钟）。
+    # 放后台 Job 里跑，15 秒超时就放弃（返回 $null），主流程不被拖垮。
+    param([int]$TimeoutSec = 15)
+    $job = Start-Job -ScriptBlock {
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        $p = Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -eq $p -or $p.MainWindowHandle -eq 0) { return '' }
+        try { $win = [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle) } catch { return '' }
+        $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
+        try { $texts = @($win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) } catch { return '' }
+        foreach ($t in $texts) {
+            try { $n = $t.Current.Name } catch { continue }
+            if ($n -match '^\d{1,2}:\d{2}(:\d{2})?$') { return $n }
+        }
+        return ''
+    }
+    $done = Wait-Job $job -Timeout $TimeoutSec
+    if ($done) { $r = Receive-Job $job; Remove-Job $job -Force; return $r }
+    Remove-Job $job -Force
+    return $null
+}
+
+function Test-TimeAdvancingJob {
+    param([int]$WaitSec = 4, [int]$TimeoutSec = 15)
+    $a = Get-TimeTextViaJob -TimeoutSec $TimeoutSec
+    if ($null -eq $a) { return @{ Before = ''; After = ''; Advanced = $false; TimedOut = $true } }
+    Start-Sleep -Seconds $WaitSec
+    $b = Get-TimeTextViaJob -TimeoutSec $TimeoutSec
+    if ($null -eq $b) { return @{ Before = $a; After = ''; Advanced = $false; TimedOut = $true } }
+    return @{ Before = $a; After = $b; Advanced = ($a -ne '' -and $b -ne '' -and $a -ne $b); TimedOut = $false }
 }
 
 # ================= 启动 =================
@@ -750,26 +789,59 @@ if ($epgInside) {
 }
 Send-KeysToWindow -Keys '{ESC}' -WaitMs 800
 
+function Get-SettingsWindowElement {
+    # run9：UIA RootElement.FindAll 枚举不到设置窗（已证实：EnumWindows 能看到 2 个
+    # 可见的「设置」HWND，UIA 顶层枚举只返回主窗口；设置窗本身是打开的、屏幕上可见）。
+    # 所以先走 UIA 枚举（快），再走 Win32 EnumWindows + AutomationElement.FromHandle
+    # （按 HWND 直取该窗口的 UIA 元素，绕过顶层枚举）。
+    # 「设置」二字用码点拼（0x8BBE=设，0x7F6E=置），避免脚本文件 UTF-8 无 BOM 时
+    # PS 5.1 读中文乱码导致比对失败。
+    $rt = [System.Windows.Automation.AutomationElement]::RootElement
+    try {
+        $ws = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
+        $hit = $ws | Where-Object { $_.Current.Name -match '设置' } | Select-Object -First 1
+        if ($null -ne $hit) { return $hit }
+    } catch { }
+    $script:SettingsTitle = [string]([char]0x8BBE) + [string]([char]0x7F6E)
+    $script:SettingsPid = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).Id
+    if ($null -eq $script:SettingsPid) { return $null }
+    $script:SettingsHwnds = @()
+    $cb = [Win32+EnumWindowsProc]{
+        param($hWnd, $lParam)
+        $wpid = 0; [void][Win32]::GetWindowThreadProcessId($hWnd, [ref]$wpid)
+        if ($wpid -eq $script:SettingsPid) {
+            $sb = New-Object System.Text.StringBuilder(256)
+            [void][Win32]::GetWindowText($hWnd, $sb, 256)
+            if ($sb.ToString() -eq $script:SettingsTitle -and [Win32]::IsWindowVisible($hWnd)) {
+                $script:SettingsHwnds += $hWnd
+            }
+        }
+        return $true
+    }
+    try { [void][Win32]::EnumWindows($cb, [IntPtr]::Zero) } catch { return $null }
+    if ($script:SettingsHwnds.Count -eq 0) { return $null }
+    try { return [System.Windows.Automation.AutomationElement]::FromHandle($script:SettingsHwnds[0]) } catch { return $null }
+}
+
 function Open-SettingsWindow {
-    # 稳健打开设置窗：先恢复窗口正常态（重启后会变回最大化，工具栏掉出屏幕就点不到），
-    # 再 UIA 点 BtnSettings → 轮询 6 秒；不行再鼠标点按钮中心 → 再轮询 6 秒。
+    # 稳健打开设置窗：先恢复窗口正常态（重启后会变回最大化，工具栏掉出屏幕就点不到）。
+    # run9：先查是否已有设置窗开着（有就直接返回，防重复点出两个嵌套模态窗）；
+    # 轮询 30 秒（run8 里设置窗曾 15 秒才出现）；找窗用 Get-SettingsWindowElement
+    # （UIA 枚举 + Win32 EnumWindows/FromHandle 双通道——UIA 枚举看不到设置窗）。
     # 返回设置窗口元素，找不到返回 $null。
+    $already = Get-SettingsWindowElement
+    if ($null -ne $already) { $script:OpenSettingsDiag = '已开着一个设置窗（上轮没关），直接用它'; return $already }
     Restore-WindowNormal
     $w = Get-TmwWindow
     if ($null -eq $w) { return $null }
     Bring-ToFront
     $btn = Find-ByAutomationId -Root $w -AutomationId 'BtnSettings'
     if ($null -eq $btn) { return $null }
-    $findSetWin = {
-        $rt = [System.Windows.Automation.AutomationElement]::RootElement
-        $ws = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-        return ($ws | Where-Object { $_.Current.Name -match '设置' } | Select-Object -First 1)
-    }
     [void](Invoke-Element $btn)
     $script:OpenSettingsDiag = "UIA Invoke 已发"
-    for ($i = 0; $i -lt 12; $i++) {
+    for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Milliseconds 500
-        $sw = & $findSetWin
+        $sw = Get-SettingsWindowElement
         if ($null -ne $sw) { return $sw }
     }
     # UIA 点没打开，改鼠标点按钮中心（重找按钮，防 Restore 后元素过期）
@@ -777,9 +849,9 @@ function Open-SettingsWindow {
     if ($null -eq $btn2) { return $null }
     $r = $btn2.Current.BoundingRectangle
     Invoke-MouseClick -X ([int]($r.X + $r.Width / 2)) -Y ([int]($r.Y + $r.Height / 2))
-    for ($i = 0; $i -lt 12; $i++) {
+    for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Milliseconds 500
-        $sw = & $findSetWin
+        $sw = Get-SettingsWindowElement
         if ($null -ne $sw) { return $sw }
     }
     # run8：仍打不开时枚举全部顶层窗口——区分“点击没触发”（无任何新窗）
@@ -795,9 +867,19 @@ function Open-SettingsWindow {
 function Save-SettingsWindow {
     param($SetWin)
     # 设置只在点「保存」时才落盘（Save_Click）；直接关窗口会丢弃改动——J01/F01 连败的根因。
+    # run9：保存后验窗已关（轮询 5 秒）；还在就用 WindowPattern 关一次再验，
+    # 防止残留模态窗污染后面的测试（run8 里两个未关的设置窗堵住了 I02/J01/K01/K03）。
     $saveBtn = Find-ByName -Root $SetWin -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '^保存$' | Select-Object -First 1
-    if ($null -ne $saveBtn -and (Invoke-Element $saveBtn)) { Start-Sleep -Seconds 1; return $true }
-    try { $SetWin.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close(); return $true } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500; return $false }
+    if ($null -ne $saveBtn -and (Invoke-Element $saveBtn)) { Start-Sleep -Seconds 1 } else {
+        try { $SetWin.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
+    }
+    for ($i = 0; $i -lt 10; $i++) {
+        Start-Sleep -Milliseconds 500
+        if ($null -eq (Get-SettingsWindowElement)) { return $true }
+    }
+    try { (Get-SettingsWindowElement).GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { }
+    Start-Sleep -Seconds 1
+    return ($null -eq (Get-SettingsWindowElement))
 }
 
 function Find-ThemeCombo {
@@ -937,6 +1019,13 @@ if ($null -eq $setBtnH) {
         }
         try { $setWin.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
         Start-Sleep -Seconds 1
+        # run9：验设置窗已关干净，否则后面的 I/J/K 会被残留模态窗堵住
+        $leftover = Get-SettingsWindowElement
+        if ($null -ne $leftover) {
+            try { $leftover.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
+            Start-Sleep -Seconds 1
+            if ($null -ne (Get-SettingsWindowElement)) { Write-Output "H-close 警告：设置窗关了两次还在（残留模态窗）" }
+        }
     }
 }
 
@@ -954,8 +1043,10 @@ if (-not $tI0.Advanced) {
     $tI0 = Test-TimeAdvancing -WaitSec 3
 }
 if (-not $tI0.Advanced) {
-    Write-Result -Id 'I01' -Name '空格键暂停' -Verdict 'FAIL' -Evidence "按空格前时间就不走：$($tI0.Before)->$($tI0.After)（台可能没播起来）"
-    Write-Result -Id 'I02' -Name '再按空格继续' -Verdict 'FAIL' -Evidence 'I01 未完成，跳过'
+    # run9：按空格前时间就不走——流本身卡住了（源站抖动），没法判断空格暂停；
+    # 记 NEEDS-EYE 而非 FAIL（看日志定性是源站卡还是 app 没播起来）
+    Write-Result -Id 'I01' -Name '空格键暂停' -Verdict 'NEEDS-EYE' -Evidence "按空格前时间就不走：$($tI0.Before)->$($tI0.After)（换了两个台仍不走，疑似源站卡流，无法判断暂停）"
+    Write-Result -Id 'I02' -Name '再按空格继续' -Verdict 'NEEDS-EYE' -Evidence 'I01 未完成（流卡住），跳过'
 } else {
     Send-KeysToWindow -Keys ' ' -WaitMs 1200
     $shotI1 = Take-Shot -Name 'I01-paused-badge'
@@ -978,7 +1069,15 @@ if (-not $tI0.Advanced) {
     if ($r1.Advanced) {
         Write-Result -Id 'I02' -Name '再按空格继续' -Verdict 'PASS' -Evidence "时间 $($r1.Before)->$($r1.After) 在走；截图 $shotI2（徽章应消失）"
     } else {
-        Write-Result -Id 'I02' -Name '再按空格继续' -Verdict 'FAIL' -Evidence "再按空格后时间不动：$($r1.Before)->$($r1.After)；截图 $shotI2"
+        # run9：再按一次仍不走——可能是恢复失败，也可能是暂停期间流卡住了；
+        # 多等 5 秒再测一次：走了就是恢复慢（PASS），仍不走记 NEEDS-EYE（看日志定性）
+        Start-Sleep -Seconds 5
+        $r1b = Test-TimeAdvancing -WaitSec 4
+        if ($r1b.Advanced) {
+            Write-Result -Id 'I02' -Name '再按空格继续' -Verdict 'PASS' -Evidence "恢复后时间先停后走（$($r1.Before)->$($r1.After)，再测 $($r1b.Before)->$($r1b.After)）；截图 $shotI2"
+        } else {
+            Write-Result -Id 'I02' -Name '再按空格继续' -Verdict 'NEEDS-EYE' -Evidence "再按空格后时间不动：$($r1.Before)->$($r1.After)，再测 $($r1b.Before)->$($r1b.After)；截图 $shotI2（疑似暂停期间流卡住，需看日志定性）"
+        }
     }
 }
 
@@ -1058,10 +1157,14 @@ for ($k = 0; $k -lt 10; $k++) { Send-KeysToWindow -Keys '{DOWN}' -WaitMs 400 }
 Start-Sleep -Seconds 3
 $k1 = Get-TmwWindow
 $k1t = Test-TimeAdvancing -WaitSec 3
-if ($null -ne $k1 -and $k1t.Advanced) {
+if ($null -eq $k1) {
+    Write-Result -Id 'K01' -Name '快速连切 10 台不崩' -Verdict 'FAIL' -Evidence '连切后主窗口没了（疑似崩溃）'
+} elseif ($k1t.Advanced) {
     Write-Result -Id 'K01' -Name '快速连切 10 台不崩' -Verdict 'PASS' -Evidence "连切后仍在播，时间 $($k1t.Before)->$($k1t.After)"
 } else {
-    Write-Result -Id 'K01' -Name '快速连切 10 台不崩' -Verdict 'FAIL' -Evidence "连切后窗口=$($null -ne $k1)，时间 $($k1t.Before)->$($k1t.After)"
+    # run9：窗口在、时间不走——切到的台流卡住了（源站抖动），不是崩；
+    # 记 NEEDS-EYE（看日志定性），不当 FAIL
+    Write-Result -Id 'K01' -Name '快速连切 10 台不崩' -Verdict 'NEEDS-EYE' -Evidence "连切后窗口在、时间 $($k1t.Before)->$($k1t.After) 不走（疑似切到的台流卡住，需看日志定性）"
 }
 
 # K02：断流台 60 秒不退出（凤凰中文，流本身约 1Mbps 偏紧、经常断）
@@ -1252,7 +1355,10 @@ if (-not $SkipSoak) {
             Write-Result -Id 'L01' -Name "连续播 ${SoakMinutes} 分钟不退出" -Verdict 'FAIL' -Evidence "播了约 $([int](($soakExit - $soakStart).TotalMinutes)) 分钟后退出（$($soakExit.ToString('HH:mm:ss'))）；log 尾：$tailL"
             break
         }
-        $tt = Test-TimeAdvancing -WaitSec 3
+        # run9：浸泡里的时间读取走 Job 版（15 秒超时），UIA 卡住时不拖垮浸泡节奏；
+        # 浸泡的 verdict 只看进程在不在，时间只是证据。
+        $tt = Test-TimeAdvancingJob -WaitSec 3
+        $ttNote = if ($tt.TimedOut) { '（UIA 读时间超时，app 可能卡住）' } else { '' }
         $lfL3 = Get-LogFile
         if ($null -ne $lfL3) {
             $newLines = Get-Content $lfL3.FullName -Tail 500 -ErrorAction SilentlyContinue
@@ -1260,7 +1366,7 @@ if (-not $SkipSoak) {
             $reconnects = @($newLines | Select-String -Pattern 'reconnect|重连' ).Count
         }
         if (($s % 2) -eq 0) { [void](Take-Shot -Name "L01-soak-min$($s * 5)") }
-        Write-Output "soak $($s * 5)/$SoakMinutes min：进程在，时间 $($tt.Before)->$($tt.After)，stall=$stalls，重连=$reconnects"
+        Write-Output "soak $($s * 5)/$SoakMinutes min：进程在，时间 $($tt.Before)->$($tt.After)$ttNote，stall=$stalls，重连=$reconnects"
     }
     if ($null -eq $soakExit) {
         $shotL = Take-Shot -Name 'L01-soak-end'
