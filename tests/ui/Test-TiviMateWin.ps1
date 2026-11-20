@@ -1096,6 +1096,8 @@ function Set-MasterSubtitle {
     param([bool]$On)
     # 设置页里把字幕主开关拨到指定状态，返回设置后的 config 值（true/false/$null 表示没办成）
     # run10：LiveSubtitleChk 在 ScrollViewer 下方，可能晚出现；轮询 10 秒再放弃
+    # run10：ToggleState 读不到（Probe-J01：ToggleState 读出是空，但 Toggle() 本身能动、
+    # 保存后 config 真翻了）——改用 config 文件定当前状态：config 值与目标不同才拨开关。
     $sw = Open-SettingsWindow
     if ($null -eq $sw) { return $null }
     $chk = $null
@@ -1107,9 +1109,12 @@ function Set-MasterSubtitle {
     $ok = $null
     if ($null -ne $chk) {
         try {
-            $tog = $chk.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-            $isOn = ($tog.ToggleState -eq [System.Windows.Automation.ToggleState]::On)
-            if ($isOn -ne $On) { $tog.Toggle(); Start-Sleep -Seconds 1 }
+            $cur = Get-Config
+            $curOn = ($null -ne $cur -and [bool]$cur.LiveSubtitleEnabled)
+            if ($curOn -ne $On) {
+                $tog = $chk.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+                $tog.Toggle(); Start-Sleep -Seconds 1
+            }
             $ok = $On
         } catch { $ok = $null }
     }

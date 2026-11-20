@@ -1439,16 +1439,21 @@ public partial class MainWindow : Window
         if (_player is null || _seekDragging) return;
         try
         {
+            // v1.4.37：直播流不读 Length——转储证实，流卡住/重连时 libvlc 的
+            // get_length（原生调用）在 UI 线程上阻塞，把界面冻住（“未响应”、画面定格、
+            // UIA 找不到控件、日志停写）。直播本来就不用 Length（只显示“直播”+当前时间），
+            // 所以先判直播再读 Time；没在播（_current 为空）直接跳过，不碰播放器。
+            if (_current != null && IsLiveStream(_current.Url))
+            {
+                DurationText.Text = "直播";
+                TimeText.Text = FormatTime(_player.Time);
+                return;
+            }
+            if (_current is null) return;
             var len = _player.Length;
             var t = _player.Time;
             // v1.4.16：直播流没有总时长——libvlc 报的 Length 只是 HLS 滑动窗口（十几秒），
             // 拿它当总时长会显示 00:18/00:16 这种“已播超总时长”；直播只显示“直播”，不驱动进度条。
-            if (_current != null && IsLiveStream(_current.Url))
-            {
-                DurationText.Text = "直播";
-                TimeText.Text = FormatTime(t);
-                return;
-            }
             if (len > 0)
             {
                 SeekBar.Maximum = len;
