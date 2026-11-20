@@ -572,7 +572,16 @@ function Open-ChannelContextMenu {
         Invoke-MouseRightClick -X ([int]($r.X + 150)) -Y ([int]($r.Y + 550))
     }
     Start-Sleep -Milliseconds 800
-    $m = @(Get-MenuItems)
+    # run16：右键后轮询等菜单项出现（最多 3 秒）——run15 的 D01/K03 都是「菜单里没有
+    # 「新窗口播放」」，菜单是 Popup、项进 UIA 树有延迟，单次 800ms 读早了会漏。
+    # 轮询到「新窗口播放」出现就停；没出现也返回已读到的项（由调用方判）。
+    $m = @()
+    for ($mi = 0; $mi -lt 6; $mi++) {
+        $m = @(Get-MenuItems)
+        $names0 = @($m | ForEach-Object { Get-ElementText $_ })
+        if ($names0 -contains '新窗口播放') { break }
+        Start-Sleep -Milliseconds 500
+    }
     if ($m.Count -le 1) {
         # 只读到系统菜单，说明右键没落在频道行上；换第 1 行再试一次
         if ($null -ne $target) {
@@ -806,10 +815,28 @@ if ($null -eq $newWin) {
 
 # ================= E：切台信息条 OSD =================
 # OSD 不在 UIA 树里，只能截图复核；脚本只保证切台动作 + 截图， verdict 由看图的人定。
+# run16：E01 前等当前会话的 EPG 加载完（日志里出现本次启动后的「epg loaded」，
+# 最多 90 秒）——run14 的 E01 在 EPG 到之前就截了，OSD 只显示「暂无节目信息」
+# （数据有、app 没拿到，不是 app bug，是时序）。没等到也继续截，但证据里注明。
+$epgReady = $false
+$logPathE = Join-Path $env:APPDATA 'TiviMateWin\log.txt'
+for ($ei = 0; $ei -lt 18; $ei++) {
+    try {
+        $ll = Get-Content $logPathE -Tail 30 -ErrorAction SilentlyContinue | Select-String -Pattern 'epg loaded (\d+) channels'
+        foreach ($m in $ll) {
+            if ($m.Line -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
+                $ts = [DateTime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', $null)
+                if ($ts -ge $launchStart) { $epgReady = $true; break }
+            }
+        }
+        if ($epgReady) { break }
+    } catch { }
+    Start-Sleep -Seconds 5
+}
 Bring-ToFront
 Send-KeysToWindow -Keys '1' -WaitMs 2600   # 切 CCTV-1（按 "1" 要 1.2 秒才提交）
 $shotE1 = Take-Shot -Name 'E01-osd-cctv1'
-Write-Result -Id 'E01' -Name '切台 OSD 四行（CCTV-1）' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE1（应有台名+正在播+接下来 2 个，5 秒消失）"
+Write-Result -Id 'E01' -Name '切台 OSD 四行（CCTV-1）' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE1（应有台名+正在播+接下来 2 个，5 秒消失；EPG已加载=$epgReady）"
 Send-KeysToWindow -Keys '51' -WaitMs 4000  # 切凤凰中文（无节目单的台；凤凰起播慢，多等一会让 OSD 覆盖窗浮出来）
 $shotE2 = Take-Shot -Name 'E02-osd-phoenix'
 Write-Result -Id 'E02' -Name '无节目单台显示「暂无节目信息」（凤凰中文）' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE2（应有台名 +「暂无节目信息」）"
@@ -824,10 +851,17 @@ if ($btnNames -contains '节目单') {
     Write-Result -Id 'E03' -Name '没有单独的「节目单」按钮' -Verdict 'PASS' -Evidence "工具栏按钮=$($btnNames -join '/')"
 }
 # E04：E 键打开完整节目单（先切回稳定的 CCTV-1，免得凤凰卡顿触发 ClearVideoSurface 把面板收回去）
+# run16：按 E 前先点一下视频区（主窗右半边）——run14 里焦点在搜索框，E 键进了输入法
+# （顶部出现拼音候选窗），指南面板没打开。点视频区把焦点从搜索框移开。
 Bring-ToFront
 Send-KeysToWindow -Keys '1' -WaitMs 2600
 $winE4 = Get-TmwWindow
 try { $winE4.SetFocus() } catch { }
+try {
+    $rE4 = $winE4.Current.BoundingRectangle
+    Invoke-MouseClick -X ([int]($rE4.X + $rE4.Width * 0.7)) -Y ([int]($rE4.Y + $rE4.Height * 0.5))
+    Start-Sleep -Milliseconds 800
+} catch { }
 Send-KeysToWindow -Keys 'e' -WaitMs 2500
 $shotE4 = Take-Shot -Name 'E04-guide-ekey'
 $epgPanel = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'EpgPanel'
@@ -881,19 +915,13 @@ function Get-SettingsWindowElement {
     }
     try { [void][Win32]::EnumWindows($cb, [IntPtr]::Zero) } catch { return $null }
     if ($script:SettingsHwnds.Count -eq 0) { return $null }
-    # run14：HWND 刚出现时内容还没进 UIA 树（run13：找到窗但搜不到「当前版本」/ThemeCombo，
-    # H01/B05/H02 全掉）。等后代 Text 出现再返回（最多 5 秒），否则返回的是一棵空树。
+    # run16：找到 HWND 后固定等 2 秒让内容进 UIA 树再返回——run14 的 FindAll 轮询
+    # （等后代 Text）在 K04 又阻塞了（run15 卡 K04 后 20 分钟）。FindAll 无超时，绝不能
+    # 放在轮询里；固定 sleep 不会阻塞。run13 的教训是窗刚出时内容没进树，2 秒够它加载。
     $el = $null
     try { $el = [System.Windows.Automation.AutomationElement]::FromHandle($script:SettingsHwnds[0]) } catch { return $null }
     if ($null -eq $el) { return $null }
-    $condT = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
-    for ($i = 0; $i -lt 10; $i++) {
-        try {
-            $kids = @($el.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condT))
-            if ($kids.Count -gt 0) { return $el }
-        } catch { }
-        Start-Sleep -Milliseconds 500
-    }
+    Start-Sleep -Seconds 2
     return $el
 }
 
@@ -1231,7 +1259,9 @@ if ($masterBeforeJ -eq $false) {
             $nm = Get-ElementText $tBtn
             $txts = Find-All -Root $tBtn -ControlType ([System.Windows.Automation.ControlType]::Text)
             $nm2 = ($txts | ForEach-Object { Get-ElementText $_ }) -join ''
-            if (($nm -match '强制') -or ($nm2 -match '强制')) { $forced = $true; break }
+            # run16：按钮文案是「翻译: 开」（不是「翻译: 强制开」）——UpdateTranslateToggleText
+            # 里 force=true 时 label 就是「翻译: 开」；「强制」二字只在 ToolTip 里，按钮名/子 Text 永远读不到。
+            if (($nm -match '翻译: 开') -or ($nm2 -match '翻译: 开')) { $forced = $true; break }
         }
         Start-Sleep -Seconds 1
         $cfgJ = Get-Config
