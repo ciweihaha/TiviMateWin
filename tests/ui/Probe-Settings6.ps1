@@ -66,24 +66,45 @@ if($null -ne $pp -and $null -ne $ps){
   L ("PlayPause: beforeLen=" + $before.Length + " afterLen=" + $after.Length + " changed=" + ($before -ne $after) + " click=" + $c1)
   if($before -ne $after){ Click-Center (Get-El 'BtnPlayPause') | Out-Null; Start-Sleep -Seconds 1; L "toggled back to play" }
 } else { L "PlayPause or PlayState NOT FOUND" }
-# 2. Settings via mouse
+# 2. Settings via mouse（run8 教训：设置窗可迟开约 15 秒，3 秒轮询会漏判；改轮询 20 秒并记迟开时间）
 $btn=Get-El 'BtnSettings'
 if($null -ne $btn){
   $r=$btn.Current.BoundingRectangle
   L ("BtnSettings rect=" + $r + " enabled=" + $btn.Current.IsEnabled)
   $c2=Click-Center $btn
-  Start-Sleep -Seconds 3
-  $mine=Count-PidWindows
-  L ("after MOUSE settings: pidWindows=" + $mine.Count + " click=" + $c2)
+  $t0=Get-Date
+  $mine=@(); $openedAt=$null
+  for($k=0;$k -lt 10;$k++){
+    Start-Sleep -Seconds 2
+    $mine=Count-PidWindows
+    if($mine.Count -gt 1){ $openedAt=[int]((Get-Date)-$t0).TotalSeconds; break }
+  }
+  L ("after MOUSE settings: pidWindows=" + $mine.Count + " openedAtSec=" + $openedAt + " click=" + $c2)
   foreach($w in $mine){ try { L ("  win handle=" + $w.Current.NativeWindowHandle + " mainHandle=" + $mw.Current.NativeWindowHandle + " rect=" + $w.Current.BoundingRectangle) } catch {} }
   if($mine.Count -le 1){
     try {
       $ip=($btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) -as [System.Windows.Automation.InvokePattern])
       if($null -ne $ip){ $ip.Invoke(); L "UIA Invoke called" } else { L "InvokePattern NOT supported" }
     } catch { L ("Invoke FAILED: " + $_.Exception.Message) }
-    Start-Sleep -Seconds 3
-    $mine2=Count-PidWindows
-    L ("after UIA Invoke settings: pidWindows=" + $mine2.Count)
+    $t1=Get-Date
+    $mine2=@(); $openedAt2=$null
+    for($k=0;$k -lt 10;$k++){
+      Start-Sleep -Seconds 2
+      $mine2=Count-PidWindows
+      if($mine2.Count -gt 1){ $openedAt2=[int]((Get-Date)-$t1).TotalSeconds; break }
+    }
+    L ("after UIA Invoke settings: pidWindows=" + $mine2.Count + " openedAtSec=" + $openedAt2)
+    $mine=$mine2
+  }
+  # 探针收尾：若设置窗开了，把它关掉（Cancel/ESC），免得残留模态窗挡住后继探针
+  if($mine.Count -gt 1){
+    $sw2=$mine | Where-Object { try { $_.Current.NativeWindowHandle -ne $mw.Current.NativeWindowHandle } catch { $false } } | Select-Object -First 1
+    if($null -ne $sw2){
+      try { $wp=$sw2.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern); $wp.Close(); L "settings window closed via WindowPattern" } catch { L ("close via WindowPattern FAILED: " + $_.Exception.Message) }
+      Start-Sleep -Seconds 2
+      $mine3=Count-PidWindows
+      L ("after close attempt: pidWindows=" + $mine3.Count)
+    }
   }
 } else { L "BtnSettings NOT FOUND" }
 L "PROBE-DONE"
