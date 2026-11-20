@@ -687,8 +687,8 @@ function Get-TmwWindows {
     # 排除已知的非界面顶层窗口（VLC 宿主、IME/输入法、隐藏窗口等），只留有标题的界面窗。
     $mainEl0 = Get-TmwWindow
     if ($null -eq $mainEl0) { return @() }
-    $pid = $mainEl0.Current.ProcessId
-    $script:TmwPid10 = $pid
+    $procId = $mainEl0.Current.ProcessId
+    $script:TmwPid10 = $procId
     $script:TmwHwnds10 = @()
     $script:TmwExclude10 = @('LibVLCSharp.WPF', 'VLC (Direct3D11 output)', 'Hidden Window', 'MediaContextNotificationWindow', 'SystemResourceNotifyWindow', 'CiceroUIWndFrame', 'Mode Indicator', 'MSCTFIME UI', 'Default IME')
     $cb = [Win32+EnumWindowsProc]{
@@ -714,7 +714,7 @@ function Get-TmwWindows {
     $rt = [System.Windows.Automation.AutomationElement]::RootElement
     try {
         $all = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-        return @($all | Where-Object { try { $_.Current.ProcessId -eq $pid } catch { $false } })
+        return @($all | Where-Object { try { $_.Current.ProcessId -eq $procId } catch { $false } })
     } catch { return @() }
 }
 
