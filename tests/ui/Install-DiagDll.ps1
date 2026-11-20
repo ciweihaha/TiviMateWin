@@ -1,4 +1,4 @@
-# Install-DiagDll：把诊断版 TiviMateWin.dll 换上（H01 定根因用）。
+﻿# Install-DiagDll：把诊断版 TiviMateWin.dll 换上（H01 定根因用）。
 # 跑法：run8 跑完后，定时任务 session 1 跑本文件；结果写 C:\build\tmw-uitest\diag-install.txt。
 # 诊断 dll 在仓库 tests/diag/TiviMateWin.dll（commit 6bbbe54），经 ghfast.top 下，
 # 473,600 字节，MD5 f63ecc28c859ccca73f507a8ddee10e6。不要碰 C:\TiviMateWin-v1.4.34-old。
@@ -21,13 +21,24 @@ try {
 $md5=(Get-FileHash -Path $dst -Algorithm MD5).Hash.ToLower()
 L ("md5=" + $md5)
 if ($md5 -ne $expectMd5) { L 'MD5 MISMATCH, abort'; L 'INSTALL-FAILED'; exit 1 }
-# 3. 停 app、备份原 dll、替换
+# 3. 停 app（等进程真正退出、dll 句柄释放，最多 30 秒）、备份原 dll、替换
 try { Get-Process TiviMateWin -ErrorAction SilentlyContinue | Stop-Process -Force } catch { }
-Start-Sleep -Seconds 3
+$gone=$false
+for($i=0;$i -lt 15;$i++){
+  Start-Sleep -Seconds 2
+  if($null -eq (Get-Process TiviMateWin -ErrorAction SilentlyContinue)){ $gone=$true; break }
+  if($i -eq 7){ try { Get-Process TiviMateWin -ErrorAction SilentlyContinue | Stop-Process -Force } catch { } }
+}
+L ("app exited=" + $gone)
+if(-not $gone){ L 'APP STILL RUNNING, cannot replace dll'; L 'INSTALL-FAILED'; exit 1 }
 $target='C:\TiviMateWin\TiviMateWin.dll'
 $bak='C:\TiviMateWin\TiviMateWin.dll.1.4.36-bak'
 if (-not (Test-Path $bak)) { Copy-Item $target $bak -Force; L ("backed up to " + $bak) } else { L "backup already exists, keep it" }
-Copy-Item $dst $target -Force
+$copied=$false
+for($i=0;$i -lt 3 -and -not $copied;$i++){
+  try { Copy-Item $dst $target -Force; $copied=$true } catch { L ("copy try " + ($i+1) + " failed: " + $_.Exception.Message); Start-Sleep -Seconds 3 }
+}
+if(-not $copied){ L 'COPY FAILED after 3 tries'; L 'INSTALL-FAILED'; exit 1 }
 $md5b=(Get-FileHash -Path $target -Algorithm MD5).Hash.ToLower()
 L ("installed md5=" + $md5b)
 if ($md5b -ne $expectMd5) { L 'INSTALLED MD5 MISMATCH'; L 'INSTALL-FAILED'; exit 1 }

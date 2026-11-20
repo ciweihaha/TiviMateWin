@@ -1,4 +1,4 @@
-$ProgressPreference='SilentlyContinue'
+﻿$ProgressPreference='SilentlyContinue'
 $out='C:\build\tmw-uitest\probe-out6.txt'
 function L($s){ Add-Content -Path $out -Value $s -Encoding UTF8 }
 if (Test-Path $out) { Remove-Item $out -Force }
@@ -67,8 +67,10 @@ if($null -ne $pp -and $null -ne $ps){
   if($before -ne $after){ Click-Center (Get-El 'BtnPlayPause') | Out-Null; Start-Sleep -Seconds 1; L "toggled back to play" }
 } else { L "PlayPause or PlayState NOT FOUND" }
 # 2. Settings via mouse（run8 教训：设置窗可迟开约 15 秒，3 秒轮询会漏判；改轮询 20 秒并记迟开时间）
-$btn=Get-El 'BtnSettings'
-if($null -ne $btn){
+# 另：启动后工具栏可能还没建出来，BtnSettings 先轮询等 30 秒再判 NOT FOUND。
+$btn=$null
+for($k=0;$k -lt 15 -and $null -eq $btn;$k++){ $btn=Get-El 'BtnSettings'; if($null -eq $btn){ Start-Sleep -Seconds 2 } }
+if($null -eq $btn){ L "BtnSettings NOT FOUND after 30s wait"; L "PROBE-DONE"; exit }
   $r=$btn.Current.BoundingRectangle
   L ("BtnSettings rect=" + $r + " enabled=" + $btn.Current.IsEnabled)
   $c2=Click-Center $btn
@@ -106,5 +108,4 @@ if($null -ne $btn){
       L ("after close attempt: pidWindows=" + $mine3.Count)
     }
   }
-} else { L "BtnSettings NOT FOUND" }
 L "PROBE-DONE"
