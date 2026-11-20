@@ -25,6 +25,8 @@ public static class Win32 {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT lpPoint);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
   [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
   public const uint MOUSEEVENTF_MOVE = 0x0001;
@@ -35,6 +37,12 @@ public static class Win32 {
 }
 '@
 Add-Type -TypeDefinition $Win32 -ErrorAction SilentlyContinue
+
+# run8：先声明本进程 DPI 感知，否则 WinForms/RootElement 拿到的都是逻辑像素
+# （125% 下 1536x864，物理是 1920x1080），鼠标坐标会偏 25%。调完后
+# GetSystemMetrics 与 UIA RootElement 都返回物理值；Screen.Bounds 仍是缓存的
+# 逻辑值，永不再用它。
+try { [Win32]::SetProcessDPIAware() | Out-Null } catch { }
 
 # 测试脚本自己的控制台窗口不要盖住 app（run6 教训：用户点开控制台后截图全是控制台，
 # 右键/设置点按也全落在控制台上）。启动即最小化（6 = SW_MINIMIZE）。
@@ -118,8 +126,13 @@ function Get-ElementText {
 }
 
 function Get-PhysicalScreenSize {
-    # UIA 坐标是物理像素；WinForms Bounds 在非 DPI 感知进程里是逻辑像素（125% 下 1536x792，
-    # 物理是 1920x990），直接拿它算 mouse_event 绝对坐标会偏 25%。改用 UIA 根元素的物理尺寸。
+    # run8：进程已声明 DPI 感知，GetSystemMetrics(0/1) 直接返回物理像素；
+    # 旧代码先读 UIA RootElement——没调 SetProcessDPIAware 时它是逻辑值（1536x864），
+    # 鼠标点按会偏 25%。Screen.Bounds 是缓存的逻辑值，永不用。
+    try {
+        $w = [Win32]::GetSystemMetrics(0); $h = [Win32]::GetSystemMetrics(1)
+        if ($w -gt 0 -and $h -gt 0) { return @($w, $h) }
+    } catch {}
     try {
         $rr = [System.Windows.Automation.AutomationElement]::RootElement.Current.BoundingRectangle
         if ($rr.Width -gt 0 -and $rr.Height -gt 0) { return @([int]$rr.Width, [int]$rr.Height) }
@@ -156,10 +169,11 @@ function Invoke-MouseRightClick {
 function Take-Shot {
     param([string]$Name, [object]$Crop = $null)
     Bring-ToFront   # 截图前把 app 顶到最前，免得别的窗口盖住画面（run6 的 E01 截到的就是控制台）
-    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+    # run8：截图尺寸也要物理像素（Screen.Bounds 是逻辑值，截出来会少 25%）。
+    $sz2 = Get-PhysicalScreenSize
+    $bmp = New-Object System.Drawing.Bitmap($sz2[0], $sz2[1])
     $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+    $g.CopyFromScreen([System.Drawing.Point]::Empty, [System.Drawing.Point]::Empty, $bmp.Size)
     $g.Dispose()
     $path = Join-Path $ShotDir ("$Name.jpg")
     if ($null -ne $Crop) {
@@ -414,6 +428,7 @@ if ($null -eq $combo) {
         $beforeNames = @()
         foreach ($li in (Find-All -Root $w3 -ControlType ([System.Windows.Automation.ControlType]::ListItem))) { $beforeNames += (Get-ElementText $li) }
         $cb = Find-ByAutomationId -Root $w3 -AutomationId 'GroupCombo'
+        if ($null -eq $cb) { return $null }  # run8：找不到下拉框就返回空，不许抛错（run7 B03 就是在这里炸的）
         $ex = $cb.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
         $ex.Expand()
         Start-Sleep -Seconds 1
@@ -440,7 +455,8 @@ if ($null -eq $combo) {
             $countWei = Get-CountText
             $selName = Get-ComboValue
             # 核心判定是过滤生效（频道数变了）；ComboBox 显示值仅作参考（定制模板读不到时以计数为准）
-            if ($countWei -ne $countAll) {
+            # run8：两个数都必须非空——基数读不到时 '' -ne '56 个频道' 恒真，会假过。
+            if ($countAll -ne '' -and $countWei -ne '' -and $countWei -ne $countAll) {
                 Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'PASS' -Evidence "全部=$countAll，卫视=$countWei，框显示=$selName"
             } else {
                 Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'FAIL' -Evidence "全部=$countAll，选后=$countWei，选中=$selName"
@@ -518,15 +534,20 @@ function Open-ChannelContextMenu {
 }
 
 function Get-CountNumber {
-    $w = Get-TmwWindow
-    $ct = Find-ByAutomationId -Root $w -AutomationId 'CountText'
-    $s = ''
-    if ($null -ne $ct) { $s = Get-ElementText $ct }
-    if ($s -eq '') {
-        $ts = Find-ByName -Root $w -ControlType ([System.Windows.Automation.ControlType]::Text) -NamePattern '个频道'
-        if ($ts.Count -gt 0) { $s = Get-ElementText $ts[0] }
+    # run8：读不到时重试约 3 秒（列表刚刷新时 CountText 可能短暂为空）；仍读不到
+    # 返回 -1，调用方必须判 -1 大声 FAIL，不许拿 -1 当基线（-1 -eq -1 会假过）。
+    for ($i = 0; $i -lt 12; $i++) {
+        $w = Get-TmwWindow
+        $ct = Find-ByAutomationId -Root $w -AutomationId 'CountText'
+        $s = ''
+        if ($null -ne $ct) { $s = Get-ElementText $ct }
+        if ($s -eq '') {
+            $ts = Find-ByName -Root $w -ControlType ([System.Windows.Automation.ControlType]::Text) -NamePattern '个频道'
+            if ($ts.Count -gt 0) { $s = Get-ElementText $ts[0] }
+        }
+        if ($s -match '(\d+)') { return [int]$Matches[1] }
+        Start-Sleep -Milliseconds 250
     }
-    if ($s -match '(\d+)') { return [int]$Matches[1] }
     return -1
 }
 
@@ -561,7 +582,7 @@ if ($null -eq $hideItem) {
     $cfg1 = Get-Config
     $hid1 = @()
     if ($null -ne $cfg1 -and $null -ne $cfg1.HiddenChannels) { $hid1 = @($cfg1.HiddenChannels) }
-    if ($cnt1 -eq ($cnt0 - 1) -and $hid1.Count -eq ($hidden0.Count + 1)) {
+    if ($cnt0 -ne -1 -and $cnt1 -ne -1 -and $cnt1 -eq ($cnt0 - 1) -and $hid1.Count -eq ($hidden0.Count + 1)) {
         Write-Result -Id 'C02' -Name '右键「隐藏频道」' -Verdict 'PASS' -Evidence "频道数 $cnt0->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
     } else {
         Write-Result -Id 'C02' -Name '右键「隐藏频道」' -Verdict 'FAIL' -Evidence "频道数 $cnt0->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
@@ -577,7 +598,7 @@ if ($null -eq $hideItem) {
         [void](Invoke-Element $showHidden)
         Start-Sleep -Seconds 2
         $cnt2 = Get-CountNumber
-        if ($cnt2 -eq $cnt0) {
+        if ($cnt0 -ne -1 -and $cnt2 -ne -1 -and $cnt2 -eq $cnt0) {
             Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'PASS' -Evidence "频道数回到 $cnt2"
         } else {
             Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'FAIL' -Evidence "频道数 $cnt2，期望 $cnt0"
@@ -628,8 +649,11 @@ if ($null -eq $hideItem) {
 function Get-TmwWindows {
     # 属于 TiviMateWin 进程的全部顶层窗口（主窗口 + 新窗口 ChannelWindow）。
     # 不能按标题筛：ChannelWindow 的标题是台名（如 CCTV综合），不含「星辰」/「TiviMate」。
-    $pid = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).Id
-    if ($null -eq $pid) { return @() }
+    # run8：pid 从主窗口 UIA 元素取（Get-TmwWindow().Current.ProcessId），
+    # 不用 Get-Process 首个（多进程/旧进程残留时会抓错）。
+    $mainEl0 = Get-TmwWindow
+    if ($null -eq $mainEl0) { return @() }
+    $pid = $mainEl0.Current.ProcessId
     $rt = [System.Windows.Automation.AutomationElement]::RootElement
     $all = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
     return @($all | Where-Object { try { $_.Current.ProcessId -eq $pid } catch { $false } })
@@ -657,7 +681,8 @@ if ($null -eq $newWin) {
     # D02：关新窗口，主窗口恢复
     $closed = $false
     try {
-        $mainH = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowHandle
+        $mainEl = Get-TmwWindow
+        $mainH = if ($null -ne $mainEl) { $mainEl.Current.NativeWindowHandle } else { 0 }
         foreach ($w in $wins) {
             if ($w.Current.NativeWindowHandle -ne $mainH) {
                 $wp = $w.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
@@ -1138,7 +1163,7 @@ if ($null -eq $sb) {
     Start-Sleep -Seconds 2
     $cntAfter = Get-CountNumber
     $alive5 = ($null -ne (Get-TmwWindow))
-    if ($alive5 -and $cntAfter -eq $cntBefore) {
+    if ($alive5 -and $cntBefore -ne -1 -and $cntAfter -ne -1 -and $cntAfter -eq $cntBefore) {
         Write-Result -Id 'K05' -Name '搜不到的词不崩、清空恢复' -Verdict 'PASS' -Evidence "搜前=$cntBefore，搜「zzzz不存在」后=$cntZero，清空后=$cntAfter"
     } else {
         Write-Result -Id 'K05' -Name '搜不到的词不崩、清空恢复' -Verdict 'FAIL' -Evidence "搜前=$cntBefore，搜后=$cntZero，清空后=$cntAfter，窗口在=$alive5"

@@ -22,6 +22,8 @@
 # - OSD（切台信息条）在 UIA 树里根本不存在，只能靠截图。
 # - 频道列表项在 UIA 里是 0 个（虚拟化），点台用数字键，别点列表。
 # - SetCursorPos 会被 DPI 虚拟化 ×1.25，点按用 mouse_event 绝对坐标（脚本里的 Invoke-MouseClick）。
+# - 脚本启动先调 SetProcessDPIAware，再用 GetSystemMetrics(0/1) 算鼠标坐标；
+#   Screen.Bounds 是缓存的逻辑值（125% 下 1536x864，物理 1920x1080），永不用（run8）。
 # - 截图是物理像素 1:1；UIA 矩形也是物理像素，直接对上，不用换算。
 # - app 会无崩溃自己退出（“悄悄退出”），soak 阶段专门盯它；中途退了就是 FAIL。
 # - 云电脑上流经常 stall，别把卡顿当失败；soak 只盯“进程还在不在 + 时间在不在走”。
