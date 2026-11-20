@@ -639,6 +639,7 @@ if ($null -eq $hideItem) {
     Write-Result -Id 'C04' -Name '右键「显示频道」取消隐藏' -Verdict 'FAIL' -Evidence 'C02 未完成，跳过'
     Write-Result -Id 'C05' -Name 'config 隐藏恢复基线' -Verdict 'FAIL' -Evidence 'C02 未完成，跳过'
 } else {
+    $cntPre = Get-CountNumber
     [void](Invoke-Element $hideItem)
     Start-Sleep -Seconds 2
     $cnt1 = Get-CountNumber
@@ -652,10 +653,12 @@ if ($null -eq $hideItem) {
         if ($hid1.Count -eq ($hidden0.Count + 1)) { break }
         Start-Sleep -Seconds 1
     }
-    if ($cnt0 -ne -1 -and $cnt1 -ne -1 -and $cnt1 -eq ($cnt0 - 1) -and $hid1.Count -eq ($hidden0.Count + 1)) {
-        Write-Result -Id 'C02' -Name '右键「隐藏频道」' -Verdict 'PASS' -Evidence "频道数 $cnt0->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
+    # run17：C02 用藏之前刚读的数作基线（不用 C01 前的 cnt0）——run16 里服务端
+    # 中途加回西藏卫视（54→55），cnt0 过期，藏 1 个后 54->54 被误判 FAIL。
+    if ($cntPre -ne -1 -and $cnt1 -ne -1 -and $cnt1 -eq ($cntPre - 1) -and $hid1.Count -eq ($hidden0.Count + 1)) {
+        Write-Result -Id 'C02' -Name '右键「隐藏频道」' -Verdict 'PASS' -Evidence "频道数 $cntPre->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
     } else {
-        Write-Result -Id 'C02' -Name '右键「隐藏频道」' -Verdict 'FAIL' -Evidence "频道数 $cnt0->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
+        Write-Result -Id 'C02' -Name '右键「隐藏频道」' -Verdict 'FAIL' -Evidence "频道数 $cntPre->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
     }
     # C03：打开「显示隐藏频道」，台回来
     $menu2 = Open-ChannelContextMenu
@@ -665,13 +668,15 @@ if ($null -eq $hideItem) {
         Write-Result -Id 'C04' -Name '右键「显示频道」取消隐藏' -Verdict 'FAIL' -Evidence 'C03 未完成，跳过'
         Write-Result -Id 'C05' -Name 'config 隐藏恢复基线' -Verdict 'FAIL' -Evidence 'C03 未完成，跳过'
     } else {
+        $cntPre3 = Get-CountNumber
         [void](Invoke-Element $showHidden)
         Start-Sleep -Seconds 2
         $cnt2 = Get-CountNumber
-        if ($cnt0 -ne -1 -and $cnt2 -ne -1 -and $cnt2 -eq $cnt0) {
-            Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'PASS' -Evidence "频道数回到 $cnt2"
+        # run17：用点之前的即时数作基线（不用 C01 前的 cnt0），防总数中途变了。
+        if ($cntPre3 -ne -1 -and $cnt2 -ne -1 -and $cnt2 -eq ($cntPre3 + 1)) {
+            Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'PASS' -Evidence "频道数 $cntPre3->$cnt2"
         } else {
-            Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'FAIL' -Evidence "频道数 $cnt2，期望 $cnt0"
+            Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'FAIL' -Evidence "频道数 $cntPre3->$cnt2，期望 $($cntPre3 + 1)"
         }
         # C04：右键已隐藏的台，应只有「显示频道」；
         # run10：直接点带「已隐藏」标记的那行，不再默认点第 2 行。
@@ -1482,6 +1487,7 @@ if (-not $SkipSoak) {
     $soakStart = Get-Date
     $soakPid = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).Id
     $soakExit = $null
+    $script:SoakHangCount = 0
     $lfL = Get-LogFile
     $logMark = 0
     if ($null -ne $lfL) { $logMark = (Get-Content $lfL.FullName -ErrorAction SilentlyContinue | Measure-Object -Line).Lines }
@@ -1498,6 +1504,22 @@ if (-not $SkipSoak) {
             Write-Result -Id 'L01' -Name "连续播 ${SoakMinutes} 分钟不退出" -Verdict 'FAIL' -Evidence "播了约 $([int](($soakExit - $soakStart).TotalMinutes)) 分钟后退出（$($soakExit.ToString('HH:mm:ss'))）；log 尾：$tailL"
             break
         }
+        # run17：进程在但无响应（挂起）也判 FAIL，并抓 dump——run16 里 app 在浸泡
+        # 约 18 分钟时挂起（事件 1002），Windows 终结了它；L01 没写、脚本也没了。
+        # 连续两次无响应即抓 dump（procdump 在 C:\build\tmw-diag\procdump）。
+        if (-not $p.Responding) {
+            $script:SoakHangCount++
+            if ($script:SoakHangCount -ge 2) {
+                $dumpPath = Join-Path $OutDir 'soak-hang.dmp'
+                try {
+                    $pd = 'C:\build\tmw-diag\procdump\procdump64.exe'
+                    if (Test-Path $pd) { Start-Process -FilePath $pd -ArgumentList "-ma $soakPid `"$dumpPath`"" -Wait -WindowStyle Hidden }
+                } catch { }
+                $soakExit = Get-Date
+                Write-Result -Id 'L01' -Name "连续播 ${SoakMinutes} 分钟不退出" -Verdict 'FAIL' -Evidence "播了约 $([int](($soakExit - $soakStart).TotalMinutes)) 分钟后挂起无响应（连续 2 次检查）；dump=$dumpPath"
+                break
+            }
+        } else { $script:SoakHangCount = 0 }
         # run10：浸泡里不读 UIA 时间——run9 的 Job 版时间读取把浸泡卡死了（Start-Job 在
         # 计划任务里挂住，min10 之后 40 分钟没进展）；浸泡的 verdict 只看进程在不在，
         # 时间证据改由日志 + 终场截图提供，UIA 一律不碰。
