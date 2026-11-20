@@ -577,28 +577,31 @@ if ($null -eq $combo) {
         Write-Result -Id 'B01' -Name '分组下拉框字看得见' -Verdict 'FAIL' -Evidence "深色像素占比 $([Math]::Round($frac,4))（<0.002），字太浅或没画出；截图 $crop"
     }
     }
-    # B02：4 个选项（展开后读全窗 ListItem 差集；此定制 ComboBox 不支持 ValuePattern/SelectionPattern）
+    # B02：4 个选项（展开后读全窗 ListItem；期望 全部/其他地区直播/卫视频道/央视频道）
     try {
-        $selVal = Get-ElementText $combo
-        # 展开前先记下全窗已有的 ListItem 名字（频道行），展开后多出来的就是下拉选项
-        $winB = Get-TmwWindow
-        $beforeNames = @()
-        foreach ($li in (Find-All -Root $winB -ControlType ([System.Windows.Automation.ControlType]::ListItem))) { $beforeNames += (Get-ElementText $li) }
-        # run18：Expand 也包超时（跨进程调用，app 卡住时会堵）。
-        [void](Invoke-UiPatternCall -Element $combo -PatternType ([System.Windows.Automation.ExpandCollapsePattern]) -Method 'Expand')
+        # run20：$combo 是 B 段开头找的旧元素，Expand 可能静默失败（B03 现找就通、B02 用旧的就读空）；
+        # 另差集法也脆弱（定制下拉框的项可能没展开就已在树里）。展开前重找一次新鲜的，
+        # 展开后按名验 4 个期望选项是否都在，不再用差集。
+        $combo2 = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'GroupCombo'
+        if ($null -eq $combo2) { $combo2 = $combo }
+        $selVal = Get-ElementText $combo2
+        [void](Invoke-UiPatternCall -Element $combo2 -PatternType ([System.Windows.Automation.ExpandCollapsePattern]) -Method 'Expand')
         Start-Sleep -Seconds 1
         $items = @()
         foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) {
             $nm = Get-ElementText $li
-            if ($nm -ne '' -and ($beforeNames -notcontains $nm)) { $items += $nm }
+            if ($nm -ne '' -and ($items -notcontains $nm)) { $items += $nm }
         }
         # run19：$exp 变量在 run18 改版时被删漏了（只剩这一行空引用，抛“不能对 Null 值
         # 表达式调用方法”）。Collapse 也走带超时的调用；收不收起不影响 B02 判定（选项已读完）。
-        [void](Invoke-UiPatternCall -Element $combo -PatternType ([System.Windows.Automation.ExpandCollapsePattern]) -Method 'Collapse')
-        if ($items.Count -ge 4 -and ($items -contains '全部')) {
+        [void](Invoke-UiPatternCall -Element $combo2 -PatternType ([System.Windows.Automation.ExpandCollapsePattern]) -Method 'Collapse')
+        # run20：$items 里有频道行，只验 4 个期望选项是否齐（run17 证实是这 4 个）。
+        $want = @('全部','其他地区直播','卫视频道','央视频道')
+        $missing = @($want | Where-Object { $items -notcontains $_ })
+        if ($missing.Count -eq 0) {
             Write-Result -Id 'B02' -Name '下拉框选项' -Verdict 'PASS' -Evidence "选中=$selVal，选项=$($items -join '/')"
         } else {
-            Write-Result -Id 'B02' -Name '下拉框选项' -Verdict 'FAIL' -Evidence "选中=$selVal，读到选项=$($items -join '/')（期望 >=4 个含「全部」）"
+            Write-Result -Id 'B02' -Name '下拉框选项' -Verdict 'FAIL' -Evidence "选中=$selVal，读到选项=$($items -join '/')（缺：$($missing -join '/')）"
         }
     } catch {
         Write-Result -Id 'B02' -Name '下拉框选项' -Verdict 'FAIL' -Evidence "展开读选项异常：$($_.Exception.Message)"
@@ -692,14 +695,14 @@ if ($null -eq $combo) {
 function Get-MenuItems {
     $root = [System.Windows.Automation.AutomationElement]::RootElement
     $items = Find-All -Root $root -ControlType ([System.Windows.Automation.ControlType]::MenuItem)
-    # run18：Name 过滤也放进带超时的 runspace（逐条在主线程读会堵在卡住的 app 上）。
+    # run20：run18 把名字过滤放进批量 runspace 后只剩 1 项（run17 主线程过滤得 8 项，
+    # C02/D01/K03 全栽在这）。改回逐条用 Get-ElementText（每条 3 秒封顶，有界），空名才剔掉。
     if ($items.Count -eq 0) { return @() }
-    $res = Invoke-UiWithTimeout -Code {
-        param($els)
-        @($els | Where-Object { try { $_.Current.Name -ne '' } catch { $false } })
-    } -TimeoutSec 10 -What 'Filter-MenuItems' -ArgumentList @($items)
-    if ($null -eq $res) { return @() }
-    return @($res)
+    $kept = @()
+    foreach ($it in $items) {
+        if ((Get-ElementText $it) -ne '') { $kept += $it }
+    }
+    return $kept
 }
 
 function Open-ChannelContextMenu {
@@ -1661,6 +1664,11 @@ if ($k04ok) {
 # K05：搜不到的词
 $w = Get-TmwWindow
 $sb = Find-ByAutomationId -Root $w -AutomationId 'SearchBox'
+# run20：K04 刚切完主题，模板重建时 SearchBox 可能短暂不在树里；2 秒后重试一次再判。
+if ($null -eq $sb) {
+    Start-Sleep -Seconds 2
+    $sb = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'SearchBox'
+}
 if ($null -eq $sb) {
     Write-Result -Id 'K05' -Name '搜不到的词不崩、清空恢复' -Verdict 'FAIL' -Evidence '找不到 SearchBox'
 } else {
