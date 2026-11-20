@@ -5,11 +5,13 @@ $sum='C:\build\tmw-uitest\diag-probe-summary.txt'
 function L($s){ Add-Content -Path $sum -Value $s -Encoding UTF8; Write-Output $s }
 if (Test-Path $sum) { Remove-Item $sum -Force }
 L ("start " + (Get-Date -Format 'HH:mm:ss'))
-# 0. sync latest Probe-Settings6 (6197 bytes after local edit)
-try {
-  Invoke-WebRequest -Uri 'https://ghfast.top/https://raw.githubusercontent.com/ciweihaha/TiviMateWin/main/tests/ui/Probe-Settings6.ps1' -OutFile 'C:\build\tmw-uitest\Probe-Settings6.ps1' -UseBasicParsing -TimeoutSec 90
-  L ("Probe-Settings6 synced bytes=" + (Get-Item 'C:\build\tmw-uitest\Probe-Settings6.ps1').Length)
-} catch { L ("Probe-Settings6 sync FAIL: " + $_.Exception.Message) }
+# 0. sync latest probe scripts (commit b641f77; ghfast.top caches raw content, use ?v= to bust)
+foreach ($f in @('Probe-Settings6.ps1','Probe-B04.ps1','Install-DiagDll.ps1')) {
+  try {
+    Invoke-WebRequest -Uri ("https://ghfast.top/https://raw.githubusercontent.com/ciweihaha/TiviMateWin/main/tests/ui/$f?v=b641f77") -OutFile "C:\build\tmw-uitest\$f" -UseBasicParsing -TimeoutSec 90
+    L ("synced $f bytes=" + (Get-Item "C:\build\tmw-uitest\$f").Length)
+  } catch { L ("sync FAIL $f : " + $_.Exception.Message) }
+}
 # 1. install diag dll
 L '--- step1 Install-DiagDll ---'
 & powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\build\tmw-uitest\Install-DiagDll.ps1' 2>&1 | ForEach-Object { L $_ }
