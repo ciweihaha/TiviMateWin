@@ -125,40 +125,147 @@ function Get-TmwWindow {
     try { return [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle) } catch { return $null }
 }
 
+function Invoke-UiWithTimeout {
+    # run18：UIA 的 FindAll/FindFirst/Invoke/Close 在 app 卡顿时无限阻塞（run12 卡 J01 10 分钟、
+    # run15 卡 K04 20 分钟、run17 卡 J01）——UIA 跨进程调用等不到回应就永远等下去。
+    # 在独立 runspace 里跑，超时就放弃它、主线程继续。Start-Job 在计划任务里会挂住
+    # （run9 浸泡卡死），所以用 in-process runspace，不起新进程。
+    # 返回：成功时输出数组（可能为空）；超时或调用抛错时 $null。调用方按“没拿到结果”处理，绝不卡死。
+    # 超时后被放弃的 runspace 线程可能仍卡在原生调用里，随进程退出而消失。
+    # （探针 TMW-ProbeRunspace 已验证：Sleep 60 在 3 秒超时返回空；挂起的 app 上
+    # FindAll/FindFirst 15 秒超时返回空，不再无限等。）
+    param([scriptblock]$Code, [int]$TimeoutSec = 15, [string]$What = 'UIA', [object[]]$ArgumentList = @())
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($Code)
+    foreach ($a in $ArgumentList) { [void]$ps.AddArgument($a) }
+    $async = $null
+    try { $async = $ps.BeginInvoke() } catch { try { $ps.Dispose() } catch { } return $null }
+    $done = $async.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds($TimeoutSec))
+    if ($done) {
+        try { $res = $ps.EndInvoke($async) } catch { $res = $null }
+        try { $ps.Dispose() } catch { }
+        if ($null -eq $res) { return @() }
+        return @($res)
+    }
+    return $null
+}
+
+function Invoke-UiPatternCall {
+    # run18：通用 UIA 模式调用（Expand/Toggle/SetValue/Close/SetWindowVisualState），
+    # 在带超时的 runspace 里跑，永不无限等。返回 $true=调用成功，$false=超时/失败。
+    # $Method 是模式对象上的方法名；$Args 是它的参数（SetWindowVisualState 传枚举值）。
+    param($Element, [type]$PatternType, [string]$Method, [object[]]$Args = @())
+    if ($null -eq $Element) { return $false }
+    $res = Invoke-UiWithTimeout -Code {
+        param($e, $pt, $m, $a)
+        $pat = $e.GetCurrentPattern($pt)
+        if ($a.Count -eq 0) { $pat.$m() } else { $pat.GetType().GetMethod($m).Invoke($pat, $a) }
+        $true
+    } -TimeoutSec 10 -What "Pattern-$Method" -ArgumentList @($Element, $PatternType, $Method, $Args)
+    if ($null -eq $res -or @($res).Count -eq 0) { return $false }
+    return [bool](@($res)[0])
+}
+
+function Get-UiPatternValue {
+    # run18：读一个 UIA 模式对象的属性（如 ToggleState），带超时，超时返回 $null。
+    param($Element, [type]$PatternType, [string]$Property)
+    if ($null -eq $Element) { return $null }
+    $res = Invoke-UiWithTimeout -Code {
+        param($e, $pt, $prop)
+        $pat = $e.GetCurrentPattern($pt)
+        $pat.$prop
+    } -TimeoutSec 5 -What "Pattern-$Property" -ArgumentList @($Element, $PatternType, $Property)
+    if ($null -eq $res -or @($res).Count -eq 0) { return $null }
+    return @($res)[0]
+}
+
 function Find-All {
-    param($Root, $ControlType)
+    param($Root, $ControlType, [int]$TimeoutSec = 15)
     if ($null -eq $Root) { return @() }
     $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $ControlType)
-    try { return @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) } catch { return @() }
+    $res = Invoke-UiWithTimeout -Code {
+        param($r, $c)
+        @($r.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c))
+    } -TimeoutSec $TimeoutSec -What 'FindAll' -ArgumentList @($Root, $cond)
+    if ($null -eq $res) { return @() }
+    return @($res)
 }
 
 function Find-ByName {
+    # run18：.Current.Name 是跨进程读，app 卡住时也会堵——过滤也放进带超时的 runspace。
     param($Root, $ControlType, [string]$NamePattern)
     $all = Find-All -Root $Root -ControlType $ControlType
-    return @($all | Where-Object { $_.Current.Name -match $NamePattern })
+    if ($all.Count -eq 0) { return @() }
+    $res = Invoke-UiWithTimeout -Code {
+        param($els, $pat)
+        @($els | Where-Object { try { $_.Current.Name -match $pat } catch { $false } })
+    } -TimeoutSec 10 -What 'Filter-ByName' -ArgumentList @($all, $NamePattern)
+    if ($null -eq $res) { return @() }
+    return @($res)
 }
 
 function Find-ByAutomationId {
-    param($Root, [string]$AutomationId)
+    param($Root, [string]$AutomationId, [int]$TimeoutSec = 15)
     if ($null -eq $Root) { return $null }
     $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $AutomationId)
-    try { return $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond) } catch { return $null }
+    $res = Invoke-UiWithTimeout -Code {
+        param($r, $c)
+        $r.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
+    } -TimeoutSec $TimeoutSec -What 'FindFirst' -ArgumentList @($Root, $cond)
+    if ($null -eq $res -or @($res).Count -eq 0) { return $null }
+    return @($res)[0]
 }
 
 function Invoke-Element {
+    # run18：Invoke() 也包一层超时——app 卡住时它一样无限等。超时返回 $false，
+    # 但点击可能稍后才落下（原生调用仍在跑），调用方点完要轮询结果，不要只凭返回值定罪。
     param($El)
     if ($null -eq $El) { return $false }
-    try {
-        $pat = $El.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+    $res = Invoke-UiWithTimeout -Code {
+        param($e)
+        $pat = $e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
         $pat.Invoke()
-        return $true
-    } catch { return $false }
+        $true
+    } -TimeoutSec 15 -What 'Invoke' -ArgumentList @($El)
+    if ($null -eq $res -or @($res).Count -eq 0) { return $false }
+    return [bool](@($res)[0])
 }
 
 function Get-ElementText {
+    # run18：单条 .Current.Name 也包超时（3 秒）——app 卡住时逐条读会把循环拖成几分钟。
+    # 循环里每条都 3 秒封顶，最坏也是有界的（不再无限等），正常时每次约几毫秒。
     param($El)
     if ($null -eq $El) { return '' }
-    try { return $El.Current.Name } catch { return '' }
+    $res = Invoke-UiWithTimeout -Code {
+        param($e)
+        try { $e.Current.Name } catch { '' }
+    } -TimeoutSec 3 -What 'Read-Name' -ArgumentList @($El)
+    if ($null -eq $res -or @($res).Count -eq 0) { return '' }
+    return [string](@($res)[0])
+}
+
+function Get-ElementRect {
+    # run18：读元素的 BoundingRectangle，带超时；超时/失败返回 $null。
+    param($El)
+    if ($null -eq $El) { return $null }
+    $res = Invoke-UiWithTimeout -Code {
+        param($e)
+        try { $e.Current.BoundingRectangle } catch { $null }
+    } -TimeoutSec 5 -What 'Read-Rect' -ArgumentList @($El)
+    if ($null -eq $res -or @($res).Count -eq 0) { return $null }
+    return @($res)[0]
+}
+
+function Get-ElementIsOffscreen {
+    # run18：读元素的 IsOffscreen，带超时；超时/失败返回 $null。
+    param($El)
+    if ($null -eq $El) { return $null }
+    $res = Invoke-UiWithTimeout -Code {
+        param($e)
+        try { $e.Current.IsOffscreen } catch { $null }
+    } -TimeoutSec 5 -What 'Read-IsOffscreen' -ArgumentList @($El)
+    if ($null -eq $res -or @($res).Count -eq 0) { return $null }
+    return [bool](@($res)[0])
 }
 
 function Get-PhysicalScreenSize {
@@ -259,12 +366,33 @@ function Bring-ToFront {
 }
 
 function Get-StatusText {
+    # run18：把所有 .Current.Name 读放进带超时的 runspace，逐条在主线程读会堵在卡住的 app 上。
     # 状态栏文字：遍历所有 Text 找含关键字的那行
     $w = Get-TmwWindow
     if ($null -eq $w) { return '' }
     $texts = Find-All -Root $w -ControlType ([System.Windows.Automation.ControlType]::Text)
-    $names = @($texts | ForEach-Object { Get-ElementText $_ })
-    return ($names -join ' | ')
+    if ($texts.Count -eq 0) { return '' }
+    $res = Invoke-UiWithTimeout -Code {
+        param($els)
+        @($els | ForEach-Object { try { $_.Current.Name } catch { '' } }) -join ' | '
+    } -TimeoutSec 10 -What 'Read-StatusText' -ArgumentList @($texts)
+    if ($null -eq $res -or @($res).Count -eq 0) { return '' }
+    return [string](@($res)[0])
+}
+
+function Get-SubtitleStatusText {
+    # run18（F01 探针用）：读字幕状态文本（SubtitleStatus，MainWindow.xaml:409）。
+    # 返回文本（可能为空串）；元素找不到或超时返回 $null。
+    $w = Get-TmwWindow
+    if ($null -eq $w) { return $null }
+    $el = Find-ByAutomationId -Root $w -AutomationId 'SubtitleStatus' -TimeoutSec 3
+    if ($null -eq $el) { return $null }
+    $res = Invoke-UiWithTimeout -Code {
+        param($e)
+        try { $e.Current.Name } catch { '' }
+    } -TimeoutSec 3 -What 'Read-SubtitleStatus' -ArgumentList @($el)
+    if ($null -eq $res -or @($res).Count -eq 0) { return $null }
+    return [string](@($res)[0])
 }
 
 function Wait-ForStatus {
@@ -279,15 +407,22 @@ function Wait-ForStatus {
 }
 
 function Get-TimeTextValue {
+    # run18：时间文本的读取也放进带超时的 runspace（逐条读会堵在卡住的 app 上）。
     # 播放时间 Text（形如 00:31）：遍历 Text 找时间格式
     $w = Get-TmwWindow
     if ($null -eq $w) { return '' }
     $texts = Find-All -Root $w -ControlType ([System.Windows.Automation.ControlType]::Text)
-    foreach ($t in $texts) {
-        $n = Get-ElementText $t
-        if ($n -match '^\d{1,2}:\d{2}(:\d{2})?$') { return $n }
-    }
-    return ''
+    if ($texts.Count -eq 0) { return '' }
+    $res = Invoke-UiWithTimeout -Code {
+        param($els)
+        foreach ($t in $els) {
+            try { $n = $t.Current.Name } catch { $n = '' }
+            if ($n -match '^\d{1,2}:\d{2}(:\d{2})?$') { return $n }
+        }
+        return ''
+    } -TimeoutSec 10 -What 'Read-TimeText' -ArgumentList @($texts)
+    if ($null -eq $res -or @($res).Count -eq 0) { return '' }
+    return [string](@($res)[0])
 }
 
 function Test-TimeAdvancing {
@@ -350,8 +485,8 @@ function Restore-WindowNormal {
     try {
         $w0 = Get-TmwWindow
         if ($null -eq $w0) { return }
-        $wp0 = $w0.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
-        $wp0.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal)
+        # run18：SetWindowVisualState 也是跨进程调用，app 卡住时会堵——包超时。
+        [void](Invoke-UiPatternCall -Element $w0 -PatternType ([System.Windows.Automation.WindowPattern]) -Method 'SetWindowVisualState' -Args @([System.Windows.Automation.WindowVisualState]::Normal))
         Start-Sleep -Seconds 1
         $h0 = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowHandle
         if ($h0 -ne [IntPtr]::Zero) {
@@ -370,7 +505,7 @@ public static class Win32Pos {
 }
 '@
 Restore-WindowNormal
-$wr0 = (Get-TmwWindow).Current.BoundingRectangle
+$wr0 = Get-ElementRect (Get-TmwWindow)
 Write-Output ("窗口已恢复正常态 rect=$wr0")
 
 # 等节目单加载（log 里 epg loaded）
@@ -398,8 +533,7 @@ if ($epgN -eq 0) {
 }
 
 # ================= A：版本与启动 =================
-$title = ''
-try { $title = (Get-TmwWindow).Current.Name } catch { }
+$title = Get-ElementText (Get-TmwWindow)
 if ($title -match [regex]::Escape($ExpectedVersion)) {
     Write-Result -Id 'A01' -Name '标题栏版本号' -Verdict 'PASS' -Evidence "标题=$title"
 } else {
@@ -417,7 +551,11 @@ $combo = Find-ByAutomationId -Root $win -AutomationId 'GroupCombo'
 if ($null -eq $combo) {
     Write-Result -Id 'B01' -Name '分组下拉框存在' -Verdict 'FAIL' -Evidence 'AutomationId=GroupCombo 找不到'
 } else {
-    $r = $combo.Current.BoundingRectangle
+    # run18：矩形读包超时；读不到就判 B01 FAIL，不拿空矩形去截图。
+    $r = Get-ElementRect $combo
+    if ($null -eq $r) {
+        Write-Result -Id 'B01' -Name '分组下拉框字看得见' -Verdict 'FAIL' -Evidence '下拉框矩形读不到（app 可能卡住）'
+    } else {
     # B01：字看得见——截下拉框区域，数深色像素（白底深字才有深色像素；浅字白底几乎没有）
     $rect = New-Object System.Drawing.Rectangle([int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height)
     $crop = Take-Shot -Name 'B01-combo-crop' -Crop $rect
@@ -427,16 +565,16 @@ if ($null -eq $combo) {
     } else {
         Write-Result -Id 'B01' -Name '分组下拉框字看得见' -Verdict 'FAIL' -Evidence "深色像素占比 $([Math]::Round($frac,4))（<0.002），字太浅或没画出；截图 $crop"
     }
+    }
     # B02：4 个选项（展开后读全窗 ListItem 差集；此定制 ComboBox 不支持 ValuePattern/SelectionPattern）
     try {
-        $selVal = ''
-        try { $selVal = $combo.Current.Name } catch { }
+        $selVal = Get-ElementText $combo
         # 展开前先记下全窗已有的 ListItem 名字（频道行），展开后多出来的就是下拉选项
         $winB = Get-TmwWindow
         $beforeNames = @()
         foreach ($li in (Find-All -Root $winB -ControlType ([System.Windows.Automation.ControlType]::ListItem))) { $beforeNames += (Get-ElementText $li) }
-        $exp = $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-        $exp.Expand()
+        # run18：Expand 也包超时（跨进程调用，app 卡住时会堵）。
+        [void](Invoke-UiPatternCall -Element $combo -PatternType ([System.Windows.Automation.ExpandCollapsePattern]) -Method 'Expand')
         Start-Sleep -Seconds 1
         $items = @()
         foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) {
@@ -471,8 +609,7 @@ if ($null -eq $combo) {
         foreach ($li in (Find-All -Root $w3 -ControlType ([System.Windows.Automation.ControlType]::ListItem))) { $beforeNames += (Get-ElementText $li) }
         $cb = Find-ByAutomationId -Root $w3 -AutomationId 'GroupCombo'
         if ($null -eq $cb) { return $null }  # run8：找不到下拉框就返回空，不许抛错（run7 B03 就是在这里炸的）
-        $ex = $cb.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
-        $ex.Expand()
+        [void](Invoke-UiPatternCall -Element $cb -PatternType ([System.Windows.Automation.ExpandCollapsePattern]) -Method 'Expand')
         Start-Sleep -Seconds 1
         $found = $null
         foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) {
@@ -485,13 +622,18 @@ if ($null -eq $combo) {
         # 定制 ComboBox 不支持 ValuePattern；用 ComboBox 自身的 Name（选中项文本会反映在上面）兜底
         $cb = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'GroupCombo'
         if ($null -eq $cb) { return '' }
-        try { return $cb.Current.Name } catch { return '' }
+        return (Get-ElementText $cb)
     }
     try {
         $wei = Find-DropdownItem -Want '卫视频道'
         if ($null -ne $wei) {
             # 定制下拉项不支持 SelectionItemPattern，改鼠标点它
-            $wr = $wei.Current.BoundingRectangle
+            # run18：矩形读包超时；读不到就判 FAIL，不拿空矩形去点。
+            $wr = Get-ElementRect $wei
+            if ($null -eq $wr) {
+                Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'FAIL' -Evidence '「卫视频道」项矩形读不到（app 可能卡住）'
+                Write-Result -Id 'B04' -Name '选回「全部」恢复' -Verdict 'FAIL' -Evidence 'B03 未完成，跳过'
+            } else {
             Invoke-MouseClick -X ([int]($wr.X + $wr.Width / 2)) -Y ([int]($wr.Y + $wr.Height / 2))
             Start-Sleep -Seconds 2
             $countWei = Get-CountText
@@ -506,7 +648,10 @@ if ($null -eq $combo) {
             # 选回「全部」
             $allItem = Find-DropdownItem -Want '全部'
             if ($null -ne $allItem) {
-                $ar = $allItem.Current.BoundingRectangle
+                $ar = Get-ElementRect $allItem
+                if ($null -eq $ar) {
+                    Write-Result -Id 'B04' -Name '选回「全部」恢复' -Verdict 'FAIL' -Evidence '「全部」项矩形读不到（app 可能卡住）'
+                } else {
                 Invoke-MouseClick -X ([int]($ar.X + $ar.Width / 2)) -Y ([int]($ar.Y + $ar.Height / 2))
                 Start-Sleep -Seconds 2
                 $countBack = Get-CountText
@@ -515,8 +660,10 @@ if ($null -eq $combo) {
                 } else {
                     Write-Result -Id 'B04' -Name '选回「全部」恢复' -Verdict 'FAIL' -Evidence "恢复后=$countBack，期望=$countAll"
                 }
+                }
             } else {
                 Write-Result -Id 'B04' -Name '选回「全部」恢复' -Verdict 'FAIL' -Evidence '展开后找不到「全部」项'
+            }
             }
         } else {
             Write-Result -Id 'B03' -Name '选「卫视频道」过滤' -Verdict 'FAIL' -Evidence '展开后找不到「卫视频道」项'
@@ -532,7 +679,14 @@ if ($null -eq $combo) {
 function Get-MenuItems {
     $root = [System.Windows.Automation.AutomationElement]::RootElement
     $items = Find-All -Root $root -ControlType ([System.Windows.Automation.ControlType]::MenuItem)
-    return @($items | Where-Object { $_.Current.Name -ne '' })
+    # run18：Name 过滤也放进带超时的 runspace（逐条在主线程读会堵在卡住的 app 上）。
+    if ($items.Count -eq 0) { return @() }
+    $res = Invoke-UiWithTimeout -Code {
+        param($els)
+        @($els | Where-Object { try { $_.Current.Name -ne '' } catch { $false } })
+    } -TimeoutSec 10 -What 'Filter-MenuItems' -ArgumentList @($items)
+    if ($null -eq $res) { return @() }
+    return @($res)
 }
 
 function Open-ChannelContextMenu {
@@ -561,15 +715,18 @@ function Open-ChannelContextMenu {
         }
     }
     if ($null -ne $target) {
-        $tr = $target.Current.BoundingRectangle
-        $cx = [int]($tr.X + $tr.Width / 2); $cy = [int]($tr.Y + $tr.Height / 2)
-        Invoke-MouseClick -X $cx -Y $cy
-        Start-Sleep -Milliseconds 300
-        Invoke-MouseRightClick -X $cx -Y $cy
+        # run18：矩形读包超时；读不到就不点（菜单打不开由调用方判 FAIL）。
+        $tr = Get-ElementRect $target
+        if ($null -ne $tr) {
+            $cx = [int]($tr.X + $tr.Width / 2); $cy = [int]($tr.Y + $tr.Height / 2)
+            Invoke-MouseClick -X $cx -Y $cy
+            Start-Sleep -Milliseconds 300
+            Invoke-MouseRightClick -X $cx -Y $cy
+        }
     } else {
         # 兜底：右键点列表区中部一行
-        $r = $w.Current.BoundingRectangle
-        Invoke-MouseRightClick -X ([int]($r.X + 150)) -Y ([int]($r.Y + 550))
+        $r = Get-ElementRect $w
+        if ($null -ne $r) { Invoke-MouseRightClick -X ([int]($r.X + 150)) -Y ([int]($r.Y + 550)) }
     }
     Start-Sleep -Milliseconds 800
     # run16：右键后轮询等菜单项出现（最多 3 秒）——run15 的 D01/K03 都是「菜单里没有
@@ -585,8 +742,10 @@ function Open-ChannelContextMenu {
     if ($m.Count -le 1) {
         # 只读到系统菜单，说明右键没落在频道行上；换第 1 行再试一次
         if ($null -ne $target) {
-            $tr = $target.Current.BoundingRectangle
-            Invoke-MouseRightClick -X ([int]($tr.X + $tr.Width / 2)) -Y ([int]($tr.Y + $tr.Height / 2))
+            $tr = Get-ElementRect $target
+            if ($null -ne $tr) {
+                Invoke-MouseRightClick -X ([int]($tr.X + $tr.Width / 2)) -Y ([int]($tr.Y + $tr.Height / 2))
+            }
             Start-Sleep -Milliseconds 800
             $m = @(Get-MenuItems)
         }
@@ -704,10 +863,9 @@ if ($null -eq $hideItem) {
         $menu4 = Open-ChannelContextMenu
         $sh2 = $menu4 | Where-Object { (Get-ElementText $_) -eq '显示隐藏频道' } | Select-Object -First 1
         if ($null -ne $sh2) {
-            try {
-                $tog = $sh2.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-                if ($tog.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { [void](Invoke-Element $sh2); Start-Sleep -Seconds 1 }
-            } catch { }
+            # run18：ToggleState 读也包超时。
+            $ts = Get-UiPatternValue -Element $sh2 -PatternType ([System.Windows.Automation.TogglePattern]) -Property 'ToggleState'
+            if ($ts -eq [System.Windows.Automation.ToggleState]::On) { [void](Invoke-Element $sh2); Start-Sleep -Seconds 1 }
         }
         # 点一下空白处关菜单
         Send-KeysToWindow -Keys '{ESC}' -WaitMs 300
@@ -758,12 +916,15 @@ function Get-TmwWindows {
         }
     } catch { }
     if ($els.Count -gt 0) { return $els }
-    # 回落：UIA 顶层枚举
+    # 回落：UIA 顶层枚举（run18：包超时，app 卡住时 FindAll 无限等；ProcessId 过滤也在同一次调用里）
     $rt = [System.Windows.Automation.AutomationElement]::RootElement
-    try {
-        $all = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-        return @($all | Where-Object { try { $_.Current.ProcessId -eq $procId } catch { $false } })
-    } catch { return @() }
+    $res = Invoke-UiWithTimeout -Code {
+        param($rt2, $procId2)
+        $all2 = @($rt2.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
+        @($all2 | Where-Object { try { $_.Current.ProcessId -eq $procId2 } catch { $false } })
+    } -TimeoutSec 10 -What 'Root-FindAll-Windows' -ArgumentList @($rt, $procId)
+    if ($null -eq $res) { return @() }
+    return @($res)
 }
 
 Bring-ToFront
@@ -792,15 +953,20 @@ if ($null -eq $newWin) {
         Write-Result -Id 'D01' -Name '新窗口播放时主窗口停掉' -Verdict 'FAIL' -Evidence "窗口数=$($wins.Count)，状态=$st，时间 $($t0.Before)->$($t0.After)"
     }
     # D02：关新窗口，主窗口恢复
+    # run18：关窗的跨进程读/调都包超时（逐窗各 5 秒读句柄 + 10 秒关），app 卡住时不再无限等。
     $closed = $false
     try {
         $mainEl = Get-TmwWindow
-        $mainH = if ($null -ne $mainEl) { $mainEl.Current.NativeWindowHandle } else { 0 }
+        $mainH = 0
+        if ($null -ne $mainEl) {
+            $mh = Invoke-UiWithTimeout -Code { param($e) try { $e.Current.NativeWindowHandle } catch { 0 } } -TimeoutSec 5 -What 'Read-Hwnd' -ArgumentList @($mainEl)
+            if ($null -ne $mh -and @($mh).Count -gt 0) { $mainH = [int](@($mh)[0]) }
+        }
         foreach ($w in $wins) {
-            if ($w.Current.NativeWindowHandle -ne $mainH) {
-                $wp = $w.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
-                $wp.Close()
-                $closed = $true
+            $hw = Invoke-UiWithTimeout -Code { param($e) try { $e.Current.NativeWindowHandle } catch { 0 } } -TimeoutSec 5 -What 'Read-Hwnd' -ArgumentList @($w)
+            $hwV = if ($null -eq $hw -or @($hw).Count -eq 0) { 0 } else { [int](@($hw)[0]) }
+            if ($hwV -ne 0 -and $hwV -ne $mainH) {
+                if (Invoke-UiPatternCall -Element $w -PatternType ([System.Windows.Automation.WindowPattern]) -Method 'Close') { $closed = $true }
             }
         }
     } catch { }
@@ -856,39 +1022,78 @@ if ($btnNames -contains '节目单') {
     Write-Result -Id 'E03' -Name '没有单独的「节目单」按钮' -Verdict 'PASS' -Evidence "工具栏按钮=$($btnNames -join '/')"
 }
 # E04：E 键打开完整节目单（先切回稳定的 CCTV-1，免得凤凰卡顿触发 ClearVideoSurface 把面板收回去）
-# run16：按 E 前先点一下视频区（主窗右半边）——run14 里焦点在搜索框，E 键进了输入法
-# （顶部出现拼音候选窗），指南面板没打开。点视频区把焦点从搜索框移开。
+# run18：点频道列表行（WPF 元素）把焦点从搜索框移开——视频区是原生 LibVLC HWND，
+# 点它移不走 WPF 焦点，run17 E04 的 E 键仍进了搜索框输入法（顶部拼音候选窗）。
+# 点行后读 AutomationElement.FocusedElement 验证：仍在搜索框就 {ESC} 后重点击一次。
 Bring-ToFront
 Send-KeysToWindow -Keys '1' -WaitMs 2600
 $winE4 = Get-TmwWindow
-try { $winE4.SetFocus() } catch { }
-try {
-    $rE4 = $winE4.Current.BoundingRectangle
-    Invoke-MouseClick -X ([int]($rE4.X + $rE4.Width * 0.7)) -Y ([int]($rE4.Y + $rE4.Height * 0.5))
-    Start-Sleep -Milliseconds 800
-} catch { }
+# run18：SetFocus 和取行矩形也都包超时（跨进程调用，app 卡住时会堵）。
+[void](Invoke-UiWithTimeout -Code { param($e) try { $e.SetFocus() } catch { } } -TimeoutSec 5 -What 'SetFocus' -ArgumentList @($winE4))
+$e04FocusOk = $false
+$e04FocusNote = '未验证'
+for ($try = 0; $try -lt 2 -and -not $e04FocusOk; $try++) {
+    $rect = Invoke-UiWithTimeout -Code {
+        param($root)
+        $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)
+        $rows = @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c))
+        foreach ($r in $rows) {
+            try { if (-not $r.Current.IsOffscreen) { return $r.Current.BoundingRectangle } } catch { }
+        }
+        return $null
+    } -TimeoutSec 10 -What 'First-Visible-Row' -ArgumentList @((Get-TmwWindow))
+    if ($null -ne $rect -and @($rect).Count -gt 0 -and $null -ne @($rect)[0]) {
+        $rr = @($rect)[0]
+        Invoke-MouseClick -X ([int]($rr.X + $rr.Width / 2)) -Y ([int]($rr.Y + $rr.Height / 2))
+        Start-Sleep -Milliseconds 800
+    }
+    $feInfo = Invoke-UiWithTimeout -Code {
+        $fe = [System.Windows.Automation.AutomationElement]::FocusedElement
+        if ($null -eq $fe) { return 'null' }
+        try { $n = $fe.Current.Name } catch { $n = '' }
+        try { $i = $fe.Current.AutomationId } catch { $i = '' }
+        "$i|$n"
+    } -TimeoutSec 5 -What 'FocusedElement'
+    if ($null -eq $feInfo -or @($feInfo).Count -eq 0) {
+        $e04FocusNote = 'FocusedElement 读超时（app 可能卡住），按 E 再看'
+        $e04FocusOk = $true
+    } else {
+        $feStr = [string](@($feInfo)[0])
+        if ($feStr -match 'SearchBox' -or $feStr -match '搜索') {
+            $e04FocusNote = "焦点仍在搜索框（$feStr），第 $($try + 1) 次重试"
+            Send-KeysToWindow -Keys '{ESC}' -WaitMs 500
+        } else {
+            $e04FocusNote = "焦点已离搜索框（$feStr）"
+            $e04FocusOk = $true
+        }
+    }
+}
 Send-KeysToWindow -Keys 'e' -WaitMs 2500
 $shotE4 = Take-Shot -Name 'E04-guide-ekey'
 $epgPanel = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'EpgPanel'
 $epgVis = ''
 $epgRect = ''; $winRectE4 = ''
+$epgRectObj = $null; $winRectObj = $null
 if ($null -ne $epgPanel) {
-    try { $epgVis = $epgPanel.Current.IsOffscreen.ToString(); $epgRect = $epgPanel.Current.BoundingRectangle.ToString() } catch { }
-    try { $winRectE4 = (Get-TmwWindow).Current.BoundingRectangle.ToString() } catch { }
+    # run18：IsOffscreen/矩形读都包超时。
+    $off = Get-ElementIsOffscreen $epgPanel
+    if ($null -ne $off) { $epgVis = $off.ToString() }
+    $epgRectObj = Get-ElementRect $epgPanel
+    if ($null -ne $epgRectObj) { $epgRect = $epgRectObj.ToString() }
+    $winRectObj = Get-ElementRect (Get-TmwWindow)
+    if ($null -ne $winRectObj) { $winRectE4 = $winRectObj.ToString() }
 }
 # run8：run7 截图疑似 DPI 取图裁切（Take-Shot 已改物理像素），只凭截图不能定罪；
 # 面板矩形必须完全落在主窗口矩形内才算 PASS，否则 NEEDS-EYE 并附矩形。
 $epgInside = $false
-if ($null -ne $epgPanel -and $epgVis -eq 'False' -and $epgRect -ne '' -and $winRectE4 -ne '') {
-    try {
-        $pr = $epgPanel.Current.BoundingRectangle; $wr = (Get-TmwWindow).Current.BoundingRectangle
-        $epgInside = ($pr.Left -ge ($wr.Left - 2) -and $pr.Top -ge ($wr.Top - 2) -and $pr.Right -le ($wr.Right + 2) -and $pr.Bottom -le ($wr.Bottom + 2) -and $pr.Width -gt 100)
-    } catch { }
+if ($null -ne $epgPanel -and $epgVis -eq 'False' -and $null -ne $epgRectObj -and $null -ne $winRectObj) {
+    $pr = $epgRectObj; $wr = $winRectObj
+    $epgInside = ($pr.Left -ge ($wr.Left - 2) -and $pr.Top -ge ($wr.Top - 2) -and $pr.Right -le ($wr.Right + 2) -and $pr.Bottom -le ($wr.Bottom + 2) -and $pr.Width -gt 100)
 }
 if ($epgInside) {
-    Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'PASS' -Evidence "截图 $shotE4；EpgPanel 已显示且在窗内（panel=$epgRect，window=$winRectE4）"
+    Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'PASS' -Evidence "截图 $shotE4；EpgPanel 已显示且在窗内（panel=$epgRect，window=$winRectE4）；焦点：$e04FocusNote"
 } else {
-    Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE4（应弹出完整节目单）；EpgPanel IsOffscreen=$epgVis panel=$epgRect window=$winRectE4"
+    Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE4（应弹出完整节目单）；EpgPanel IsOffscreen=$epgVis panel=$epgRect window=$winRectE4；焦点：$e04FocusNote"
 }
 Send-KeysToWindow -Keys '{ESC}' -WaitMs 800
 
@@ -954,7 +1159,9 @@ function Open-SettingsWindow {
     # UIA 点没打开，改鼠标点按钮中心（重找按钮，防 Restore 后元素过期）
     $btn2 = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'BtnSettings'
     if ($null -eq $btn2) { return $null }
-    $r = $btn2.Current.BoundingRectangle
+    # run18：矩形读包超时；读不到就返回 $null，不拿空矩形去点。
+    $r = Get-ElementRect $btn2
+    if ($null -eq $r) { return $null }
     Invoke-MouseClick -X ([int]($r.X + $r.Width / 2)) -Y ([int]($r.Y + $r.Height / 2))
     for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Milliseconds 500
@@ -963,11 +1170,17 @@ function Open-SettingsWindow {
     }
     # run8：仍打不开时枚举全部顶层窗口——区分“点击没触发”（无任何新窗）
     # 与“已有模态窗挡住 UI 线程”（设置窗/MessageBox 已开，第二次点击被模态吞掉）。
-    try {
-        $rt = [System.Windows.Automation.AutomationElement]::RootElement
-        $allWs = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-        $script:OpenSettingsDiag = "UIA Invoke 已发+鼠标点已发，仍无设置窗；顶层窗口=" + (($allWs | ForEach-Object { "$($_.Current.Name)[$($_.Current.BoundingRectangle)]" }) -join ' | ')
-    } catch { $script:OpenSettingsDiag = "UIA Invoke 已发+鼠标点已发，仍无设置窗；枚举顶层窗口失败：$($_.Exception.Message)" }
+    # run18：枚举也包超时，app 卡住时 FindAll 无限等。
+    $res = Invoke-UiWithTimeout -Code {
+        $rt2 = [System.Windows.Automation.AutomationElement]::RootElement
+        $allWs2 = @($rt2.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
+        ($allWs2 | ForEach-Object { try { "$($_.Current.Name)[$($_.Current.BoundingRectangle)]" } catch { '?' } }) -join ' | '
+    } -TimeoutSec 10 -What 'Root-FindAll-Diag'
+    if ($null -eq $res -or @($res).Count -eq 0) {
+        $script:OpenSettingsDiag = "UIA Invoke 已发+鼠标点已发，仍无设置窗；枚举顶层窗口超时/失败"
+    } else {
+        $script:OpenSettingsDiag = "UIA Invoke 已发+鼠标点已发，仍无设置窗；顶层窗口=" + [string](@($res)[0])
+    }
     return $null
 }
 
@@ -978,13 +1191,15 @@ function Save-SettingsWindow {
     # 防止残留模态窗污染后面的测试（run8 里两个未关的设置窗堵住了 I02/J01/K01/K03）。
     $saveBtn = Find-ByName -Root $SetWin -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '^保存$' | Select-Object -First 1
     if ($null -ne $saveBtn -and (Invoke-Element $saveBtn)) { Start-Sleep -Seconds 1 } else {
-        try { $SetWin.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
+        # run18：WindowPattern.Close 也包超时，app 卡住时它一样无限等。
+        if (-not (Invoke-UiPatternCall -Element $SetWin -PatternType ([System.Windows.Automation.WindowPattern]) -Method 'Close')) { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
     }
     for ($i = 0; $i -lt 10; $i++) {
         Start-Sleep -Milliseconds 500
         if ($null -eq (Get-SettingsWindowElement)) { return $true }
     }
-    try { (Get-SettingsWindowElement).GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { }
+    $left = Get-SettingsWindowElement
+    if ($null -ne $left) { [void](Invoke-UiPatternCall -Element $left -PatternType ([System.Windows.Automation.WindowPattern]) -Method 'Close') }
     Start-Sleep -Seconds 1
     return ($null -eq (Get-SettingsWindowElement))
 }
@@ -1001,8 +1216,19 @@ function Find-ThemeCombo {
 }
 
 # ================= F：提示 5 秒自动消失 =================
-# 须是全新会话（同一条提示每个会话只显示一次），所以先重启 app；再把字幕主开关打开（基线若是关的），
-# 切台后 1 秒和 8 秒各截一张，看提示出现又消失；再切一个台，提示不应重现。
+# run18：提示条只在启动后（模型就绪、字幕服务起动时，MainWindow 793 行 EnsureSubtitleService）
+# 出现一次、5 秒后自动消失。旧 F01 重启后等 5 秒再按 '1'、+1.2 秒才截图，
+# 提示早已消失——run7/8/9/11/14/16/17 七次都没抓到是探针时序错，不是 app bug。
+# 新探针：窗口一出现就每 500 毫秒读一次 SubtitleStatus 文本，8 秒内抓到即截图；
+# 再等 6 秒确认它消失；切台后不应重现。log 查不到这条提示（ShowLiveSubtitleStatus 不写日志），
+# 所以不用日志做证据。须是全新会话（同一条提示每个会话只显示一次），所以先重启 app。
+# 门禁：主开关必须开着，提示才会在启动时出现；若关着，先置位再重启。
+$cfgF = Get-Config
+$f01Gate = '基线已开'
+if ($null -eq $cfgF -or $cfgF.LiveSubtitleEnabled -ne $true) {
+    $f01Gate = '基线主开关关着，先置位再重启'
+    [void](Set-MasterSubtitle -On $true)
+}
 try { Get-Process TiviMateWin -ErrorAction SilentlyContinue | Stop-Process -Force } catch { }
 Start-Sleep -Seconds 2
 Start-Process -FilePath $exe -WorkingDirectory $InstallDir
@@ -1012,41 +1238,29 @@ if ($null -eq $win) {
     Write-Result -Id 'F01' -Name '「免费接口未配置」提示 5 秒自动消失' -Verdict 'FAIL' -Evidence '重启后 120 秒无主窗口'
 } else {
     Bring-ToFront
-    Start-Sleep -Seconds 5
-    $cfgF = Get-Config
-    $masterOn = ($null -ne $cfgF -and $cfgF.LiveSubtitleEnabled -eq $true)
-    $f01Gate = '基线已开'
-    if (-not $masterOn) {
-        # 设置里打开字幕主开关（LiveSubtitleChk）
-        $setWinF = Open-SettingsWindow
-        if ($null -ne $setWinF) {
-            $f01Gate = '设置窗已开，主开关已置位'
-            $chk = Find-ByAutomationId -Root $setWinF -AutomationId 'LiveSubtitleChk'
-            if ($null -ne $chk) {
-                try {
-                    $tog = $chk.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-                    if ($tog.ToggleState -eq [System.Windows.Automation.ToggleState]::Off) { $tog.Toggle(); Start-Sleep -Seconds 1 }
-                } catch { }
-            }
-            [void](Save-SettingsWindow -SetWin $setWinF)
-            Start-Sleep -Seconds 2
+    $f01Seen = $null; $shotF1 = $null
+    for ($i = 0; $i -lt 16; $i++) {
+        $st = Get-SubtitleStatusText
+        if ($null -ne $st -and $st -match '免费接口未配置') { $f01Seen = $st; $shotF1 = Take-Shot -Name 'F01-toast-seen'; break }
+        Start-Sleep -Milliseconds 500
+    }
+    if ($null -eq $f01Seen) {
+        $shotF0 = Take-Shot -Name 'F01-toast-timeout'
+        Write-Result -Id 'F01' -Name '「免费接口未配置」提示 5 秒自动消失' -Verdict 'NEEDS-EYE' -Evidence "启动后 8 秒轮询没等到提示（应出现「免费接口未配置」）；截图 $shotF0；门禁：$f01Gate。可能模型未就绪或服务未启动——看日志定性"
+    } else {
+        Start-Sleep -Seconds 6
+        $stAfter = Get-SubtitleStatusText
+        $gone = ($null -eq $stAfter -or $stAfter -notmatch '免费接口未配置')
+        Send-KeysToWindow -Keys '2' -WaitMs 3000
+        $stSwitch = Get-SubtitleStatusText
+        $noReappear = ($null -eq $stSwitch -or $stSwitch -notmatch '免费接口未配置')
+        $shotF2 = Take-Shot -Name 'F01-toast-after'
+        if ($gone -and $noReappear) {
+            Write-Result -Id 'F01' -Name '「免费接口未配置」提示 5 秒自动消失' -Verdict 'PASS' -Evidence "启动时提示出现（$f01Seen），截图 $shotF1；6 秒后消失=$gone，切台后不重现=$noReappear，截图 $shotF2"
         } else {
-            $f01Gate = '设置窗打不开（H01 未过），主开关未置位，toast 无法验证'
+            Write-Result -Id 'F01' -Name '「免费接口未配置」提示 5 秒自动消失' -Verdict 'NEEDS-EYE' -Evidence "启动时提示出现（$f01Seen），截图 $shotF1；6 秒后消失=$gone，切台后不重现=$noReappear，截图 $shotF2"
         }
     }
-    Send-KeysToWindow -Keys '1' -WaitMs 1200
-    $shotF1 = Take-Shot -Name 'F01-toast-t1'
-    Start-Sleep -Seconds 7
-    $shotF2 = Take-Shot -Name 'F01-toast-t8'
-    $lfF = Get-LogFile
-    $logged = $false
-    if ($null -ne $lfF) {
-        $tailF = Get-Content $lfF.FullName -Tail 300 -ErrorAction SilentlyContinue
-        if ($tailF -match '免费接口未配置') { $logged = $true }
-    }
-    Send-KeysToWindow -Keys '2' -WaitMs 3000
-    $shotF3 = Take-Shot -Name 'F01-toast-switch2'
-    Write-Result -Id 'F01' -Name '「免费接口未配置」提示 5 秒自动消失' -Verdict 'NEEDS-EYE' -Evidence "t1=$shotF1（应有提示），t8=$shotF2（应消失），切台后=$shotF3（不应重现）；log 里有该提示=$logged；门禁：$f01Gate"
 }
 
 # ================= G：刷新按钮 =================
@@ -1060,7 +1274,9 @@ if ($null -eq $refBtn) {
     [void](Invoke-Element $refBtn)
     # run13：超时 20 秒→45 秒——日志证实刷新本身能跑完（run12：22:39:22「playlist refreshed: 54 channels」），
     # 但从点下到完成约 29 秒（云电脑拉 live.m3u 慢），20 秒轮询等不到，不是 app bug。
-    $stG = Wait-ForStatus -Pattern '已刷新：\d+ 个频道 \d{2}:\d{2}' -TimeoutSec 45
+    # run18：45 秒→180 秒——run14 刷新 100 秒才完，run17 45 秒内没完（日志无 playlist refreshed），
+    # 云电脑拉 live.m3u 就是慢，不是 app bug。
+    $stG = Wait-ForStatus -Pattern '已刷新：\d+ 个频道 \d{2}:\d{2}' -TimeoutSec 180
     if ($stG -match '已刷新：\d+ 个频道 \d{2}:\d{2}') {
         Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'PASS' -Evidence $stG
     } else {
@@ -1079,7 +1295,7 @@ if ($null -eq $refBtn) {
             }
         } catch { }
         if ($null -ne $recent) {
-            Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'PASS' -Evidence "状态栏轮询 45 秒未见（疑似刷新慢），但日志证实刷新已完成：$recent"
+            Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'PASS' -Evidence "状态栏轮询 180 秒未见（疑似刷新慢），但日志证实刷新已完成：$recent"
         } else {
             Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'FAIL' -Evidence "刷新后状态=$stG（期望「已刷新：N 个频道 HH:mm」）；日志也无 playlist refreshed"
         }
@@ -1112,7 +1328,11 @@ if ($null -eq $setBtnH) {
         if ($null -eq $themeCombo) {
             Write-Result -Id 'B05' -Name '设置页下拉框字看得见' -Verdict 'FAIL' -Evidence 'AutomationId=ThemeCombo 找不到'
         } else {
-            $r5 = $themeCombo.Current.BoundingRectangle
+            # run18：矩形读包超时；读不到就判 B05 FAIL。
+            $r5 = Get-ElementRect $themeCombo
+            if ($null -eq $r5) {
+                Write-Result -Id 'B05' -Name '设置页下拉框字看得见' -Verdict 'FAIL' -Evidence 'ThemeCombo 矩形读不到（app 可能卡住）'
+            } else {
             $rect5 = New-Object System.Drawing.Rectangle([int]$r5.X, [int]$r5.Y, [int]$r5.Width, [int]$r5.Height)
             $crop5 = Take-Shot -Name 'B05-theme-combo-crop' -Crop $rect5
             $frac5 = Get-DarkPixelFraction -ImagePath $crop5
@@ -1120,6 +1340,7 @@ if ($null -eq $setBtnH) {
                 Write-Result -Id 'B05' -Name '设置页下拉框字看得见' -Verdict 'PASS' -Evidence "深色像素占比 $([Math]::Round($frac5,4))，截图 $crop5"
             } else {
                 Write-Result -Id 'B05' -Name '设置页下拉框字看得见' -Verdict 'FAIL' -Evidence "深色像素占比 $([Math]::Round($frac5,4))（<0.002），字太浅或没画出；截图 $crop5"
+            }
             }
         }
         $updBtn = Find-ByName -Root $setWin -ControlType ([System.Windows.Automation.ControlType]::Button) -NamePattern '检查更新' | Select-Object -First 1
@@ -1145,12 +1366,13 @@ if ($null -eq $setBtnH) {
                 Write-Result -Id 'H02' -Name '「检查更新」显示「已是最新版本」' -Verdict 'FAIL' -Evidence "30 秒未见「已是最新版本」：$n3"
             }
         }
-        try { $setWin.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
+        # run18：Close 包超时。
+        if (-not (Invoke-UiPatternCall -Element $setWin -PatternType ([System.Windows.Automation.WindowPattern]) -Method 'Close')) { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
         Start-Sleep -Seconds 1
         # run9：验设置窗已关干净，否则后面的 I/J/K 会被残留模态窗堵住
         $leftover = Get-SettingsWindowElement
         if ($null -ne $leftover) {
-            try { $leftover.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
+            if (-not (Invoke-UiPatternCall -Element $leftover -PatternType ([System.Windows.Automation.WindowPattern]) -Method 'Close')) { Send-KeysToWindow -Keys '{ESC}' -WaitMs 500 }
             Start-Sleep -Seconds 1
             if ($null -ne (Get-SettingsWindowElement)) { Write-Output "H-close 警告：设置窗关了两次还在（残留模态窗）" }
         }
@@ -1230,8 +1452,9 @@ function Set-MasterSubtitle {
             $cur = Get-Config
             $curOn = ($null -ne $cur -and [bool]$cur.LiveSubtitleEnabled)
             if ($curOn -ne $On) {
-                $tog = $chk.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
-                $tog.Toggle(); Start-Sleep -Seconds 1
+                # run18：Toggle 包超时。
+                [void](Invoke-UiPatternCall -Element $chk -PatternType ([System.Windows.Automation.TogglePattern]) -Method 'Toggle')
+                Start-Sleep -Seconds 1
             }
             $ok = $On
         } catch { $ok = $null }
@@ -1342,11 +1565,18 @@ for ($n = 1; $n -le 3; $n++) {
     $allW = @(Get-TmwWindows)
     # run15：不用 MainWindowHandle 认主窗——开新窗口后它可能指向 ChannelWindow，
     # 会把主窗关掉（WPF 默认关主窗即退出 app），K03 因此剩 0 窗。用标题认主窗。
+    # run18：关窗的跨进程读/调都包超时（逐窗各 5 秒读句柄 + 10 秒关），app 卡住时不再无限等。
     $mainEl3 = Get-TmwWindow
-    $mainH3 = if ($null -ne $mainEl3) { $mainEl3.Current.NativeWindowHandle } else { 0 }
+    $mainH3 = 0
+    if ($null -ne $mainEl3) {
+        $mh3 = Invoke-UiWithTimeout -Code { param($e) try { $e.Current.NativeWindowHandle } catch { 0 } } -TimeoutSec 5 -What 'Read-Hwnd' -ArgumentList @($mainEl3)
+        if ($null -ne $mh3 -and @($mh3).Count -gt 0) { $mainH3 = [int](@($mh3)[0]) }
+    }
     foreach ($w3 in $allW) {
-        if ($w3.Current.NativeWindowHandle -ne $mainH3) {
-            try { $w3.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { }
+        $hw3 = Invoke-UiWithTimeout -Code { param($e) try { $e.Current.NativeWindowHandle } catch { 0 } } -TimeoutSec 5 -What 'Read-Hwnd' -ArgumentList @($w3)
+        $hw3V = if ($null -eq $hw3 -or @($hw3).Count -eq 0) { 0 } else { [int](@($hw3)[0]) }
+        if ($hw3V -ne 0 -and $hw3V -ne $mainH3) {
+            [void](Invoke-UiPatternCall -Element $w3 -PatternType ([System.Windows.Automation.WindowPattern]) -Method 'Close')
         }
     }
     Start-Sleep -Seconds 2
@@ -1366,11 +1596,11 @@ if ($null -ne $sw4) {
         $tc = Find-ThemeCombo -SetWin $sw4
         if ($null -ne $tc) {
             try {
-                $exp4 = $tc.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
                 # 下拉项在 Popup 里，不在 ThemeCombo 子树下；展开前记下已有项，展开后多出来的就是主题选项
                 $beforeK4 = @()
                 foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) { $beforeK4 += (Get-ElementText $li) }
-                $exp4.Expand(); Start-Sleep -Seconds 1
+                # run18：Expand 包超时。
+                [void](Invoke-UiPatternCall -Element $tc -PatternType ([System.Windows.Automation.ExpandCollapsePattern]) -Method 'Expand'); Start-Sleep -Seconds 1
                 $items4 = @()
                 foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) {
                     $nm = Get-ElementText $li
@@ -1378,13 +1608,15 @@ if ($null -ne $sw4) {
                 }
                 $light = $items4 | Where-Object { (Get-ElementText $_) -eq '浅色' } | Select-Object -First 1
                 if ($null -ne $light) {
-                    $lr = $light.Current.BoundingRectangle
+                    # run18：矩形读包超时；读不到就不点，记证据。
+                    $lr = Get-ElementRect $light
+                    if ($null -ne $lr) {
                     Invoke-MouseClick -X ([int]($lr.X + $lr.Width / 2)) -Y ([int]($lr.Y + $lr.Height / 2))
                     Start-Sleep -Seconds 2
                     $shotK4a = Take-Shot -Name 'K04-theme-light'
                     $beforeK4b = @()
                     foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) { $beforeK4b += (Get-ElementText $li) }
-                    $exp4.Expand(); Start-Sleep -Seconds 1
+                    [void](Invoke-UiPatternCall -Element $tc -PatternType ([System.Windows.Automation.ExpandCollapsePattern]) -Method 'Expand'); Start-Sleep -Seconds 1
                     $items4b = @()
                     foreach ($li in (Find-All -Root (Get-TmwWindow) -ControlType ([System.Windows.Automation.ControlType]::ListItem))) {
                         $nm = Get-ElementText $li
@@ -1392,13 +1624,16 @@ if ($null -ne $sw4) {
                     }
                     $dark = $items4b | Where-Object { (Get-ElementText $_) -eq '深色' } | Select-Object -First 1
                     if ($null -ne $dark) {
-                        $dr = $dark.Current.BoundingRectangle
+                        $dr = Get-ElementRect $dark
+                        if ($null -ne $dr) {
                         Invoke-MouseClick -X ([int]($dr.X + $dr.Width / 2)) -Y ([int]($dr.Y + $dr.Height / 2))
                         Start-Sleep -Seconds 2
                         $shotK4b = Take-Shot -Name 'K04-theme-dark'
                         $k04ok = ($null -ne (Get-TmwWindow))
                         $k04ev = "浅色截图 $shotK4a，深色截图 $shotK4b"
+                        } else { $k04ev = '「深色」项矩形读不到（app 可能卡住）' }
                     } else { $k04ev = '切回深色时找不到「深色」项' }
+                    } else { $k04ev = '「浅色」项矩形读不到（app 可能卡住）' }
                 } else { $k04ev = '找不到「浅色」项' }
             } catch { $k04ev = "主题切换异常：$($_.Exception.Message)" }
         } else { $k04ev = '设置页找不到 ThemeCombo' }
@@ -1417,23 +1652,25 @@ if ($null -eq $sb) {
     Write-Result -Id 'K05' -Name '搜不到的词不崩、清空恢复' -Verdict 'FAIL' -Evidence '找不到 SearchBox'
 } else {
     $cntBefore = Get-CountNumber
-    try {
-        $vp = $sb.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        $vp.SetValue('zzzz不存在')
-    } catch {
-        $r5 = $sb.Current.BoundingRectangle
-        Invoke-MouseClick -X ([int]($r5.X + $r5.Width / 2)) -Y ([int]($r5.Y + $r5.Height / 2))
-        Send-KeysToWindow -Keys 'zzzz不存在' -WaitMs 500
+    # run18：SetValue 包超时；失败时鼠标点搜索框再打字（原 catch 的兜底）。
+    # 兜底里的 BoundingRectangle 也包超时——SetValue 超时多半是 app 卡住，直接读矩形会再堵住。
+    if (-not (Invoke-UiPatternCall -Element $sb -PatternType ([System.Windows.Automation.ValuePattern]) -Method 'SetValue' -Args @('zzzz不存在'))) {
+        $rr5 = Invoke-UiWithTimeout -Code { param($e) try { $e.Current.BoundingRectangle } catch { $null } } -TimeoutSec 5 -What 'Read-Rect' -ArgumentList @($sb)
+        if ($null -ne $rr5 -and @($rr5).Count -gt 0 -and $null -ne @($rr5)[0]) {
+            $r5 = @($rr5)[0]
+            Invoke-MouseClick -X ([int]($r5.X + $r5.Width / 2)) -Y ([int]($r5.Y + $r5.Height / 2))
+            Send-KeysToWindow -Keys 'zzzz不存在' -WaitMs 500
+        }
     }
     Start-Sleep -Seconds 2
     $cntZero = Get-CountNumber
-    try {
-        $vp2 = $sb.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        $vp2.SetValue('')
-    } catch {
-        $r5b = $sb.Current.BoundingRectangle
-        Invoke-MouseClick -X ([int]($r5b.X + $r5b.Width / 2)) -Y ([int]($r5b.Y + $r5b.Height / 2))
-        Send-KeysToWindow -Keys '^a{DEL}' -WaitMs 500
+    if (-not (Invoke-UiPatternCall -Element $sb -PatternType ([System.Windows.Automation.ValuePattern]) -Method 'SetValue' -Args @(''))) {
+        $rr5b = Invoke-UiWithTimeout -Code { param($e) try { $e.Current.BoundingRectangle } catch { $null } } -TimeoutSec 5 -What 'Read-Rect' -ArgumentList @($sb)
+        if ($null -ne $rr5b -and @($rr5b).Count -gt 0 -and $null -ne @($rr5b)[0]) {
+            $r5b = @($rr5b)[0]
+            Invoke-MouseClick -X ([int]($r5b.X + $r5b.Width / 2)) -Y ([int]($r5b.Y + $r5b.Height / 2))
+            Send-KeysToWindow -Keys '^a{DEL}' -WaitMs 500
+        }
     }
     Start-Sleep -Seconds 2
     $cntAfter = Get-CountNumber
@@ -1492,9 +1729,12 @@ if (-not $SkipSoak) {
     $logMark = 0
     if ($null -ne $lfL) { $logMark = (Get-Content $lfL.FullName -ErrorAction SilentlyContinue | Measure-Object -Line).Lines }
     $stalls = 0; $reconnects = 0
-    $steps = [Math]::Max(1, [int]($SoakMinutes / 5))
+    # run18：每分钟查一次 Responding（5 分钟一查会漏掉 2–3 分钟的短挂起——
+    # 02:08 的挂起约 6 分钟、01:52 的约 2 分钟，都在 5 分钟粒度之外）；
+    # 连续 2 次无响应即抓 dump 判 FAIL。
+    $steps = [Math]::Max(1, $SoakMinutes)
     for ($s = 1; $s -le $steps; $s++) {
-        Start-Sleep -Seconds 300
+        Start-Sleep -Seconds 60
         $p = Get-Process -Id $soakPid -ErrorAction SilentlyContinue
         if ($null -eq $p) {
             $soakExit = Get-Date
@@ -1531,8 +1771,8 @@ if (-not $SkipSoak) {
             $stalls = @($newLines | Select-String -Pattern 'stall' -SimpleMatch).Count
             $reconnects = @($newLines | Select-String -Pattern 'reconnect|重连' ).Count
         }
-        if (($s % 2) -eq 0) { [void](Take-Shot -Name "L01-soak-min$($s * 5)") }
-        Write-Output "soak $($s * 5)/$SoakMinutes min：进程在，时间 $($tt.Before)->$($tt.After)$ttNote，stall=$stalls，重连=$reconnects"
+        if (($s % 5) -eq 0) { [void](Take-Shot -Name "L01-soak-min$s") }
+        Write-Output "soak $s/$SoakMinutes min：进程在，时间 $($tt.Before)->$($tt.After)$ttNote，stall=$stalls，重连=$reconnects"
     }
     if ($null -eq $soakExit) {
         $shotL = Take-Shot -Name 'L01-soak-end'
