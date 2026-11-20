@@ -156,12 +156,19 @@ function Invoke-UiPatternCall {
     # $Method 是模式对象上的方法名；$Args 是它的参数（SetWindowVisualState 传枚举值）。
     param($Element, [type]$PatternType, [string]$Method, [object[]]$Args = @())
     if ($null -eq $Element) { return $false }
+    # run19：GetCurrentPattern 要的是 AutomationPattern（::Pattern 字段），不是模式类的 Type。
+    # run18 把 Type 直接传进 runspace，GetCurrentPattern 抛类型转换错、被吞掉返回 $false，
+    # 所有 Expand/Toggle/SetValue/Close 全没生效（B02/B03 的根因）。这里先在主线程把
+    # ::Pattern 字段解出来，再把 AutomationPattern 传进 runspace。
+    $pattern = $null
+    try { $pattern = $PatternType::Pattern } catch { return $false }
+    if ($null -eq $pattern) { return $false }
     $res = Invoke-UiWithTimeout -Code {
         param($e, $pt, $m, $a)
         $pat = $e.GetCurrentPattern($pt)
         if ($a.Count -eq 0) { $pat.$m() } else { $pat.GetType().GetMethod($m).Invoke($pat, $a) }
         $true
-    } -TimeoutSec 10 -What "Pattern-$Method" -ArgumentList @($Element, $PatternType, $Method, $Args)
+    } -TimeoutSec 10 -What "Pattern-$Method" -ArgumentList @($Element, $pattern, $Method, $Args)
     if ($null -eq $res -or @($res).Count -eq 0) { return $false }
     return [bool](@($res)[0])
 }
@@ -170,11 +177,15 @@ function Get-UiPatternValue {
     # run18：读一个 UIA 模式对象的属性（如 ToggleState），带超时，超时返回 $null。
     param($Element, [type]$PatternType, [string]$Property)
     if ($null -eq $Element) { return $null }
+    # run19：同上，GetCurrentPattern 要 AutomationPattern，不是 Type。
+    $pattern = $null
+    try { $pattern = $PatternType::Pattern } catch { return $null }
+    if ($null -eq $pattern) { return $null }
     $res = Invoke-UiWithTimeout -Code {
         param($e, $pt, $prop)
         $pat = $e.GetCurrentPattern($pt)
         $pat.$prop
-    } -TimeoutSec 5 -What "Pattern-$Property" -ArgumentList @($Element, $PatternType, $Property)
+    } -TimeoutSec 5 -What "Pattern-$Property" -ArgumentList @($Element, $pattern, $Property)
     if ($null -eq $res -or @($res).Count -eq 0) { return $null }
     return @($res)[0]
 }
@@ -581,7 +592,9 @@ if ($null -eq $combo) {
             $nm = Get-ElementText $li
             if ($nm -ne '' -and ($beforeNames -notcontains $nm)) { $items += $nm }
         }
-        $exp.Collapse()
+        # run19：$exp 变量在 run18 改版时被删漏了（只剩这一行空引用，抛“不能对 Null 值
+        # 表达式调用方法”）。Collapse 也走带超时的调用；收不收起不影响 B02 判定（选项已读完）。
+        [void](Invoke-UiPatternCall -Element $combo -PatternType ([System.Windows.Automation.ExpandCollapsePattern]) -Method 'Collapse')
         if ($items.Count -ge 4 -and ($items -contains '全部')) {
             Write-Result -Id 'B02' -Name '下拉框选项' -Verdict 'PASS' -Evidence "选中=$selVal，选项=$($items -join '/')"
         } else {
