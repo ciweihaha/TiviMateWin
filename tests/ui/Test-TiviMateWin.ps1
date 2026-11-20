@@ -881,7 +881,20 @@ function Get-SettingsWindowElement {
     }
     try { [void][Win32]::EnumWindows($cb, [IntPtr]::Zero) } catch { return $null }
     if ($script:SettingsHwnds.Count -eq 0) { return $null }
-    try { return [System.Windows.Automation.AutomationElement]::FromHandle($script:SettingsHwnds[0]) } catch { return $null }
+    # run14：HWND 刚出现时内容还没进 UIA 树（run13：找到窗但搜不到「当前版本」/ThemeCombo，
+    # H01/B05/H02 全掉）。等后代 Text 出现再返回（最多 5 秒），否则返回的是一棵空树。
+    $el = $null
+    try { $el = [System.Windows.Automation.AutomationElement]::FromHandle($script:SettingsHwnds[0]) } catch { return $null }
+    if ($null -eq $el) { return $null }
+    $condT = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
+    for ($i = 0; $i -lt 10; $i++) {
+        try {
+            $kids = @($el.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condT))
+            if ($kids.Count -gt 0) { return $el }
+        } catch { }
+        Start-Sleep -Milliseconds 500
+    }
+    return $el
 }
 
 function Open-SettingsWindow {
