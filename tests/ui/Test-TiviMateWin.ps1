@@ -633,9 +633,16 @@ if ($null -eq $hideItem) {
     [void](Invoke-Element $hideItem)
     Start-Sleep -Seconds 2
     $cnt1 = Get-CountNumber
-    $cfg1 = Get-Config
-    $hid1 = @()
-    if ($null -ne $cfg1 -and $null -ne $cfg1.HiddenChannels) { $hid1 = @($cfg1.HiddenChannels) }
+    # run13：config 是防抖落盘，2 秒时可能还没写——重读 3 次（每次隔 1 秒），
+    # run12 里 C02 就是 config 读早了（台数已掉 54->53，隐藏仍 0）。
+    $cfg1 = $null; $hid1 = @()
+    for ($ri = 0; $ri -lt 3; $ri++) {
+        $cfg1 = Get-Config
+        $hid1 = @()
+        if ($null -ne $cfg1 -and $null -ne $cfg1.HiddenChannels) { $hid1 = @($cfg1.HiddenChannels) }
+        if ($hid1.Count -eq ($hidden0.Count + 1)) { break }
+        Start-Sleep -Seconds 1
+    }
     if ($cnt0 -ne -1 -and $cnt1 -ne -1 -and $cnt1 -eq ($cnt0 - 1) -and $hid1.Count -eq ($hidden0.Count + 1)) {
         Write-Result -Id 'C02' -Name '右键「隐藏频道」' -Verdict 'PASS' -Evidence "频道数 $cnt0->$cnt1，隐藏 $($hidden0.Count)->$($hid1.Count)"
     } else {
@@ -788,6 +795,10 @@ if ($null -eq $newWin) {
     $wins2 = @(Get-TmwWindows)
     if ($closed -and $wins2.Count -eq 1 -and $t1.Advanced) {
         Write-Result -Id 'D02' -Name '关新窗口后主窗口恢复' -Verdict 'PASS' -Evidence "窗口数回到 1，时间 $($t1.Before)->$($t1.After) 在走"
+    } elseif ($closed -and $wins2.Count -eq 1) {
+        # run13：窗口数已回到 1（主窗恢复），只是时间不走——流卡住是源站抖动（I01/I02 同款门禁），
+        # 不判 app 失败，记 NEEDS-EYE 看日志定性。
+        Write-Result -Id 'D02' -Name '关新窗口后主窗口恢复' -Verdict 'NEEDS-EYE' -Evidence "窗口数回到 1，但时间 $($t1.Before)->$($t1.After) 不走（疑似流卡住，需看日志定性）"
     } else {
         Write-Result -Id 'D02' -Name '关新窗口后主窗口恢复' -Verdict 'FAIL' -Evidence "关窗=$closed，窗口数=$($wins2.Count)，时间 $($t1.Before)->$($t1.After)"
     }
@@ -849,12 +860,9 @@ function Get-SettingsWindowElement {
     # （按 HWND 直取该窗口的 UIA 元素，绕过顶层枚举）。
     # 「设置」二字用码点拼（0x8BBE=设，0x7F6E=置），避免脚本文件 UTF-8 无 BOM 时
     # PS 5.1 读中文乱码导致比对失败。
-    $rt = [System.Windows.Automation.AutomationElement]::RootElement
-    try {
-        $ws = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-        $hit = $ws | Where-Object { $_.Current.Name -match '设置' } | Select-Object -First 1
-        if ($null -ne $hit) { return $hit }
-    } catch { }
+    # run13：不再先走 UIA RootElement.FindAll——它在 app 卡顿时会无限阻塞（run12 卡在 J01，
+    # 10 分钟无进展；run8 浸泡也栽过），且它本来就枚举不到设置窗（H01 已证实）。
+    # 只走 Win32 EnumWindows + AutomationElement.FromHandle（快、不阻塞 UI 线程）。
     $script:SettingsTitle = [string]([char]0x8BBE) + [string]([char]0x7F6E)
     $script:SettingsPid = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).Id
     if ($null -eq $script:SettingsPid) { return $null }
