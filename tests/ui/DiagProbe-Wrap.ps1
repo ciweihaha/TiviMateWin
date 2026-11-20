@@ -5,10 +5,11 @@ $sum='C:\build\tmw-uitest\diag-probe-summary.txt'
 function L($s){ Add-Content -Path $sum -Value $s -Encoding UTF8; Write-Output $s }
 if (Test-Path $sum) { Remove-Item $sum -Force }
 L ("start " + (Get-Date -Format 'HH:mm:ss'))
-# 0. sync latest probe scripts (commit b641f77; ghfast.top caches raw content, use ?v= to bust)
+# 0. sync latest probe scripts (commit b641f77; use full-SHA path so the
+# ghfast.top path-key cache cannot serve a stale main-branch copy)
 foreach ($f in @('Probe-Settings6.ps1','Probe-B04.ps1','Install-DiagDll.ps1')) {
   try {
-    Invoke-WebRequest -Uri ("https://ghfast.top/https://raw.githubusercontent.com/ciweihaha/TiviMateWin/main/tests/ui/$f?v=b641f77") -OutFile "C:\build\tmw-uitest\$f" -UseBasicParsing -TimeoutSec 90
+    Invoke-WebRequest -Uri ("https://ghfast.top/https://raw.githubusercontent.com/ciweihaha/TiviMateWin/b641f77f9c695d12f608e16d5499050ab6287795/tests/ui/$f") -OutFile "C:\build\tmw-uitest\$f" -UseBasicParsing -TimeoutSec 90
     L ("synced $f bytes=" + (Get-Item "C:\build\tmw-uitest\$f").Length)
   } catch { L ("sync FAIL $f : " + $_.Exception.Message) }
 }
