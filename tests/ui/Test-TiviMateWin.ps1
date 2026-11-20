@@ -12,6 +12,15 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
+# run11：全局 trap——脚本若被终止错误杀死，把错误写进 OutDir，免得死得不明不白（run10 死在 D01 之后、无 D02、无汇总）。
+trap {
+    try {
+        $msg = "$(Get-Date -Format 'HH:mm:ss') [FATAL] $($_.Exception.GetType().FullName): $($_.Exception.Message)`n$($_.ScriptStackTrace)"
+        Add-Content -Path (Join-Path $OutDir 'fatal.txt') -Value $msg -Encoding UTF8
+        Add-Content -Path $ResultsFile -Value $msg -Encoding UTF8
+    } catch { }
+    break
+}
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Drawing
