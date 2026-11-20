@@ -294,6 +294,16 @@ public partial class MainWindow : Window
     private bool _seekDragging;
     private bool _seekPending;   // 拖动结束后待跳转
     private readonly DispatcherTimer _progressTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    // v1.4.37：播放器状态后台缓存——转储证实，流卡住时 libvlc 的 get_time/is_playing/
+    // get_state（原生调用）在 UI 线程上阻塞，把界面冻住（hang-watch.dmp：UI 线程卡在
+    // UpdateProgress → LibVLCMediaPlayerGetTime）。500ms 进度定时器只在后台线程读播放器，
+    // 把数值写进缓存再贴回 UI；看门狗/重挂检查只读缓存，UI 线程永不碰播放器。
+    private int _progressReadInFlight;           // 后台读进度单飞守卫（0 空闲 / 1 进行中）
+    private long _cachedPlayerTime = -1;         // 后台读到的最新 Time（毫秒）
+    private long _cachedPlayerLength = -1;       // 后台读到的最新 Length（毫秒）
+    private bool _cachedIsPlaying;               // 后台读到的最新 IsPlaying
+    private VLCState _cachedPlayerState = VLCState.NothingSpecial; // 后台读到的最新 State
+    private DateTime _cachedPlayerReadAt = DateTime.MinValue;      // 上次后台读返回的时间（UTC）
     private string _aspectRatio = "";   // 画面比例（空=原始，16:9/4:3/拉伸）
     private float _playbackRate = 1.0f; // 倍速
     private string _sortMode = "号码";  // 频道排序：号码/名称
@@ -362,7 +372,7 @@ public partial class MainWindow : Window
         _osdTimer.Tick += (_, _) => { _osdTimer.Stop(); if (_fullscreen) StatusBar.Visibility = Visibility.Collapsed; };
         _fsHideTimer.Tick += (_, _) => { _fsHideTimer.Stop(); FullscreenOverlay.Visibility = Visibility.Collapsed; };
         _stallWatch.Tick += OnStallWatchTick;
-        _progressTimer.Tick += (_, _) => UpdateProgress();
+        _progressTimer.Tick += (_, _) => PollPlayerProgress();
         _digitTimer.Tick += (_, _) => CommitDigits();
         _osdHideTimer.Tick += (_, _) => HideChannelOsd();
         _subtitleHideTimer.Tick += (_, _) => { _subtitleHideTimer.Stop(); SubtitleBar.Visibility = Visibility.Collapsed; };
@@ -1434,24 +1444,60 @@ public partial class MainWindow : Window
     }
 
     /// <summary>进度条/时间刷新（500ms 定时器驱动）</summary>
-    private void UpdateProgress()
+    /// <summary>后台读播放器进度（单飞）：读 Time/Length/IsPlaying/State，写缓存，
+    /// 再把数值贴回 UI。读本身可能在流卡住时阻塞几分钟——在后台线程上阻塞不影响界面；
+    /// 单飞守卫保证同一时间只有一个读在跑，不会堆积线程。</summary>
+    private void PollPlayerProgress()
     {
-        if (_player is null || _seekDragging) return;
+        if (_closing || _player is null || _seekDragging) return;
+        if (Interlocked.CompareExchange(ref _progressReadInFlight, 1, 0) != 0) return; // 上一次读还没回来
+        var player = _player;
+        var current = _current;
+        _ = Task.Run(() =>
+        {
+            long t = -1, len = -1;
+            var playing = false;
+            var state = VLCState.NothingSpecial;
+            try
+            {
+                if (player != null && current != null)
+                {
+                    playing = player.IsPlaying;
+                    state = player.State;
+                    // v1.4.37：直播流不读 Length——转储证实，流卡住/重连时 libvlc 的
+                    // get_length（原生调用）在 UI 线程上阻塞，把界面冻住。直播本来就不用
+                    // Length（只显示“直播”+当前时间），所以先判直播再读 Time。
+                    if (IsLiveStream(current.Url)) t = player.Time;
+                    else { len = player.Length; t = player.Time; }
+                }
+            }
+            catch (Exception ex) { AppLog.Error($"poll player progress failed: {ex.Message}"); }
+            finally { Interlocked.Exchange(ref _progressReadInFlight, 0); }
+            _cachedPlayerTime = t;
+            _cachedPlayerLength = len;
+            _cachedIsPlaying = playing;
+            _cachedPlayerState = state;
+            _cachedPlayerReadAt = DateTime.UtcNow;
+            // 只把数值贴回 UI 线程，不在 UI 线程碰播放器；频道已换则不贴（读的是旧台的数值）。
+            var readChannel = current;
+            Dispatcher.BeginInvoke(() => ApplyProgress(readChannel, t, len));
+        });
+    }
+
+    /// <summary>把后台读到的进度数值写到界面（只碰 UI 控件，不碰播放器）。</summary>
+    private void ApplyProgress(ChannelItem? readChannel, long t, long len)
+    {
+        if (_closing || _seekDragging) return;
+        if (readChannel != _current) return; // 读的时候已切台，旧数值不贴
         try
         {
-            // v1.4.37：直播流不读 Length——转储证实，流卡住/重连时 libvlc 的
-            // get_length（原生调用）在 UI 线程上阻塞，把界面冻住（“未响应”、画面定格、
-            // UIA 找不到控件、日志停写）。直播本来就不用 Length（只显示“直播”+当前时间），
-            // 所以先判直播再读 Time；没在播（_current 为空）直接跳过，不碰播放器。
             if (_current != null && IsLiveStream(_current.Url))
             {
                 DurationText.Text = "直播";
-                TimeText.Text = FormatTime(_player.Time);
+                TimeText.Text = FormatTime(t);
                 return;
             }
             if (_current is null) return;
-            var len = _player.Length;
-            var t = _player.Time;
             // v1.4.16：直播流没有总时长——libvlc 报的 Length 只是 HLS 滑动窗口（十几秒），
             // 拿它当总时长会显示 00:18/00:16 这种“已播超总时长”；直播只显示“直播”，不驱动进度条。
             if (len > 0)
@@ -1686,7 +1732,9 @@ public partial class MainWindow : Window
                 // 上面的 _pipEffectActive 守卫会提前返回，走不到这里，不会跟小窗效果打架）
                 // v1.4.27（轻微 6）：补上 1 秒检查同款 Buffering 守卫——缓冲中 IsPlaying 为
                 // false，慢启动流会被误判为“没恢复”而多播一次（新建 Media、重新缓冲，画面闪断）。
-                if (_current != null && !_isPaused && !_player.IsPlaying && _player.State != VLCState.Buffering)
+                // v1.4.37：这里读后台缓存，不直接读播放器（is_playing/get_state 是原生调用，
+                // 流卡住时会在 UI 线程上阻塞）。缓存最多滞后 500ms，重挂 1 秒后检查时已刷新过。
+                if (_current != null && !_isPaused && !_cachedIsPlaying && _cachedPlayerState != VLCState.Buffering)
                     _ = PlayAsync(_current);
             }
             catch (Exception ex) { AppLog.Error($"reattach video surface failed: {ex.Message}"); }
@@ -1703,7 +1751,9 @@ public partial class MainWindow : Window
         {
             // v1.4.15 迭代 1：缓冲中（Buffering）时 IsPlaying 为 false，慢启动流会被误判
             // 未恢复而多播一次；缓冲态也视为“正在播”，不重播。
-            if (!_player.IsPlaying && _player.State != VLCState.Buffering)
+            // v1.4.37：读后台缓存，不直接读播放器（is_playing/get_state 是原生调用，
+            // 流卡住时会在 UI 线程上阻塞）。
+            if (!_cachedIsPlaying && _cachedPlayerState != VLCState.Buffering)
             {
                 AppLog.Info("video surface still not playing after reattach, replaying current channel");
                 _ = PlayAsync(_current);
@@ -3487,12 +3537,18 @@ public partial class MainWindow : Window
     {
         if (_closing) return;
         if (_player is null) return;
+        // v1.4.37：UI 线程不再读播放器——get_time/is_playing/get_state 都是原生调用，
+        // 流卡住时会在 UI 线程上阻塞（转储证实）。只读后台进度缓存：Time 不前进，或缓存
+        // 超过 8 秒没更新（读本身卡住了），都算停滞。
+        if (_cachedPlayerReadAt == DateTime.MinValue) return; // 后台还没读到过，等一轮
+        var isPlaying = _cachedIsPlaying;
+        var state = _cachedPlayerState;
         // v1.4.16 意外停播：播放器停在 Stopped/Ended/Error 态、当前频道是直播流、不是暂停/
         // 小窗效果 → 自动重连。原来 !IsPlaying 就直接 return，播完/停住只能手动重进。
         // 连续 2 次（8 秒）仍停才动手，避开启动/切台/停止的瞬间状态；小窗效果时主播放器
         // 是故意停着的，必须排除（_pipEffectActive）。
-        if (!_player.IsPlaying && _current != null && !_isPaused && !_pipEffectActive
-            && (_player.State == VLCState.Stopped || _player.State == VLCState.Ended || _player.State == VLCState.Error)
+        if (!isPlaying && _current != null && !_isPaused && !_pipEffectActive
+            && (state == VLCState.Stopped || state == VLCState.Ended || state == VLCState.Error)
             && IsLiveStream(_current.Url))
         {
             _stallTicks = 0; _lastMediaTime = -1;
@@ -3515,8 +3571,8 @@ public partial class MainWindow : Window
             return;
         }
         _stopTicks = 0;
-        if (!_player.IsPlaying) { _stallTicks = 0; _lastMediaTime = -1; return; } // 未播/暂停不监控
-        var t = _player.Time;
+        if (!isPlaying) { _stallTicks = 0; _lastMediaTime = -1; return; } // 未播/暂停不监控
+        var t = _cachedPlayerTime;
         if (t <= 0) { _stallTicks = 0; _lastMediaTime = -1; return; }   // 部分流 Time 恒 0，跳过监控防误判
 
         if (t == _lastMediaTime)
