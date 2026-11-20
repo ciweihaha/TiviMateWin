@@ -98,8 +98,30 @@ function Get-Config {
 }
 
 function Get-TmwWindow {
+    # run12：不再用 Get-Process.MainWindowHandle——多窗口时它可能指向 ChannelWindow，
+    # 关掉新窗口后 MainWindowHandle 会变 0/过期，导致 Get-TmwWindow 返回 null、Get-TmwWindows
+    # 返回 0（D02/K03/K04/K05 的根因）。改走 EnumWindows 按标题找主窗（标题以「星辰直播」开头，
+    # ChannelWindow 的标题是台名）；找不到再回落 MainWindowHandle。
     $p = Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -eq $p -or $p.MainWindowHandle -eq 0) { return $null }
+    if ($null -eq $p) { return $null }
+    $mainTitle = [char]0x661F + [char]0x8FB0 + [char]0x76F4 + [char]0x64AD
+    $found = $null
+    $cb = [Win32+EnumWindowsProc]{
+        param($hWnd, $lParam)
+        $wpid = 0; [void][Win32]::GetWindowThreadProcessId($hWnd, [ref]$wpid)
+        if ($wpid -eq $p.Id -and [Win32]::IsWindowVisible($hWnd)) {
+            $sb = New-Object System.Text.StringBuilder(256)
+            [void][Win32]::GetWindowText($hWnd, $sb, 256)
+            $t = $sb.ToString()
+            if ($t.StartsWith($mainTitle)) { $script:TmwMainHwnd = $hWnd }
+        }
+        return $true
+    }
+    try { [void][Win32]::EnumWindows($cb, [IntPtr]::Zero) } catch { }
+    if ($script:TmwMainHwnd -and $script:TmwMainHwnd -ne [IntPtr]::Zero) {
+        try { return [System.Windows.Automation.AutomationElement]::FromHandle($script:TmwMainHwnd) } catch { }
+    }
+    if ($p.MainWindowHandle -eq 0) { return $null }
     try { return [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle) } catch { return $null }
 }
 
@@ -300,6 +322,9 @@ if ($null -ne $cfg0) { $liveSub0 = $cfg0.LiveSubtitleEnabled }
 Write-Output "基线: 隐藏 $($hidden0.Count) 个台，LiveSubtitleEnabled=$liveSub0"
 
 $proc = Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1
+# run12：先杀残留的 UnBox——run11 里它在 E01/E02/E04/F01 时段抢了前台（搜“不存在的片名”），
+# 污染了 4 张截图。只杀进程，不删任务/文件。
+Get-Process UnBox -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 $launchStart = Get-Date
 if ($null -eq $proc) {
     Start-Process -FilePath $exe -WorkingDirectory $InstallDir
@@ -685,9 +710,11 @@ function Get-TmwWindows {
     # run10：UIA 顶层枚举不可靠（D01/K03 里返回 0，见 H01 的根因），改走 Win32 EnumWindows
     # 按 pid 找可见顶层窗口，再用 FromHandle 取 UIA 元素；UIA 枚举只作回落。
     # 排除已知的非界面顶层窗口（VLC 宿主、IME/输入法、隐藏窗口等），只留有标题的界面窗。
-    $mainEl0 = Get-TmwWindow
-    if ($null -eq $mainEl0) { return @() }
-    $procId = $mainEl0.Current.ProcessId
+    # run12：pid 直接取进程 Id，不再经 Get-TmwWindow（主窗丢了就全丢）。Get-TmwWindow 只用来
+    # 兜底；EnumWindows 按 pid 找全部可见顶层窗口。
+    $p = Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $p) { return @() }
+    $procId = $p.Id
     $script:TmwPid10 = $procId
     $script:TmwHwnds10 = @()
     $script:TmwExclude10 = @('LibVLCSharp.WPF', 'VLC (Direct3D11 output)', 'Hidden Window', 'MediaContextNotificationWindow', 'SystemResourceNotifyWindow', 'CiceroUIWndFrame', 'Mode Indicator', 'MSCTFIME UI', 'Default IME')
@@ -1153,12 +1180,13 @@ if ($masterBeforeJ -eq $false) {
         for ($k = 0; $k -lt 4; $k++) {
             [void](Invoke-Element $tBtn)
             Start-Sleep -Seconds 1
-            $nm = Get-ElementText $tBtn
-            if ($nm -match '强制') { $forced = $true; break }
-            # 按钮被重建时要重找
+            # run12：点完按钮会被重建——必须先重找再读名；读刚点的旧元素拿到的是点前的旧名字，
+            # 永远读不到「强制」（run11 J01 的根因）。
             $w = Get-TmwWindow
             $tBtn = Find-ByAutomationId -Root $w -AutomationId 'BtnTranslateToggle'
             if ($null -eq $tBtn) { break }
+            $nm = Get-ElementText $tBtn
+            if ($nm -match '强制') { $forced = $true; break }
         }
         Start-Sleep -Seconds 1
         $cfgJ = Get-Config
