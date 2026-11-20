@@ -3,7 +3,7 @@
 # 退出码：0 全部 PASS；1 有 FAIL；2 有 NEEDS-EYE 待复核（无 FAIL 时）。
 param(
     [string]$InstallDir = 'C:\TiviMateWin',
-    [string]$ExpectedVersion = '1.4.36',
+    [string]$ExpectedVersion = '1.4.37',
     [string]$OutDir = 'C:\build\tmw-uitest\run1',
     [int]$SoakMinutes = 30,
     [switch]$SkipSoak,
@@ -725,16 +725,28 @@ Bring-ToFront
 Send-KeysToWindow -Keys '1' -WaitMs 2600
 $winE4 = Get-TmwWindow
 try { $winE4.SetFocus() } catch { }
-Send-KeysToWindow -Keys 'e' -WaitMs 1500
+Send-KeysToWindow -Keys 'e' -WaitMs 2500
 $shotE4 = Take-Shot -Name 'E04-guide-ekey'
 $epgPanel = Find-ByAutomationId -Root (Get-TmwWindow) -AutomationId 'EpgPanel'
 $epgVis = ''
-if ($null -ne $epgPanel) { try { $epgVis = $epgPanel.Current.IsOffscreen.ToString() } catch { } }
-# EpgPanel 在 UIA 树里；IsOffscreen=False 说明面板已显示（不再只凭截图猜）
-if ($null -ne $epgPanel -and $epgVis -eq 'False') {
-    Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'PASS' -Evidence "截图 $shotE4；EpgPanel 已显示（IsOffscreen=False）"
+$epgRect = ''; $winRectE4 = ''
+if ($null -ne $epgPanel) {
+    try { $epgVis = $epgPanel.Current.IsOffscreen.ToString(); $epgRect = $epgPanel.Current.BoundingRectangle.ToString() } catch { }
+    try { $winRectE4 = (Get-TmwWindow).Current.BoundingRectangle.ToString() } catch { }
+}
+# run8：run7 截图疑似 DPI 取图裁切（Take-Shot 已改物理像素），只凭截图不能定罪；
+# 面板矩形必须完全落在主窗口矩形内才算 PASS，否则 NEEDS-EYE 并附矩形。
+$epgInside = $false
+if ($null -ne $epgPanel -and $epgVis -eq 'False' -and $epgRect -ne '' -and $winRectE4 -ne '') {
+    try {
+        $pr = $epgPanel.Current.BoundingRectangle; $wr = (Get-TmwWindow).Current.BoundingRectangle
+        $epgInside = ($pr.Left -ge ($wr.Left - 2) -and $pr.Top -ge ($wr.Top - 2) -and $pr.Right -le ($wr.Right + 2) -and $pr.Bottom -le ($wr.Bottom + 2) -and $pr.Width -gt 100)
+    } catch { }
+}
+if ($epgInside) {
+    Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'PASS' -Evidence "截图 $shotE4；EpgPanel 已显示且在窗内（panel=$epgRect，window=$winRectE4）"
 } else {
-    Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE4（应弹出完整节目单）；EpgPanel IsOffscreen=$epgVis"
+    Write-Result -Id 'E04' -Name 'E 键打开完整节目单' -Verdict 'NEEDS-EYE' -Evidence "截图 $shotE4（应弹出完整节目单）；EpgPanel IsOffscreen=$epgVis panel=$epgRect window=$winRectE4"
 }
 Send-KeysToWindow -Keys '{ESC}' -WaitMs 800
 
@@ -754,6 +766,7 @@ function Open-SettingsWindow {
         return ($ws | Where-Object { $_.Current.Name -match '设置' } | Select-Object -First 1)
     }
     [void](Invoke-Element $btn)
+    $script:OpenSettingsDiag = "UIA Invoke 已发"
     for ($i = 0; $i -lt 12; $i++) {
         Start-Sleep -Milliseconds 500
         $sw = & $findSetWin
@@ -769,6 +782,13 @@ function Open-SettingsWindow {
         $sw = & $findSetWin
         if ($null -ne $sw) { return $sw }
     }
+    # run8：仍打不开时枚举全部顶层窗口——区分“点击没触发”（无任何新窗）
+    # 与“已有模态窗挡住 UI 线程”（设置窗/MessageBox 已开，第二次点击被模态吞掉）。
+    try {
+        $rt = [System.Windows.Automation.AutomationElement]::RootElement
+        $allWs = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
+        $script:OpenSettingsDiag = "UIA Invoke 已发+鼠标点已发，仍无设置窗；顶层窗口=" + (($allWs | ForEach-Object { "$($_.Current.Name)[$($_.Current.BoundingRectangle)]" }) -join ' | ')
+    } catch { $script:OpenSettingsDiag = "UIA Invoke 已发+鼠标点已发，仍无设置窗；枚举顶层窗口失败：$($_.Exception.Message)" }
     return $null
 }
 
@@ -806,10 +826,12 @@ if ($null -eq $win) {
     Start-Sleep -Seconds 5
     $cfgF = Get-Config
     $masterOn = ($null -ne $cfgF -and $cfgF.LiveSubtitleEnabled -eq $true)
+    $f01Gate = '基线已开'
     if (-not $masterOn) {
         # 设置里打开字幕主开关（LiveSubtitleChk）
         $setWinF = Open-SettingsWindow
         if ($null -ne $setWinF) {
+            $f01Gate = '设置窗已开，主开关已置位'
             $chk = Find-ByAutomationId -Root $setWinF -AutomationId 'LiveSubtitleChk'
             if ($null -ne $chk) {
                 try {
@@ -819,6 +841,8 @@ if ($null -eq $win) {
             }
             [void](Save-SettingsWindow -SetWin $setWinF)
             Start-Sleep -Seconds 2
+        } else {
+            $f01Gate = '设置窗打不开（H01 未过），主开关未置位，toast 无法验证'
         }
     }
     Send-KeysToWindow -Keys '1' -WaitMs 1200
@@ -833,7 +857,7 @@ if ($null -eq $win) {
     }
     Send-KeysToWindow -Keys '2' -WaitMs 3000
     $shotF3 = Take-Shot -Name 'F01-toast-switch2'
-    Write-Result -Id 'F01' -Name '「免费接口未配置」提示 5 秒自动消失' -Verdict 'NEEDS-EYE' -Evidence "t1=$shotF1（应有提示），t8=$shotF2（应消失），切台后=$shotF3（不应重现）；log 里有该提示=$logged"
+    Write-Result -Id 'F01' -Name '「免费接口未配置」提示 5 秒自动消失' -Verdict 'NEEDS-EYE' -Evidence "t1=$shotF1（应有提示），t8=$shotF2（应消失），切台后=$shotF3（不应重现）；log 里有该提示=$logged；门禁：$f01Gate"
 }
 
 # ================= G：刷新按钮 =================
@@ -861,7 +885,7 @@ if ($null -eq $setBtnH) {
 } else {
     $setWin = Open-SettingsWindow
     if ($null -eq $setWin) {
-        Write-Result -Id 'H01' -Name '设置页显示「当前版本」' -Verdict 'FAIL' -Evidence '点了设置，没弹出设置窗口'
+        Write-Result -Id 'H01' -Name '设置页显示「当前版本」' -Verdict 'FAIL' -Evidence "点了设置，没弹出设置窗口；$script:OpenSettingsDiag"
         Write-Result -Id 'H02' -Name '「检查更新」显示「已是最新版本」' -Verdict 'FAIL' -Evidence 'H01 未完成，跳过'
     } else {
         $textsH = Find-All -Root $setWin -ControlType ([System.Windows.Automation.ControlType]::Text)
