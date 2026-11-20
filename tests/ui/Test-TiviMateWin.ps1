@@ -267,39 +267,8 @@ function Test-TimeAdvancing {
     return @{ Before = $a; After = $b; Advanced = ($a -ne '' -and $b -ne '' -and $a -ne $b) }
 }
 
-function Get-TimeTextViaJob {
-    # run9：UIA 读时间可能在 app 卡住时无限阻塞（run8 浸泡因此晚了约 15 分钟）。
-    # 放后台 Job 里跑，15 秒超时就放弃（返回 $null），主流程不被拖垮。
-    param([int]$TimeoutSec = 15)
-    $job = Start-Job -ScriptBlock {
-        Add-Type -AssemblyName UIAutomationClient
-        Add-Type -AssemblyName UIAutomationTypes
-        $p = Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -eq $p -or $p.MainWindowHandle -eq 0) { return '' }
-        try { $win = [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle) } catch { return '' }
-        $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
-        try { $texts = @($win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) } catch { return '' }
-        foreach ($t in $texts) {
-            try { $n = $t.Current.Name } catch { continue }
-            if ($n -match '^\d{1,2}:\d{2}(:\d{2})?$') { return $n }
-        }
-        return ''
-    }
-    $done = Wait-Job $job -Timeout $TimeoutSec
-    if ($done) { $r = Receive-Job $job; Remove-Job $job -Force; return $r }
-    Remove-Job $job -Force
-    return $null
-}
-
-function Test-TimeAdvancingJob {
-    param([int]$WaitSec = 4, [int]$TimeoutSec = 15)
-    $a = Get-TimeTextViaJob -TimeoutSec $TimeoutSec
-    if ($null -eq $a) { return @{ Before = ''; After = ''; Advanced = $false; TimedOut = $true } }
-    Start-Sleep -Seconds $WaitSec
-    $b = Get-TimeTextViaJob -TimeoutSec $TimeoutSec
-    if ($null -eq $b) { return @{ Before = $a; After = ''; Advanced = $false; TimedOut = $true } }
-    return @{ Before = $a; After = $b; Advanced = ($a -ne '' -and $b -ne '' -and $a -ne $b); TimedOut = $false }
-}
+# run10：Get-TimeTextViaJob / Test-TimeAdvancingJob 已删——Job 版时间读取在计划任务里
+# 会挂住（run9 浸泡卡死在 min10 之后），浸泡不再读 UIA 时间。
 
 # ================= 启动 =================
 Write-Output "== TiviMateWin UI 回归测试 v$ExpectedVersion $(Get-Date -Format 'yyyy-MM-dd HH:mm') =="
@@ -533,8 +502,11 @@ function Get-MenuItems {
 }
 
 function Open-ChannelContextMenu {
+    param([switch]$HiddenOnly)
     # 右键点频道行：先左键点中该行（选中+聚焦），再右键。坐标用物理像素算（见 Get-PhysicalScreenSize）。
     # 注意：Shift+F10 在这 app 上打不开频道菜单，只会出系统菜单，所以必须用鼠标右键。
+    # run10：-HiddenOnly 时点带「已隐藏」标记的那行（C04 用：藏的是哪台就点哪台，
+    # 不再默认点第 2 行——列表顺序/滚动变化时第 2 行未必是被藏的台）。
     $w = Get-TmwWindow
     if ($null -eq $w) { return @() }
     Bring-ToFront
@@ -542,8 +514,17 @@ function Open-ChannelContextMenu {
     $target = $null
     if ($null -ne $list) {
         $items = Find-All -Root $list -ControlType ([System.Windows.Automation.ControlType]::ListItem)
-        if ($items.Count -gt 1) { $target = $items[1] }
-        elseif ($items.Count -eq 1) { $target = $items[0] }
+        if ($HiddenOnly) {
+            foreach ($it in $items) {
+                $texts = Find-All -Root $it -ControlType ([System.Windows.Automation.ControlType]::Text)
+                $names = @($texts | ForEach-Object { Get-ElementText $_ })
+                if ($names -contains '已隐藏') { $target = $it; break }
+            }
+        }
+        if ($null -eq $target) {
+            if ($items.Count -gt 1) { $target = $items[1] }
+            elseif ($items.Count -eq 1) { $target = $items[0] }
+        }
     }
     if ($null -ne $target) {
         $tr = $target.Current.BoundingRectangle
@@ -642,10 +623,11 @@ if ($null -eq $hideItem) {
         } else {
             Write-Result -Id 'C03' -Name '「显示隐藏频道」找回' -Verdict 'FAIL' -Evidence "频道数 $cnt2，期望 $cnt0"
         }
-        # C04：数字键选回 2 号台（它已回到列表），右键应只有「显示频道」
+        # C04：数字键选回 2 号台（它已回到列表），右键应只有「显示频道」；
+        # run10：直接点带「已隐藏」标记的那行，不再默认点第 2 行
         Bring-ToFront
         Send-KeysToWindow -Keys '2' -WaitMs 1500
-        $menu3 = Open-ChannelContextMenu
+        $menu3 = Open-ChannelContextMenu -HiddenOnly
         $names3 = @($menu3 | ForEach-Object { Get-ElementText $_ })
         $unhide = $menu3 | Where-Object { (Get-ElementText $_) -eq '显示频道' } | Select-Object -First 1
         if ($null -ne $unhide -and -not ($names3 -contains '隐藏频道')) {
@@ -686,16 +668,44 @@ if ($null -eq $hideItem) {
 
 # ================= D：新窗口播放 =================
 function Get-TmwWindows {
-    # 属于 TiviMateWin 进程的全部顶层窗口（主窗口 + 新窗口 ChannelWindow）。
+    # 属于 TiviMateWin 进程的全部顶层窗口（主窗口 + 新窗口 ChannelWindow + 设置窗）。
     # 不能按标题筛：ChannelWindow 的标题是台名（如 CCTV综合），不含「星辰」/「TiviMate」。
-    # run8：pid 从主窗口 UIA 元素取（Get-TmwWindow().Current.ProcessId），
+    # run9：pid 从主窗口 UIA 元素取（Get-TmwWindow().Current.ProcessId），
     # 不用 Get-Process 首个（多进程/旧进程残留时会抓错）。
+    # run10：UIA 顶层枚举不可靠（D01/K03 里返回 0，见 H01 的根因），改走 Win32 EnumWindows
+    # 按 pid 找可见顶层窗口，再用 FromHandle 取 UIA 元素；UIA 枚举只作回落。
+    # 排除已知的非界面顶层窗口（VLC 宿主、IME/输入法、隐藏窗口等），只留有标题的界面窗。
     $mainEl0 = Get-TmwWindow
     if ($null -eq $mainEl0) { return @() }
     $pid = $mainEl0.Current.ProcessId
+    $script:TmwPid10 = $pid
+    $script:TmwHwnds10 = @()
+    $script:TmwExclude10 = @('LibVLCSharp.WPF', 'VLC (Direct3D11 output)', 'Hidden Window', 'MediaContextNotificationWindow', 'SystemResourceNotifyWindow', 'CiceroUIWndFrame', 'Mode Indicator', 'MSCTFIME UI', 'Default IME')
+    $cb = [Win32+EnumWindowsProc]{
+        param($hWnd, $lParam)
+        $wpid = 0; [void][Win32]::GetWindowThreadProcessId($hWnd, [ref]$wpid)
+        if ($wpid -eq $script:TmwPid10 -and [Win32]::IsWindowVisible($hWnd)) {
+            $sb = New-Object System.Text.StringBuilder(256)
+            [void][Win32]::GetWindowText($hWnd, $sb, 256)
+            $t = $sb.ToString()
+            if ($t.Length -gt 0 -and $script:TmwExclude10 -notcontains $t) { $script:TmwHwnds10 += $hWnd }
+        }
+        return $true
+    }
+    $els = @()
+    try {
+        [void][Win32]::EnumWindows($cb, [IntPtr]::Zero)
+        foreach ($h in $script:TmwHwnds10) {
+            try { $el = [System.Windows.Automation.AutomationElement]::FromHandle($h); if ($null -ne $el) { $els += $el } } catch { }
+        }
+    } catch { }
+    if ($els.Count -gt 0) { return $els }
+    # 回落：UIA 顶层枚举
     $rt = [System.Windows.Automation.AutomationElement]::RootElement
-    $all = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
-    return @($all | Where-Object { try { $_.Current.ProcessId -eq $pid } catch { $false } })
+    try {
+        $all = @($rt.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window))))
+        return @($all | Where-Object { try { $_.Current.ProcessId -eq $pid } catch { $false } })
+    } catch { return @() }
 }
 
 Bring-ToFront
@@ -1085,9 +1095,15 @@ if (-not $tI0.Advanced) {
 function Set-MasterSubtitle {
     param([bool]$On)
     # 设置页里把字幕主开关拨到指定状态，返回设置后的 config 值（true/false/$null 表示没办成）
+    # run10：LiveSubtitleChk 在 ScrollViewer 下方，可能晚出现；轮询 10 秒再放弃
     $sw = Open-SettingsWindow
     if ($null -eq $sw) { return $null }
-    $chk = Find-ByAutomationId -Root $sw -AutomationId 'LiveSubtitleChk'
+    $chk = $null
+    for ($i = 0; $i -lt 20; $i++) {
+        $chk = Find-ByAutomationId -Root $sw -AutomationId 'LiveSubtitleChk'
+        if ($null -ne $chk) { break }
+        Start-Sleep -Milliseconds 500
+    }
     $ok = $null
     if ($null -ne $chk) {
         try {
@@ -1355,10 +1371,11 @@ if (-not $SkipSoak) {
             Write-Result -Id 'L01' -Name "连续播 ${SoakMinutes} 分钟不退出" -Verdict 'FAIL' -Evidence "播了约 $([int](($soakExit - $soakStart).TotalMinutes)) 分钟后退出（$($soakExit.ToString('HH:mm:ss'))）；log 尾：$tailL"
             break
         }
-        # run9：浸泡里的时间读取走 Job 版（15 秒超时），UIA 卡住时不拖垮浸泡节奏；
-        # 浸泡的 verdict 只看进程在不在，时间只是证据。
-        $tt = Test-TimeAdvancingJob -WaitSec 3
-        $ttNote = if ($tt.TimedOut) { '（UIA 读时间超时，app 可能卡住）' } else { '' }
+        # run10：浸泡里不读 UIA 时间——run9 的 Job 版时间读取把浸泡卡死了（Start-Job 在
+        # 计划任务里挂住，min10 之后 40 分钟没进展）；浸泡的 verdict 只看进程在不在，
+        # 时间证据改由日志 + 终场截图提供，UIA 一律不碰。
+        $tt = @{ Before = ''; After = ''; Advanced = $false; TimedOut = $false }
+        $ttNote = ''
         $lfL3 = Get-LogFile
         if ($null -ne $lfL3) {
             $newLines = Get-Content $lfL3.FullName -Tail 500 -ErrorAction SilentlyContinue
