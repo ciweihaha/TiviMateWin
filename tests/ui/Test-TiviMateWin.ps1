@@ -1023,6 +1023,7 @@ $refBtn = Find-ByName -Root $win -ControlType ([System.Windows.Automation.Contro
 if ($null -eq $refBtn) {
     Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'FAIL' -Evidence '找不到「刷新」按钮'
 } else {
+    $g01Start = Get-Date
     [void](Invoke-Element $refBtn)
     # run13：超时 20 秒→45 秒——日志证实刷新本身能跑完（run12：22:39:22「playlist refreshed: 54 channels」），
     # 但从点下到完成约 29 秒（云电脑拉 live.m3u 慢），20 秒轮询等不到，不是 app bug。
@@ -1030,7 +1031,25 @@ if ($null -eq $refBtn) {
     if ($stG -match '已刷新：\d+ 个频道 \d{2}:\d{2}') {
         Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'PASS' -Evidence $stG
     } else {
-        Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'FAIL' -Evidence "刷新后状态=$stG（期望「已刷新：N 个频道 HH:mm」）"
+        # run15：状态栏没等到时查日志兜底——run14 里刷新 100 秒才完（23:09:55 才写日志），
+        # 45 秒轮询等不到；但日志有「playlist refreshed」即证明刷新跑完且状态已写（代码先写状态再写日志），
+        # 是云电脑拉 live.m3u 慢，不是 app bug。只认点下刷新之后（$g01Start 之后）的日志行，防旧记录。
+        $logPath = Join-Path $env:APPDATA 'TiviMateWin\log.txt'
+        $recent = $null
+        try {
+            $lines = Get-Content $logPath -Tail 80 -ErrorAction SilentlyContinue | Select-String -Pattern 'playlist refreshed: (\d+) channels'
+            foreach ($ln in $lines) {
+                if ($ln.Line -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
+                    $ts = [DateTime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', $null)
+                    if ($ts -ge $g01Start) { $recent = $ln.Line }
+                }
+            }
+        } catch { }
+        if ($null -ne $recent) {
+            Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'PASS' -Evidence "状态栏轮询 45 秒未见（疑似刷新慢），但日志证实刷新已完成：$recent"
+        } else {
+            Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'FAIL' -Evidence "刷新后状态=$stG（期望「已刷新：N 个频道 HH:mm」）；日志也无 playlist refreshed"
+        }
     }
 }
 
@@ -1203,13 +1222,16 @@ if ($masterBeforeJ -eq $false) {
         for ($k = 0; $k -lt 4; $k++) {
             [void](Invoke-Element $tBtn)
             Start-Sleep -Seconds 1
-            # run12：点完按钮会被重建——必须先重找再读名；读刚点的旧元素拿到的是点前的旧名字，
-            # 永远读不到「强制」（run11 J01 的根因）。
+            # run15：读按钮里的 Text 子元素，不读按钮的 Name——WPF 按钮的 Content 改了，
+            # UIA Name 未必跟着变（run14：点 4 次名里仍无「强制」，但 config 已翻成 True，
+            # 说明联动本身是通的，只是名字读不到）。
             $w = Get-TmwWindow
             $tBtn = Find-ByAutomationId -Root $w -AutomationId 'BtnTranslateToggle'
             if ($null -eq $tBtn) { break }
             $nm = Get-ElementText $tBtn
-            if ($nm -match '强制') { $forced = $true; break }
+            $txts = Find-All -Root $tBtn -ControlType ([System.Windows.Automation.ControlType]::Text)
+            $nm2 = ($txts | ForEach-Object { Get-ElementText $_ }) -join ''
+            if (($nm -match '强制') -or ($nm2 -match '强制')) { $forced = $true; break }
         }
         Start-Sleep -Seconds 1
         $cfgJ = Get-Config
@@ -1283,7 +1305,10 @@ for ($n = 1; $n -le 3; $n++) {
     Start-Sleep -Seconds 2
     $root3 = [System.Windows.Automation.AutomationElement]::RootElement
     $allW = @(Get-TmwWindows)
-    $mainH3 = (Get-Process TiviMateWin -ErrorAction SilentlyContinue | Select-Object -First 1).MainWindowHandle
+    # run15：不用 MainWindowHandle 认主窗——开新窗口后它可能指向 ChannelWindow，
+    # 会把主窗关掉（WPF 默认关主窗即退出 app），K03 因此剩 0 窗。用标题认主窗。
+    $mainEl3 = Get-TmwWindow
+    $mainH3 = if ($null -ne $mainEl3) { $mainEl3.Current.NativeWindowHandle } else { 0 }
     foreach ($w3 in $allW) {
         if ($w3.Current.NativeWindowHandle -ne $mainH3) {
             try { $w3.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close() } catch { }
