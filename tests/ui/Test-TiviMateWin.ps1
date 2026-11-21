@@ -1287,6 +1287,13 @@ if ($null -eq $refBtn) {
     Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'FAIL' -Evidence '找不到「刷新」按钮'
 } else {
     $g01Start = Get-Date
+    # run21：点下前先记日志行数——兜底只认点下之后新写的行（行号窗口）。
+    # run20 里刷新在点下 1 秒内完成（日志 07:25:33 有 playlist refreshed: 55 channels），
+    # 但日志时间戳只到秒，与 $g01Start 同秒的记录被秒级比对误判为“点下之前”而漏掉；
+    # 且状态栏“已刷新”约 1 秒就被重连风暴的状态冲掉，180 秒轮询也等不到。不是 app bug。
+    $logPath = Join-Path $env:APPDATA 'TiviMateWin\log.txt'
+    $g01LogLines = 0
+    try { $g01LogLines = @(Get-Content $logPath -ErrorAction Stop).Count } catch { }
     [void](Invoke-Element $refBtn)
     # run13：超时 20 秒→45 秒——日志证实刷新本身能跑完（run12：22:39:22「playlist refreshed: 54 channels」），
     # 但从点下到完成约 29 秒（云电脑拉 live.m3u 慢），20 秒轮询等不到，不是 app bug。
@@ -1296,19 +1303,15 @@ if ($null -eq $refBtn) {
     if ($stG -match '已刷新：\d+ 个频道 \d{2}:\d{2}') {
         Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'PASS' -Evidence $stG
     } else {
-        # run15：状态栏没等到时查日志兜底——run14 里刷新 100 秒才完（23:09:55 才写日志），
+        # run15/21：状态栏没等到时查日志兜底——run14 里刷新 100 秒才完（23:09:55 才写日志），
         # 45 秒轮询等不到；但日志有「playlist refreshed」即证明刷新跑完且状态已写（代码先写状态再写日志），
-        # 是云电脑拉 live.m3u 慢，不是 app bug。只认点下刷新之后（$g01Start 之后）的日志行，防旧记录。
-        $logPath = Join-Path $env:APPDATA 'TiviMateWin\log.txt'
+        # 是云电脑拉 live.m3u 慢，不是 app bug。只认点下之后新写的行（行号窗口），防旧记录、
+        # 免秒级时间戳误判、免尾部行数在重连风暴下不够。
         $recent = $null
         try {
-            $lines = Get-Content $logPath -Tail 80 -ErrorAction SilentlyContinue | Select-String -Pattern 'playlist refreshed: (\d+) channels'
-            foreach ($ln in $lines) {
-                if ($ln.Line -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
-                    $ts = [DateTime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', $null)
-                    if ($ts -ge $g01Start) { $recent = $ln.Line }
-                }
-            }
+            $newLines = Get-Content $logPath -ErrorAction SilentlyContinue | Select-Object -Skip $g01LogLines
+            $hit = $newLines | Select-String -Pattern 'playlist refreshed: (\d+) channels' | Select-Object -Last 1
+            if ($null -ne $hit) { $recent = $hit.Line }
         } catch { }
         if ($null -ne $recent) {
             Write-Result -Id 'G01' -Name '点「刷新」显示「已刷新：N 个频道 HH:mm」' -Verdict 'PASS' -Evidence "状态栏轮询 180 秒未见（疑似刷新慢），但日志证实刷新已完成：$recent"
