@@ -245,7 +245,11 @@ public sealed class LiveSubtitleService : IDisposable
         StatusChanged?.Invoke("");
     }
 
-    /// <summary>停止流水线与音频播出。回调保持挂接（音频继续走 NAudio），下次启用无需重挂。</summary>
+    /// <summary>停止流水线与音频播出。回调保持挂接（音频继续走 NAudio），下次启用无需重挂。
+    /// v1.4.38：取消后等喂音频循环与看门狗真正退出再返回——旧逻辑只取消不等，
+    /// 串行模式下循环可能还在 in-flight 的听写/翻译里，Dispose 紧接着释听写器/
+    /// 翻译器（HttpClient），在途翻译随后摸已释放的客户端、字幕还会在停后发出。
+    /// 循环里在途工作都联动了 CTS，正常毫秒级退出；5 秒是卡住时的上限。</summary>
     public void Stop()
     {
         if (!IsRunning) return;
@@ -255,6 +259,15 @@ public sealed class LiveSubtitleService : IDisposable
         try { _pipeline?.Dispose(); } catch { }
         _pipeline = null;
         _capture.Stop();
+        // 等喂音频循环与看门狗退出（有上限，不无限等 UI 线程）。
+        try
+        {
+            var tasks = new[] { _feederTask, _watchdogTask }.Where(t => t is not null).Select(t => t!).ToArray();
+            if (tasks.Length > 0) Task.WaitAll(tasks, TimeSpan.FromSeconds(5));
+        }
+        catch { }
+        _feederTask = null;
+        _watchdogTask = null;
     }
 
     /// <summary>喂音频的循环：PCM → 重采样 → 切块 → 送进流水线；模型未就绪时直接丢窗，不积压。

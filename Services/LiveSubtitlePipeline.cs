@@ -29,6 +29,11 @@ public sealed class LiveSubtitlePipeline : IDisposable
     private readonly Channel<TranscribeItem> _transcribeChannel;
     private readonly Channel<TranslateItem> _translateChannel;
 
+    // v1.4.38：Dispose 等两级循环退出的上限。循环里在途的听写/翻译都联动了本 CTS
+    //（听写 6 秒超时、翻译 8 秒超时都 link 了它），取消后正常毫秒级退出；
+    // 5 秒只是原生/网络调用卡住时的上限，不无限等 UI 线程。
+    private const int DisposeJoinTimeoutMs = 5000;
+
     private CancellationTokenSource? _cts;
     private Task? _transcribeTask;
     private Task? _translateTask;
@@ -132,6 +137,9 @@ public sealed class LiveSubtitlePipeline : IDisposable
                 // 整窗只是非语音标记（如 "(upbeat music)"）：不显示、不翻译。
                 if (LiveSubtitleChunker.IsNonSpeechMarker(english)) continue;
                 Interlocked.Increment(ref _transcribed);
+                // v1.4.38：停了就不往翻译级送——否则 Stop 后在途的窗还会继续翻译、
+                // 在 Dispose 之后才发出字幕。
+                if (ct.IsCancellationRequested) return;
                 if (_translateChannel.Reader.Count >= QueueCapacity)
                     Interlocked.Increment(ref _dropped);
                 _translateChannel.Writer.TryWrite(new TranslateItem(
@@ -159,6 +167,9 @@ public sealed class LiveSubtitlePipeline : IDisposable
                 var chinese = await _translate(item.English, ct).ConfigureAwait(false);
                 sw.Stop();
                 LastTranslateMs = sw.ElapsedMilliseconds;
+                // v1.4.38：停了就不出字幕——在途翻译回来时服务可能已经停了，
+                // 这行字幕再发出去就是关字幕后还飘字。
+                if (ct.IsCancellationRequested) return;
                 Interlocked.Increment(ref _translated);
                 LastEndToEndMs = (long)(DateTimeOffset.UtcNow - item.EnqueuedAt).TotalMilliseconds;
                 SubtitleReady?.Invoke(new LiveSubtitleLine(
@@ -178,6 +189,12 @@ public sealed class LiveSubtitlePipeline : IDisposable
         }
     }
 
+    /// <summary>释放流水线：先停两级循环，等它们真正退出再释 CTS。
+    /// v1.4.38：旧逻辑取消后立刻释 CTS——循环可能还在 in-flight 的听写/翻译里，
+    /// 随后摸已释放的 CTS 抛 ObjectDisposedException（记一条假的 stage failed
+    /// ERROR）；且调用方 LiveSubtitleService.Dispose 紧接着释听写器/翻译器，
+    /// 在途翻译还可能摸到已释放的 HttpClient。等循环退出（有 5 秒上限）再释，
+    /// 这两个竞态就没了；正常停表毫秒级退出，不拖 UI。</summary>
     public void Dispose()
     {
         if (_disposed) return;
@@ -185,6 +202,12 @@ public sealed class LiveSubtitlePipeline : IDisposable
         Stop();
         _transcribeChannel.Writer.TryComplete();
         _translateChannel.Writer.TryComplete();
+        try
+        {
+            var tasks = new[] { _transcribeTask, _translateTask }.Where(t => t is not null).Select(t => t!).ToArray();
+            if (tasks.Length > 0) Task.WaitAll(tasks, TimeSpan.FromMilliseconds(DisposeJoinTimeoutMs));
+        }
+        catch { }
         try { _cts?.Dispose(); } catch { }
     }
 

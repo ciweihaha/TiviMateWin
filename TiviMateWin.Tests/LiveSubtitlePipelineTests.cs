@@ -197,4 +197,51 @@ public class LiveSubtitlePipelineTests
         await Task.Delay(1000);
         Assert.Equal(count, emitted);
     }
+
+    /// <summary>v1.4.38：Dispose 必须等在途翻译真正退出再返回，且停后不发出字幕。
+    /// 旧逻辑取消后立刻释 CTS——循环还在翻译里，随后摸已释放的 CTS 抛
+    /// ObjectDisposedException（假 stage failed ERROR），调用方紧接着释翻译器
+    /// 时在途翻译还可能摸到已释放的 HttpClient。假翻译故意不理取消 token、
+    /// 400ms 才返回，模拟慢调用：Dispose 应当等它（≥300ms），而不是立刻返回，
+    /// 且翻译回来时已停，不发出字幕。</summary>
+    [Fact]
+    public async Task Dispose_WaitsForInFlightTranslate_NoLateSubtitle()
+    {
+        var emitted = 0;
+        var enteredTranslate = new TaskCompletionSource();
+        var pipeline = new LiveSubtitlePipeline(
+            transcribe: (_, _) => Task.FromResult<string?>("hello"),
+            translate: async (_, _) =>
+            {
+                enteredTranslate.TrySetResult();
+                await Task.Delay(400);
+                return "你好";
+            });
+        pipeline.SubtitleReady += _ => Interlocked.Increment(ref emitted);
+        pipeline.Start();
+        pipeline.EnqueueWindow(LoudWindow());
+        await Task.WhenAny(enteredTranslate.Task, Task.Delay(5000));
+        Assert.True(enteredTranslate.Task.IsCompleted, "翻译应已开始");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        pipeline.Dispose();
+        sw.Stop();
+        Assert.True(sw.ElapsedMilliseconds >= 300,
+            $"Dispose 只用了 {sw.ElapsedMilliseconds}ms 就返回，没等在途翻译退出");
+        Assert.Equal(0, emitted);
+    }
+
+    /// <summary>v1.4.38：空闲时 Dispose 应立刻返回、重复调用不抛异常。</summary>
+    [Fact]
+    public void Dispose_Idle_ReturnsPromptly_AndIdempotent()
+    {
+        var pipeline = new LiveSubtitlePipeline(
+            transcribe: (_, _) => Task.FromResult<string?>("hello"),
+            translate: (text, _) => Task.FromResult<string?>(text));
+        pipeline.Start();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        pipeline.Dispose();
+        sw.Stop();
+        Assert.True(sw.ElapsedMilliseconds < 2000, $"空闲 Dispose 用了 {sw.ElapsedMilliseconds}ms");
+        pipeline.Dispose();
+    }
 }
