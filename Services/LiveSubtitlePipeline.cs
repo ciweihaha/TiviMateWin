@@ -85,13 +85,18 @@ public sealed class LiveSubtitlePipeline : IDisposable
         });
     }
 
-    /// <summary>启动两级处理任务（幂等）；停止用 <see cref="Stop"/>。</summary>
+    /// <summary>启动两级处理任务（幂等）；停止用 <see cref="Stop"/>。
+    /// 注意：这里直接调用循环方法、不用 Task.Run——async 方法会同步执行到第一个
+    /// 未完成的 await（空队列上的 channel 读取），所以 Start() 返回时两级循环已
+    /// 经挂在队列上等数据；刚启动就入队也不会丢窗。Task.Run 则是排队调度，负载大
+    /// 时循环还没跑起来、容量 2 的 DropOldest 队列已满，第 1 窗会被丢掉
+    /// （CI tag 构建 44444026283 与 44847217845 都是这么挂的：期望 3 条实得 2 条）。</summary>
     public void Start()
     {
         if (_disposed || _cts is not null) return;
         _cts = new CancellationTokenSource();
-        _transcribeTask = Task.Run(() => TranscribeLoopAsync(_cts.Token));
-        _translateTask = Task.Run(() => TranslateLoopAsync(_cts.Token));
+        _transcribeTask = TranscribeLoopAsync(_cts.Token);
+        _translateTask = TranslateLoopAsync(_cts.Token);
     }
 
     /// <summary>停掉两级处理任务（幂等）；已在队列里的窗直接丢弃，不再出字幕。</summary>
