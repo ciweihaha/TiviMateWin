@@ -1,4 +1,4 @@
-# TiviMateWin v1.4.37 云电脑安装脚本（官方 Release 包，全量安装）
+﻿# TiviMateWin v1.4.37 云电脑安装脚本（官方 Release 包，全量安装）
 # 来源：https://github.com/ciweihaha/TiviMateWin/releases/tag/v1.4.37
 # 安装包 TiviMateWin-win-x64.zip = 151774609 字节
 $ErrorActionPreference = 'Stop'
