@@ -28,6 +28,7 @@ public class AppConfig
     public int NetworkCache { get; set; } = 800;      // 网络缓存 ms（libVLC network-caching）
     public bool HardwareDecode { get; set; } = true;  // 硬件解码开关
     public bool VlcVerbose { get; set; } = false;     // LibVLC 详细日志开关（诊断用，写 vlc-log.txt）
+    public bool UseLocalProxy { get; set; } = true;  // 本地代理开关（默认开）：10809 在监听时 LibVLC 的 HTTP 走本机代理（笔记本直连太慢时用）；关了就永远直连
 
     // 直播实时字幕（听写+翻译）：默认关；模型不塞进应用，调本机 Ollama。
     public bool LiveSubtitleEnabled { get; set; } = false;

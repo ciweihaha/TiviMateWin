@@ -764,6 +764,23 @@ public partial class MainWindow : Window
                 args.Add(_config.HardwareDecode ? "--avcodec-hw=any" : "--avcodec-hw=disabled");
                 // 诊断用：VlcVerbose 开启时输出 LibVLC 详细日志（写 vlc-log.txt）
                 if (_config.VlcVerbose) args.Add("--verbose=2");
+                // 本地代理（v1.4.39）：笔记本直连 Cloudflare 极慢（直播分片 8.4 KB/s），
+                // 本机 10809 代理能到 164 KB/s。10809 在监听才走代理，没有就直连；
+                // UseLocalProxy=false 可在配置里关掉。ChannelWindow/PipWindow 共用这个
+                // LibVLC 实例，所以所有播放窗口都走同一条代理。
+                if (_config.UseLocalProxy)
+                {
+                    var proxyArg = LocalProxyProbe.GetHttpProxyArg();
+                    if (proxyArg != null)
+                    {
+                        args.Add(proxyArg);
+                        AppLog.Info("local proxy 127.0.0.1:10809 detected, LibVLC HTTP via proxy");
+                    }
+                    else
+                    {
+                        AppLog.Info("no local proxy on 127.0.0.1:10809, LibVLC connects directly");
+                    }
+                }
                 return new LibVLC(args.ToArray());
             });
             // 诊断用：VlcVerbose 开启时订阅 LibVLC 日志，写 vlc-log.txt（独立文件，不污染主日志）

@@ -43,6 +43,7 @@
     <Compile Include="..\Services\FreeApiTranslatorFactory.cs" Link="FreeApiTranslatorFactory.cs" />
     <Compile Include="..\Services\StreamRecovery.cs" Link="StreamRecovery.cs" />
     <Compile Include="..\Services\HlsSegmentProbe.cs" Link="HlsSegmentProbe.cs" />
+    <Compile Include="..\Services\LocalProxyProbe.cs" Link="LocalProxyProbe.cs" />
   </ItemGroup>
 
 </Project>
