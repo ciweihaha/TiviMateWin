@@ -15,6 +15,7 @@ public partial class ChannelWindow : Window
     private ChannelItem? _channel;
     private int _volume;
     private readonly int _networkCache;   // 深查第 22 轮：旧代码写死 800，用户设置的网络缓存不生效
+    private readonly bool _useLocalProxy; // v1.4.40：本机代理开关——每次建 Media 现探 10809，代理后启动也跟得上
     // 播放串行化：libVLC MediaPlayer 非线程安全，快速换台时多个 Play 需串行执行
     private readonly SemaphoreSlim _playGate = new(1, 1);
     // F6(a)：窗口关闭中标志。Window_Closing 置位后，Play 不再启动新的播放，
@@ -23,12 +24,13 @@ public partial class ChannelWindow : Window
     private bool _teardownStarted; // 后台释放只启动一次：Window_Closing 里置位，避免重复 Dispose
     private int _endReconnects; // v1.4.16：播完自动重播计数，上限 3 次，Play 时清零
 
-    public ChannelWindow(LibVLC libvlc, int volume, int networkCache)
+    public ChannelWindow(LibVLC libvlc, int volume, int networkCache, bool useLocalProxy = true)
     {
         InitializeComponent();
         _libvlc = libvlc;
         _volume = volume;
         _networkCache = networkCache;
+        _useLocalProxy = useLocalProxy;
         _player = new MediaPlayer(_libvlc) { Volume = _volume };
         VideoView.MediaPlayer = _player;
         // v1.4.16：直播流播完（EndReached）自动重播——HLS 窗口耗尽/刷新失败时 libvlc 停在这里。
@@ -73,6 +75,12 @@ public partial class ChannelWindow : Window
                         ? new Media(_libvlc, new Uri(ch.Url))
                         : new Media(_libvlc, ch.Url, FromType.FromPath);
                     media.AddOption($":network-caching={_networkCache}");
+                    // v1.4.40：每次建 Media 现探本机代理（与主窗口同款，见 LocalProxyProbe）。
+                    if (_useLocalProxy)
+                    {
+                        var proxyOpt = LocalProxyProbe.GetHttpProxyMediaOption();
+                        if (proxyOpt != null) media.AddOption(proxyOpt);
+                    }
                     if (_closing)
                     {
                         // M1：关闭已开始，不再触碰可能正在释放的播放器，丢弃新建的 Media。

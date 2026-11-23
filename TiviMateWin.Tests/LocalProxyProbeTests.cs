@@ -26,6 +26,22 @@ public class LocalProxyProbeTests
         Assert.Null(LocalProxyProbe.GetHttpProxyArg(port));
     }
 
+    [Fact]
+    public void GetHttpProxyMediaOption_Listening_ReturnsMediaOption()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        Assert.Equal($":http-proxy=127.0.0.1:{port}", LocalProxyProbe.GetHttpProxyMediaOption(port));
+    }
+
+    [Fact]
+    public void GetHttpProxyMediaOption_NotListening_ReturnsNull()
+    {
+        var port = GetFreePort();
+        Assert.Null(LocalProxyProbe.GetHttpProxyMediaOption(port));
+    }
+
     private static int GetFreePort()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);

@@ -343,6 +343,9 @@ public partial class MainWindow : Window
     private bool? _subtitleForceOverride;
     // 当前处于播放态的列表项引用（列表高亮用；AdoptChannels 整体替换列表后按 Url 恢复）
     private ChannelItem? _playingItem;
+    // v1.4.40：引擎创建时探到的本机代理状态（true=当时 10809 在监听，引擎带了 --http-proxy）；
+    // 每次播放现探一次，状态变了才记一行日志（见 LogProxyTransition）。
+    private bool _lastProxyListening;
 
     public MainWindow()
     {
@@ -771,6 +774,7 @@ public partial class MainWindow : Window
                 if (_config.UseLocalProxy)
                 {
                     var proxyArg = LocalProxyProbe.GetHttpProxyArg();
+                    _lastProxyListening = proxyArg != null;
                     if (proxyArg != null)
                     {
                         args.Add(proxyArg);
@@ -781,6 +785,7 @@ public partial class MainWindow : Window
                         AppLog.Info("no local proxy on 127.0.0.1:10809, LibVLC connects directly");
                     }
                 }
+                else _lastProxyListening = false;
                 return new LibVLC(args.ToArray());
             });
             // 诊断用：VlcVerbose 开启时订阅 LibVLC 日志，写 vlc-log.txt（独立文件，不污染主日志）
@@ -1188,6 +1193,17 @@ public partial class MainWindow : Window
 
     // ---------- 播放 ----------
 
+    /// <summary>代理状态变了才记一行（v1.4.40）：启动时引擎已记过一次，之后每次播放现探；
+    /// 代理后启动→这次起走代理；代理没了→引擎级参数还在，重启应用才直连，写明别让人干等。</summary>
+    private void LogProxyTransition(bool listening)
+    {
+        if (_lastProxyListening == listening) return;
+        _lastProxyListening = listening;
+        AppLog.Info(listening
+            ? "local proxy 127.0.0.1:10809 appeared after startup, this playback via proxy"
+            : "local proxy 127.0.0.1:10809 gone since startup, engine still uses proxy until restart");
+    }
+
     private Task PlayAsync(ChannelItem ch) => PlayAsync(ch, false);
 
     private async Task PlayAsync(ChannelItem ch, bool watchdogReconnect)
@@ -1280,6 +1296,16 @@ public partial class MainWindow : Window
                             ? new Media(_libvlc!, new Uri(url))
                             : new Media(_libvlc!, url, FromType.FromPath);
                         media.AddOption($":network-caching={_config.NetworkCache}");
+                        // v1.4.40：每次建 Media 都现探一次本机代理——引擎只在启动时探过一次，
+                        // v2rayN 后启动就一直直连（白画面）直到重启；:http-proxy 是媒体选项，
+                        // VLC 3.0 的 http 接入模块从输入对象继承它（与 :network-caching 同款），
+                        // 现探现加才跟得上代理后启动；引擎级 --http-proxy 保留（代理先启动的老路径不变）。
+                        if (_config.UseLocalProxy)
+                        {
+                            var proxyOpt = LocalProxyProbe.GetHttpProxyMediaOption();
+                            if (proxyOpt != null) media.AddOption(proxyOpt);
+                            LogProxyTransition(proxyOpt != null);
+                        }
                         _player!.Play(media);
                         lock (_mediaLock)
                         {
@@ -2167,7 +2193,7 @@ public partial class MainWindow : Window
         await EnsureEngineAsync();
         if (_closing) return;   // M4：等待期间窗口可能已关闭并释放引擎，不得再用 _libvlc 建播放器
         if (_libvlc is null) return;
-        var win = new ChannelWindow(_libvlc, _config.Volume, _config.NetworkCache) { Owner = this };
+        var win = new ChannelWindow(_libvlc, _config.Volume, _config.NetworkCache, _config.UseLocalProxy) { Owner = this };
         _channelWindows.Add(win);
         win.Closed += (_, _) =>
         {
@@ -2236,7 +2262,7 @@ public partial class MainWindow : Window
             // 小窗不设 Owner：有 Owner 时最小化主窗口会连带隐藏小窗，v1.4.8 为此在可见状态下
             // 反复改 Owner（开小窗时清掉、进全屏时恢复），小窗因此丢激活、点不动；
             // 无 Owner 的独立顶层窗口不受主窗口最小化影响。主窗口关闭时已显式关小窗（见 Window_Closing）。
-            _pipWindow = new PipWindow(_libvlc, _config.Volume, _config.NetworkCache);
+            _pipWindow = new PipWindow(_libvlc, _config.Volume, _config.NetworkCache, _config.UseLocalProxy);
             RestorePipPlacement(_pipWindow);
             _pipWindow.Closed += (_, _) =>
             {

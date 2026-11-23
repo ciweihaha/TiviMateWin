@@ -17,6 +17,7 @@ public partial class PipWindow : Window
     private readonly MediaPlayer _player;
     private Media? _media;   // 当前 Media：Play 后需保持存活直到换台/关闭
     private readonly int _networkCache;   // 深查第 22 轮：旧代码写死 800，用户设置的网络缓存不生效
+    private readonly bool _useLocalProxy; // v1.4.40：本机代理开关——每次建 Media 现探 10809，代理后启动也跟得上
     private bool _isPaused;
     private bool _stopped;   // 停止后：再次按播放应重播当前媒体，而不是先走一次无意义的 Pause
     private bool _pipFullscreen;      // 小窗是否全屏中（最大化）
@@ -38,12 +39,13 @@ public partial class PipWindow : Window
     // 小窗最小化托盘图标：小窗隐藏后唯一的恢复入口（小窗不进任务栏、无托盘图标时用户找不到窗口）。
     private readonly PipTrayIcon _tray;
 
-    public PipWindow(LibVLC libvlc, int volume, int networkCache)
+    public PipWindow(LibVLC libvlc, int volume, int networkCache, bool useLocalProxy = true)
     {
         InitializeComponent();
         _tray = new PipTrayIcon(RestorePip, Close);
         _libvlc = libvlc;
         _networkCache = networkCache;
+        _useLocalProxy = useLocalProxy;
         _player = new MediaPlayer(_libvlc) { Volume = volume };
         VideoView.MediaPlayer = _player;
         _pipFsCheckTimer.Tick += (_, _) => OnPipFsCheckTick();
@@ -224,6 +226,12 @@ public partial class PipWindow : Window
                 ? new Media(_libvlc, new Uri(ch.Url))
                 : new Media(_libvlc, ch.Url, FromType.FromPath);
             media.AddOption($":network-caching={_networkCache}");
+            // v1.4.40：每次建 Media 现探本机代理（与主窗口同款，见 LocalProxyProbe）。
+            if (_useLocalProxy)
+            {
+                var proxyOpt = LocalProxyProbe.GetHttpProxyMediaOption();
+                if (proxyOpt != null) media.AddOption(proxyOpt);
+            }
             _player.Play(media);
             var old = _media;
             _media = media;   // 新 Media 接管

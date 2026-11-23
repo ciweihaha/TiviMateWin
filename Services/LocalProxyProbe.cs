@@ -32,4 +32,11 @@ public static class LocalProxyProbe
     /// <summary>代理在监听时返回 LibVLC 参数 --http-proxy=127.0.0.1:10809，否则返回 null（直连）。</summary>
     public static string? GetHttpProxyArg(int port = DefaultPort)
         => IsListening(port) ? $"--http-proxy={DefaultHost}:{port}" : null;
+
+    /// <summary>代理在监听时返回 LibVLC 媒体选项 :http-proxy=127.0.0.1:10809，否则返回 null（直连）。
+    /// VLC 3.0 的 http 接入模块用 var_InheritString 从输入对象继承 http-proxy（modules/access/http.c，
+    /// 与 :network-caching 同款机制），所以每次建 Media 时现探现加才生效；引擎创建时的一次性
+    /// --http-proxy 只管启动那一刻，代理后启动就赶不上（v1.4.40）。</summary>
+    public static string? GetHttpProxyMediaOption(int port = DefaultPort)
+        => IsListening(port) ? $":http-proxy={DefaultHost}:{port}" : null;
 }
