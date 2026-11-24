@@ -713,6 +713,13 @@ public static class SelfTest
                         ? new Media(libvlc, new Uri(url))
                         : new Media(libvlc, url, FromType.FromPath);
                     media.AddOption(":network-caching=800");
+                    // v1.4.41：--playtest 也走本机代理（与主窗口同款）：CI runner 上 10809
+                    // 不监听，行为不变；笔记本上 v2rayN 开着时经代理播，否则直连 8.4 KB/s 测不出。
+                    if (AppConfig.Load().UseLocalProxy)
+                    {
+                        var proxyOpt = LocalProxyProbe.GetHttpProxyMediaOption();
+                        if (proxyOpt != null) media.AddOption(proxyOpt);
+                    }
                     mp.Play(media);
 
                     var sw = Stopwatch.StartNew();

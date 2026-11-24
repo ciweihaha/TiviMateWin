@@ -4,9 +4,11 @@ namespace TiviMateWin.Services;
 
 /// <summary>
 /// 本机代理探测（v1.4.39）：笔记本直连 Cloudflare 极慢（直播分片 8.4 KB/s），
-/// 本机 127.0.0.1:10809（v2rayN）能到 164 KB/s。10809 在监听才把 --http-proxy
-/// 传给 LibVLC，没有就直连；什么都没改时行为与以前完全一致。
+/// 本机 127.0.0.1:10809（v2rayN）能到 164 KB/s。10809 在监听才在每次建 Media 时
+/// 加 :http-proxy 媒体选项，没有就直连；什么都没改时行为与以前完全一致。
 /// 只做 TCP 连通探测，不发任何数据；代理本身好不好用不由这里判断。
+/// v1.4.41：引擎级 --http-proxy 已去掉（见下）——引擎级参数一旦带上就改不了，
+/// 代理退出后只能重启才直连；媒体选项是每次播放现探的，代理出现/消失都不用重启。
 /// </summary>
 public static class LocalProxyProbe
 {
@@ -28,10 +30,6 @@ public static class LocalProxyProbe
             return false;
         }
     }
-
-    /// <summary>代理在监听时返回 LibVLC 参数 --http-proxy=127.0.0.1:10809，否则返回 null（直连）。</summary>
-    public static string? GetHttpProxyArg(int port = DefaultPort)
-        => IsListening(port) ? $"--http-proxy={DefaultHost}:{port}" : null;
 
     /// <summary>代理在监听时返回 LibVLC 媒体选项 :http-proxy=127.0.0.1:10809，否则返回 null（直连）。
     /// VLC 3.0 的 http 接入模块用 var_InheritString 从输入对象继承 http-proxy（modules/access/http.c，

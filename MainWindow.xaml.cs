@@ -343,8 +343,9 @@ public partial class MainWindow : Window
     private bool? _subtitleForceOverride;
     // 当前处于播放态的列表项引用（列表高亮用；AdoptChannels 整体替换列表后按 Url 恢复）
     private ChannelItem? _playingItem;
-    // v1.4.40：引擎创建时探到的本机代理状态（true=当时 10809 在监听，引擎带了 --http-proxy）；
+    // v1.4.40：引擎创建时探到的本机代理状态（true=当时 10809 在监听）；
     // 每次播放现探一次，状态变了才记一行日志（见 LogProxyTransition）。
+    // v1.4.41：引擎级 --http-proxy 已去掉，代理只走每次播放的 :http-proxy 媒体选项。
     private bool _lastProxyListening;
 
     public MainWindow()
@@ -767,17 +768,19 @@ public partial class MainWindow : Window
                 args.Add(_config.HardwareDecode ? "--avcodec-hw=any" : "--avcodec-hw=disabled");
                 // 诊断用：VlcVerbose 开启时输出 LibVLC 详细日志（写 vlc-log.txt）
                 if (_config.VlcVerbose) args.Add("--verbose=2");
-                // 本地代理（v1.4.39）：笔记本直连 Cloudflare 极慢（直播分片 8.4 KB/s），
-                // 本机 10809 代理能到 164 KB/s。10809 在监听才走代理，没有就直连；
+                // 本地代理（v1.4.39/v1.4.41）：笔记本直连 Cloudflare 极慢（直播分片 8.4 KB/s），
+                // 本机 10809 代理能到 164 KB/s。代理只在每次建 Media 时以 :http-proxy 媒体选项
+                // 现探现加（见 PlayAsync / LocalProxyProbe），引擎级不再带 --http-proxy：
+                // 引擎级参数一旦带上就改不了，代理退出后只能重启才直连（v1.4.41 修掉）；
+                // 媒体选项是每次播放现探的，代理出现/消失都不用重启。
                 // UseLocalProxy=false 可在配置里关掉。ChannelWindow/PipWindow 共用这个
                 // LibVLC 实例，所以所有播放窗口都走同一条代理。
+                // 这里只探一次记个基线（启动日志 + LogProxyTransition 的状态变化判断）。
                 if (_config.UseLocalProxy)
                 {
-                    var proxyArg = LocalProxyProbe.GetHttpProxyArg();
-                    _lastProxyListening = proxyArg != null;
-                    if (proxyArg != null)
+                    _lastProxyListening = LocalProxyProbe.IsListening();
+                    if (_lastProxyListening)
                     {
-                        args.Add(proxyArg);
                         AppLog.Info("local proxy 127.0.0.1:10809 detected, LibVLC HTTP via proxy");
                     }
                     else
@@ -1201,7 +1204,7 @@ public partial class MainWindow : Window
         _lastProxyListening = listening;
         AppLog.Info(listening
             ? "local proxy 127.0.0.1:10809 appeared after startup, this playback via proxy"
-            : "local proxy 127.0.0.1:10809 gone since startup, engine still uses proxy until restart");
+            : "local proxy 127.0.0.1:10809 gone since startup, this playback connects directly");
     }
 
     private Task PlayAsync(ChannelItem ch) => PlayAsync(ch, false);
@@ -1296,10 +1299,10 @@ public partial class MainWindow : Window
                             ? new Media(_libvlc!, new Uri(url))
                             : new Media(_libvlc!, url, FromType.FromPath);
                         media.AddOption($":network-caching={_config.NetworkCache}");
-                        // v1.4.40：每次建 Media 都现探一次本机代理——引擎只在启动时探过一次，
-                        // v2rayN 后启动就一直直连（白画面）直到重启；:http-proxy 是媒体选项，
+                        // v1.4.40/v1.4.41：每次建 Media 都现探一次本机代理——:http-proxy 是媒体选项，
                         // VLC 3.0 的 http 接入模块从输入对象继承它（与 :network-caching 同款），
-                        // 现探现加才跟得上代理后启动；引擎级 --http-proxy 保留（代理先启动的老路径不变）。
+                        // 现探现加才跟得上代理后启动/退出；引擎级 --http-proxy 在 v1.4.41 已去掉，
+                        // 代理消失方向也不再需要重启（消失后下次播放直接直连）。
                         if (_config.UseLocalProxy)
                         {
                             var proxyOpt = LocalProxyProbe.GetHttpProxyMediaOption();
