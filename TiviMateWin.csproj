@@ -14,7 +14,7 @@
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
     <!-- 应用图标：exe 文件图标（任务栏/桌面快捷方式/资源管理器） -->
     <ApplicationIcon>Assets\tivimate-icon.ico</ApplicationIcon>
-    <Version>1.4.41</Version>
+    <Version>1.4.42</Version>
     <!-- F9（v1.4.27，M30）：<Version> 是版本号唯一来源；CI 非 tag 构建也从这里读
          （见 .github/workflows/build.yml），tag 构建由 CI 在 Publish 时以 -p:Version 注入 tag 名。 -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
@@ -37,9 +37,9 @@
   <ItemGroup>
     <PackageReference Include="LibVLCSharp.WPF" Version="3.10.2" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="11.0.0" />
+    <!-- ProtectedData（DPAPI）由 net11.0-windows 框架自带（NU1510），不再单独引用包 -->
     <!-- 第 4 轮 R4-E：SVG 台标光栅化（WPF 的 BitmapImage 解不了 SVG） -->
-    <PackageReference Include="Svg.Skia" Version="5.2.3" />
+    <PackageReference Include="Svg.Skia" Version="5.2.4" />
     <!-- 直播实时字幕（听写）：Whisper.NET 本地语音识别 + NAudio 音频回放
          （LibVLC 音频回调接管输出后，声音须由应用自己播出）。Whisper.net.Runtime
          是原生运行时，缺了它编译过、运行时加载失败。

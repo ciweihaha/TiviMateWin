@@ -1197,7 +1197,8 @@ public partial class MainWindow : Window
     // ---------- 播放 ----------
 
     /// <summary>代理状态变了才记一行（v1.4.40）：启动时引擎已记过一次，之后每次播放现探；
-    /// 代理后启动→这次起走代理；代理没了→引擎级参数还在，重启应用才直连，写明别让人干等。</summary>
+    /// 代理后启动→这次起走代理；代理没了→这次起直连（v1.4.41 起引擎级参数已去掉，
+    /// 两个方向都不用重启）。</summary>
     private void LogProxyTransition(bool listening)
     {
         if (_lastProxyListening == listening) return;
